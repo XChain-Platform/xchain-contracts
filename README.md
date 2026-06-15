@@ -64,6 +64,24 @@ npx mocha --timeout 0 ../xchain-contracts/crowdsale/crowdsale.test.js
 npx mocha --timeout 0 ../xchain-contracts/amm/amm.test.js
 ```
 
+## Linting the templates
+
+Before (or instead of) a full test run, you can check a contract against the VM's
+deploy-time validation rules — V8 syntax, the acorn metering pass, reserved
+identifiers, banned `Math.*`, and banned `BigInt`/`RegExp` literals. This is the
+exact gate the indexer applies at DEPLOY, so a clean result means the contract will
+clear deployment. With `xchain-vm` checked out alongside this repo:
+
+```bash
+node ../xchain-vm/bin/lint.js ./*/*.js          # lint all four templates
+node ../xchain-vm/bin/lint.js ./escrow/escrow.js --json
+# exit 0 = clean · 1 = errors · warnings print to stderr
+```
+
+This doubles as the CI gate for the template library. (Authors building their own
+contracts can run the same rules from the SDK with `sdk.validateContract(source)` —
+advisory, no Node-22/`isolated-vm` requirement — see the developer guide.)
+
 ## Prerequisite
 
 Value-holding contracts require the VM gateway's `getBalance` / `getTokenInfo` to
