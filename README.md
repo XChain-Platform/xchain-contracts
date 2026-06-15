@@ -10,6 +10,33 @@ The goal is to seed the mental model: an XChain contract is a deterministic
 JavaScript program that custodies tokens and emits protocol actions. These
 templates show how to do that **safely**.
 
+## Quick start
+
+**scaffold → customize → lint → deploy.**
+
+```bash
+# 1. Scaffold a template (or print available names with `list`)
+npx xchain-contracts list
+npx xchain-contracts scaffold escrow my-escrow.js
+
+# 2. ...edit my-escrow.js...
+
+# 3. Lint it against the exact deploy-time rules (needs Node 22 / isolated-vm)
+npx xchain-contracts lint my-escrow.js
+
+# 4. Deploy via the SDK (which lints again before spending a transaction)
+#    sdk.deploy({ CODE: fs.readFileSync('my-escrow.js','utf8'), GAS_LIMIT: '200000' }, encoder)
+```
+
+Prefer to stay in JS? The SDK exposes the same library: `sdk.scaffold('escrow')`
+returns the source, `sdk.validateContract(source)` runs the advisory linter (no
+Node-22 requirement), and `sdk.deploy(..., { lint })` blocks a guaranteed-to-fail
+deploy. See the [developer guide](https://docs.xchain.io).
+
+Reusable building blocks (access control, pausable, safe-transfer, input
+validation, state machines) live in [`patterns/`](./patterns/README.md) — paste
+the helpers you need into your contract.
+
 ## The templates
 
 | Template | Contract | Guide | Tests | What it teaches |
@@ -50,37 +77,36 @@ A safe contract **never trusts a caller-supplied amount** — it reads its own b
 with `xchain.getBalance(xchain.getContractAddress(), tick)`. Every template here
 follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 
-## Running the tests
+## Linting
 
-Each template's tests load the real contract and run it through the XChain VM
-(`xchain-vm`, which requires **Node 22** / `isolated-vm`). With the `xchain-vm`
-repository checked out alongside this one:
-
-```bash
-cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/escrow/escrow.test.js
-npx mocha --timeout 0 ../xchain-contracts/vesting/vesting.test.js
-npx mocha --timeout 0 ../xchain-contracts/crowdsale/crowdsale.test.js
-npx mocha --timeout 0 ../xchain-contracts/amm/amm.test.js
-```
-
-## Linting the templates
-
-Before (or instead of) a full test run, you can check a contract against the VM's
-deploy-time validation rules — V8 syntax, the acorn metering pass, reserved
-identifiers, banned `Math.*`, and banned `BigInt`/`RegExp` literals. This is the
-exact gate the indexer applies at DEPLOY, so a clean result means the contract will
-clear deployment. With `xchain-vm` checked out alongside this repo:
+`xchain-contracts lint` runs each contract through the VM's **exact** deploy-time
+validation — V8 syntax, the acorn metering pass, reserved identifiers, banned
+`Math.*`, banned `BigInt`/`RegExp` literals, plus the logic-level advisories
+(crossCallable integrity, unbounded loops, unchecked `state.get`, …). A clean
+result means the contract clears deployment. It delegates to `xchain-vm`'s linter,
+so it needs **Node 22** / `isolated-vm`.
 
 ```bash
-node ../xchain-vm/bin/lint.js ./*/*.js          # lint all four templates
-node ../xchain-vm/bin/lint.js ./escrow/escrow.js --json
+npm run lint                                  # lint every template + pattern
+npx xchain-contracts lint my-escrow.js        # lint one file
+npx xchain-contracts lint my-escrow.js --json # machine-readable
 # exit 0 = clean · 1 = errors · warnings print to stderr
 ```
 
-This doubles as the CI gate for the template library. (Authors building their own
-contracts can run the same rules from the SDK with `sdk.validateContract(source)` —
-advisory, no Node-22/`isolated-vm` requirement — see the developer guide.)
+This is the CI gate for the library. Authors who want the advisory rules without a
+Node-22 install can run `sdk.validateContract(source)` from the SDK (everything
+except the V8 step).
+
+## Running the tests
+
+Each template's tests load the real contract and run it through the XChain VM
+(`xchain-vm`, which requires **Node 22** / `isolated-vm`), checked out alongside
+this repo:
+
+```bash
+npm test                          # all templates + the pattern lint-gate
+npx mocha --timeout 0 patterns/patterns.test.js   # pattern lint-gate only (runs on any Node)
+```
 
 ## Prerequisite
 
