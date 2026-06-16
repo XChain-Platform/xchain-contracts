@@ -82,4 +82,4 @@ ordering. If any emitted action later fails validation, the whole execution
 
 ## License
 
-[MIT](../LICENSE) — fork freely, including into closed-source contracts.
+[MIT](../LICENSE), fork freely, including into closed-source contracts.

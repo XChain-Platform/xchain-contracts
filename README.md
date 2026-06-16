@@ -116,6 +116,6 @@ own holdings to verify deposits.
 
 ## License
 
-[MIT](./LICENSE) — fork freely, including into closed-source products. (The XChain
+[MIT](./LICENSE), fork freely, including into closed-source products. (The XChain
 *platform* is licensed AGPL-3.0; these *templates* are intentionally permissive so
 you can build proprietary contracts on top of them.)
