@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// State machine — a single 'status' enum with guarded transitions.
+// State machine: a single 'status' enum with guarded transitions.
 //
 // Initialize 'status' in initialize(); guard each method with requireStatus and
 // advance with setStatus. Makes a contract's lifecycle explicit and blocks

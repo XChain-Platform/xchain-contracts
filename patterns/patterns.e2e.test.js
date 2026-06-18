@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Pattern Library
-// patterns.e2e.test.js — proves the pattern HELPERS actually run in the VM
+// XChain Platform: Contract Pattern Library
+// patterns.e2e.test.js: proves the pattern HELPERS actually run in the VM
 // (patterns.test.js only lint/compile-checks them).
 //
 // Builds a small "vault" contract by concatenating the REAL pattern source
-// files (no copies — can't drift) and exercises onlyOwner / whenNotPaused /
+// files (no copies, so they can't drift) and exercises onlyOwner / whenNotPaused /
 // requireStatus+setStatus / requireAddress / requirePositive / heldBalance
 // through the xchain-vm E2E harness (isolated-vm / Node 22).
 //
@@ -20,7 +20,7 @@ const path = require('path');
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM;
 try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping pattern e2e — isolated-vm not available (need Node 22)'); }
+catch (e) { console.log('Skipping pattern e2e: isolated-vm not available (need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
 const { assertSuccess, assertReverted, assertEmittedActions,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// crowdsale.test.js — behavioral + adversarial tests for crowdsale.js
+// XChain Platform: Contract Template Library
+// crowdsale.test.js: behavioral + adversarial tests for crowdsale.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -24,7 +24,7 @@ const path = require('path');
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM;
 try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping crowdsale tests — isolated-vm not available (need Node 22)'); }
+catch (e) { console.log('Skipping crowdsale tests (isolated-vm not available, need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
 const { assertSuccess, assertReverted, assertEmittedActions, assertBalance }
@@ -51,7 +51,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
                      String(DURATION), '8']
         });
     }
-    // Atomic pay: DEPOSIT then buy() — mirrors BATCH(DEPOSIT, EXECUTE("buy")).
+    // Atomic pay: DEPOSIT then buy(), mirroring BATCH(DEPOSIT, EXECUTE("buy")).
     async function buy(who, amount) {
         h.deposit(who, ADDR, PAY, amount);
         return h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: who });

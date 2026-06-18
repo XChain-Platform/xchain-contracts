@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// crowdsale.js — capped token sale with a soft cap, deadline, and refunds
+// XChain Platform: Contract Template Library
+// crowdsale.js: capped token sale with a soft cap, deadline, and refunds
 //
 // Copyright (c) 2026 Dankest, LLC
 //
@@ -31,22 +31,22 @@
 //     in full; nothing is owed.
 //
 // The contract ISSUES the sale token itself at deploy (it becomes the token's
-// owner) and MINTS to each buyer on claim — a worked example of a contract
+// owner) and MINTS to each buyer on claim (a worked example of a contract
 // creating and distributing a token. Pick a `saleTick` name that is not already
 // taken: ticks are a global namespace and the deploy's constructor issue will
 // fail if the name exists.
 //
-// CUSTODY MODEL — read this, it has a real footgun
+// CUSTODY MODEL: read this, it has a real footgun
 //
 // XChain has no msg.value. Buyers pay by DEPOSITing `payTick` to the contract and
-// EXECUTEing buy() — atomically, in ONE transaction:
+// EXECUTEing buy() atomically, in ONE transaction:
 //
 //     BATCH( DEPOSIT(sale, PAY, amount), EXECUTE(sale, "buy") )
 //
 // buy() attributes the deposit to its caller by reading how much the contract's
 // payTick balance grew since the last accounted buy. This is only safe because
 // the DEPOSIT and buy() are atomic. **Never DEPOSIT without buy() in the same
-// transaction** — an un-bought deposit would be credited to the NEXT buyer.
+// transaction.** An un-bought deposit would be credited to the NEXT buyer.
 // ---------------------------------------------------------------------------
 
 module.exports = {
@@ -95,7 +95,7 @@ module.exports = {
         });
     },
 
-    // buy() — attribute the caller's just-deposited payment and record it.
+    // buy(): attribute the caller's just-deposited payment and record it.
     // BATCH after a DEPOSIT of payTick. No tokens are delivered yet (claim later).
     buy: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'sale not open');
@@ -118,7 +118,7 @@ module.exports = {
         xchain.state.set('raised', newRaised);
     },
 
-    // finalize() — lock in the outcome. Callable once the deadline passes, or
+    // finalize(): lock in the outcome. Callable once the deadline passes, or
     // early once the hard cap is reached.
     finalize: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'already finalized');
@@ -131,7 +131,7 @@ module.exports = {
             xchain.math.gte(raised, xchain.state.get('softCap')) ? 'SUCCESS' : 'FAILED');
     },
 
-    // claim() — buyer mints their purchased sale tokens (successful sale only).
+    // claim(): buyer mints their purchased sale tokens (successful sale only).
     claim: function (xchain) {
         xchain.require(xchain.state.get('status') === 'SUCCESS', 'sale not successful');
         var caller = xchain.getSourceAddress();
@@ -139,7 +139,7 @@ module.exports = {
         xchain.require(xchain.math.gt(paid, '0'), 'nothing to claim');
 
         var tokens = xchain.math.multiply(paid, xchain.state.get('rate'));
-        xchain.state.delete('c:' + caller); // zero out first — no double claim
+        xchain.state.delete('c:' + caller); // zero out first (no double claim)
 
         xchain.emit.mint({
             tick: xchain.state.get('saleTick'),
@@ -149,14 +149,14 @@ module.exports = {
         return tokens;
     },
 
-    // refund() — buyer reclaims their payment in full (failed sale only).
+    // refund(): buyer reclaims their payment in full (failed sale only).
     refund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'FAILED', 'sale did not fail');
         var caller = xchain.getSourceAddress();
         var paid   = xchain.state.get('c:' + caller) || '0';
         xchain.require(xchain.math.gt(paid, '0'), 'nothing to refund');
 
-        xchain.state.delete('c:' + caller); // zero out first — no double refund
+        xchain.state.delete('c:' + caller); // zero out first (no double refund)
 
         xchain.emit.send({
             destination: caller,
@@ -166,7 +166,7 @@ module.exports = {
         return paid;
     },
 
-    // withdraw() — owner takes the proceeds (successful sale only, once).
+    // withdraw(): owner takes the proceeds (successful sale only, once).
     withdraw: function (xchain) {
         xchain.require(xchain.state.get('status') === 'SUCCESS', 'sale not successful');
         xchain.require(xchain.getSourceAddress() === xchain.state.get('owner'), 'only the owner can withdraw');
@@ -181,7 +181,7 @@ module.exports = {
         return xchain.state.get('raised');
     },
 
-    // info() — read-only snapshot for UIs.
+    // info(): read-only snapshot for UIs.
     info: function (xchain) {
         return JSON.stringify({
             status: xchain.state.get('status'),

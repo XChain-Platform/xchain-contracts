@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// amm.test.js — behavioral + adversarial tests for amm.js (incl. k-invariant fuzz)
+// XChain Platform: Contract Template Library
+// amm.test.js: behavioral + adversarial tests for amm.js (incl. k-invariant fuzz)
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -24,7 +24,7 @@ const path = require('path');
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM;
 try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping AMM tests — isolated-vm not available (need Node 22)'); }
+catch (e) { console.log('Skipping AMM tests (isolated-vm not available, need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
 const { assertSuccess, assertReverted } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js'));
@@ -147,7 +147,7 @@ const k = (r) => math.multiply(bn(r.a), bn(r.b));
             assertReverted(await swap(T1, A, '100', '95'), 'slippage');
         });
 
-        it('cannot be drained — a huge swap still leaves the output reserve positive', async function () {
+        it('cannot be drained: a huge swap still leaves the output reserve positive', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
             const r = await swap(T1, A, '1000000', '0');

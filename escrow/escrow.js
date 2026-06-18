@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// escrow.js — two-party escrow with an arbiter
+// XChain Platform: Contract Template Library
+// escrow.js: two-party escrow with an arbiter
 //
 // Copyright (c) 2026 Dankest, LLC
 //
@@ -38,11 +38,11 @@
 //
 // Batched sub-actions are applied in order with the deposit persisted before the
 // EXECUTE runs, so fund() sees the deposited balance via getBalance(). The
-// contract never trusts a caller-supplied amount — it reads its own balance.
+// contract never trusts a caller-supplied amount; it reads its own balance.
 //
 // SETTLEMENT sends the contract's ENTIRE balance of the escrowed tick to the
 // payee. This is deliberate: it can never leave dust stranded and removes any
-// "overfund then under-pay" gap. Corollary — only ever deposit the configured
+// "overfund then under-pay" gap. Corollary: only ever deposit the configured
 // tick; tokens of any OTHER tick sent here are not recoverable by this template.
 // ---------------------------------------------------------------------------
 
@@ -77,7 +77,7 @@ module.exports = {
         xchain.state.set('status', 'INIT');
     },
 
-    // fund() — confirm the escrow is funded. Typically BATCHed after a DEPOSIT.
+    // fund(): confirm the escrow is funded. Typically BATCHed after a DEPOSIT.
     // Verifies the contract actually holds at least `amount` of `tick` before
     // arming the escrow; the on-chain balance is the source of truth.
     fund: function (xchain) {
@@ -92,22 +92,22 @@ module.exports = {
         xchain.state.set('status', 'FUNDED');
     },
 
-    // release() — pay the seller. Buyer (satisfied) or arbiter (dispute) only.
+    // release(): pay the seller. Buyer (satisfied) or arbiter (dispute) only.
     release: function (xchain) {
         settle(xchain, ['buyer', 'arbiter'], 'seller', 'RELEASED', false);
     },
 
-    // refund() — return funds to the buyer. Seller (calling it off) or arbiter only.
+    // refund(): return funds to the buyer. Seller (calling it off) or arbiter only.
     refund: function (xchain) {
         settle(xchain, ['seller', 'arbiter'], 'buyer', 'REFUNDED', false);
     },
 
-    // timeout() — buyer reclaims after the deadline if nothing was settled.
+    // timeout(): buyer reclaims after the deadline if nothing was settled.
     timeout: function (xchain) {
         settle(xchain, ['buyer'], 'buyer', 'REFUNDED', true);
     },
 
-    // status() — read-only view of the current escrow state.
+    // status(): read-only view of the current escrow state.
     status: function (xchain) {
         return xchain.state.get('status');
     }
@@ -140,7 +140,7 @@ function settle(xchain, allowedRoles, payeeRole, terminalStatus, requireDeadline
     var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
     xchain.require(xchain.math.gt(held, '0'), 'nothing to settle');
 
-    // Mark terminal BEFORE emitting — defense in depth (the emission and this
+    // Mark terminal BEFORE emitting (defense in depth: the emission and this
     // write commit together, but ordering the guard first keeps intent explicit).
     xchain.state.set('status', terminalStatus);
 

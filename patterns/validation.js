@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Input validation — the shapes every public method should check up front.
+// Input validation: the shapes every public method should check up front.
 // Pairs with the linter's `missing-input-validation` warning: validate inputs
 // before you use them. All amounts are string bignumbers (use xchain.math, never
 // native number arithmetic).

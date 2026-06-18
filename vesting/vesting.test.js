@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// vesting.test.js — behavioral + adversarial tests for vesting.js
+// XChain Platform: Contract Template Library
+// vesting.test.js: behavioral + adversarial tests for vesting.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -18,7 +18,7 @@ const path = require('path');
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM;
 try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping vesting tests — isolated-vm not available (need Node 22)'); }
+catch (e) { console.log('Skipping vesting tests: isolated-vm not available (need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
 const { assertSuccess, assertReverted, assertEmittedActions, assertBalance }
@@ -122,7 +122,7 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assertSuccess(r);
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '700' } }]);
 
-            // Beneficiary can still claim the frozen 300 — but no more accrues.
+            // Beneficiary can still claim the frozen 300, but no more accrues.
             atElapsed(90);
             const c = await claim();
             assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '300' } }]);

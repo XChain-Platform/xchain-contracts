@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //
-// Safe custody — read your OWN balance; never trust a caller-supplied amount.
+// Safe custody: read your OWN balance; never trust a caller-supplied amount.
 //
 // XChain has no msg.value: tokens reach a contract via a separate DEPOSIT to its
 // address (C:<CHAIN>:<index>). Always size a transfer from what the contract
-// actually holds, and COMMIT state before emitting — emissions are deferred and
+// actually holds, and COMMIT state before emitting. Emissions are deferred and
 // applied atomically AFTER your method returns (see the developer guide,
 // "Snapshot Semantics"), so a contract can never observe its own emission
 // mid-execution.

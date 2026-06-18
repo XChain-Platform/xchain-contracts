@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// escrow.test.js — behavioral + adversarial tests for escrow.js
+// XChain Platform: Contract Template Library
+// escrow.test.js: behavioral + adversarial tests for escrow.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
 // Runs against the real VM via xchain-vm's E2E harness (isolated-vm / Node 22).
-// Loads the ACTUAL escrow.js template — no copy — so the test can never drift.
+// Loads the ACTUAL escrow.js template (no copy), so the test can never drift.
 //
 // Run from the xchain-vm package so its deps (mocha, isolated-vm, mathjs) resolve:
 //   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/escrow/escrow.test.js
@@ -20,7 +20,7 @@ const path = require('path');
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM;
 try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping escrow tests — isolated-vm not available (need Node 22)'); }
+catch (e) { console.log('Skipping escrow tests: isolated-vm not available (need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
 const { assertSuccess, assertReverted, assertEmittedActions,
@@ -52,7 +52,7 @@ const TICK    = 'TEST';
         });
     }
 
-    // Atomic fund: deposit then fund() — mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+    // Atomic fund: deposit then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund(amount) {
         h.deposit(BUYER, ADDR, TICK, amount || '200');
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER });
@@ -129,11 +129,11 @@ const TICK    = 'TEST';
                 'not authorized');
         });
 
-        it('double-settle is impossible — second settlement reverts on the status guard', async function () {
+        it('double-settle is impossible: second settlement reverts on the status guard', async function () {
             await deployEscrow();
             await depositAndFund();
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }));
-            // any further settlement attempt — by anyone, any path — is blocked
+            // any further settlement attempt (by anyone, any path) is blocked
             assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }),
                 'not funded');
             assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: ARBITER }),

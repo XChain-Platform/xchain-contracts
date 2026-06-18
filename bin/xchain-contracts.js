@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 //
-// xchain-contracts — the contract authoring front door.
+// xchain-contracts: the contract authoring front door.
 //
 //   xchain-contracts scaffold <name> [outfile]   print or write a template/pattern source
 //   xchain-contracts lint [files…] [--json]       lint sources (default: all templates + patterns)
 //   xchain-contracts list                         list available templates and patterns
 //
 // `lint` delegates to xchain-vm's authoritative linter (the full validateSyntax,
-// incl. the isolated-vm V8 step — so it needs Node 22). `scaffold` / `list` are
+// incl. the isolated-vm V8 step (requires Node 22). `scaffold` / `list` are
 // pure file reads and run anywhere.
 
 'use strict';

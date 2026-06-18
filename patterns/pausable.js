@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //
-// Pausable — an owner-controlled circuit breaker.
+// Pausable: an owner-controlled circuit breaker.
 //
 // Store a 'paused' flag in state ('true' / 'false'). Guard sensitive methods
 // with whenNotPaused(xchain). Add owner-only pause()/unpause() methods that call
-// setPaused — gate those with onlyOwner (see access-control.js).
+// setPaused; gate those with onlyOwner (see access-control.js).
 //
 //   module.exports = {
 //     pause:   function (xchain) { onlyOwner(xchain); setPaused(xchain, true); },

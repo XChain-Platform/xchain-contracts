@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Access control — owner / role guards.
+// Access control: owner / role guards.
 //
 // Paste the helpers you need ABOVE your `module.exports` (top-level function
 // declarations are hoisted, so methods can call them) and invoke them at the

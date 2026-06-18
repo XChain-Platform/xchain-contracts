@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Pattern-library lint gate. Every snippet here is meant to be pasted into a
-// real contract, so each one — and a contract composed from several — must pass
+// real contract, so each one (and a contract composed from several) must pass
 // `xchain-lint` clean (zero errors, zero warnings). Uses lint-core directly
 // (pure acorn, no isolated-vm), so it runs on any Node.
 //
@@ -31,7 +31,7 @@ describe('contract pattern library', function () {
 
     describe('a contract composed from the patterns is lint-clean', function () {
         // Pastes access-control + pausable + state-machine + validation + safe-transfer
-        // helpers and uses them — the documented authoring model. Critically, the
+        // helpers and uses them (the documented authoring model). Critically, the
         // methods validate via require* helpers (not a direct xchain.require), which
         // must NOT trip the missing-input-validation warning.
         const COMPOSED = [

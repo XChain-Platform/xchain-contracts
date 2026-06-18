@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// amm.js — constant-product automated market maker (Uniswap-v2 style)
+// XChain Platform: Contract Template Library
+// amm.js: constant-product automated market maker (Uniswap-v2 style)
 //
 // Copyright (c) 2026 Dankest, LLC
 //
@@ -25,25 +25,25 @@
 // pricing swaps by the constant-product rule (reserveA * reserveB = k). Liquidity
 // providers deposit both tokens and receive LP-share tokens; swappers trade one
 // token for the other, paying a 0.3% fee that accrues to the pool (and thus to LP
-// holders). LP shares are a REAL contract-issued tick — transferable, visible in
-// the explorer, and tradeable on XChain's native orderbook DEX.
+// holders). LP shares are a REAL contract-issued tick (transferable, visible in
+// the explorer, and tradeable on XChain's native orderbook DEX).
 //
 // Why an AMM as a contract? XChain has a native orderbook DEX (ORDER/SWAP), but
-// orderbooks have thin long-tail liquidity. An AMM is the textbook complement —
-// and shipping it as a plain contract proves the VM's custody model is real and
+// orderbooks have thin long-tail liquidity. An AMM is the textbook complement:
+// shipping it as a plain contract proves the VM's custody model is real and
 // general-purpose.
 //
-// KEY INVARIANT — k (reserveA * reserveB) is non-decreasing across swaps. This
+// KEY INVARIANT: k (reserveA * reserveB) is non-decreasing across swaps. This
 // holds because the FULL input, including the 0.3% fee, is added to reserves while
 // the price credits the trader for only 99.7% of it. xchain.math is 64-significant-
-// digit bignumber (it rounds at that precision — NOT Solidity-style integer floor),
+// digit bignumber (it rounds at that precision, NOT Solidity-style integer floor),
 // so per-op rounding is negligible beside the fee; the fee is what guarantees the
 // pool grows. This is the property to fuzz.
 //
 // CUSTODY MODEL (and its footgun)
 //
 // XChain has no msg.value. Move tokens in via DEPOSIT, act via EXECUTE, atomically
-// with BATCH — e.g. a swap:
+// with BATCH. Example swap:
 //
 //     BATCH( DEPOSIT(pool, tokenIn, amount), EXECUTE(pool, "swap", tokenIn, minOut) )
 //
@@ -53,7 +53,7 @@
 // in state (not raw balance), so direct donations don't move the price.
 //
 // LP TICK NAMING: the contract issues `lpTick` at deploy and becomes its owner.
-// Pick an UNUSED name (ticks are a global namespace) — a collision makes the
+// Pick an UNUSED name (ticks are a global namespace). A collision makes the
 // constructor's issue fail and the whole deploy revert (fail-fast, so two pools
 // can never share an LP tick). Convention: "<TICKA><TICKB>LP".
 // ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ var FEE_DEN = '1000';
 
 module.exports = {
 
-    // initialize(tokenA, tokenB, lpTick) — create an empty pool and issue the LP tick.
+    // initialize(tokenA, tokenB, lpTick): create an empty pool and issue the LP tick.
     initialize: function (xchain) {
         var tokenA = xchain.getInputParam(0);
         var tokenB = xchain.getInputParam(1);
@@ -86,7 +86,7 @@ module.exports = {
         xchain.emit.issue({ tick: lpTick, maxSupply: big, maxMint: big, decimals: '8', description: 'AMM LP share' });
     },
 
-    // addLiquidity() — BATCH after DEPOSITing both tokenA and tokenB. Mints LP
+    // addLiquidity(): BATCH after DEPOSITing both tokenA and tokenB. Mints LP
     // shares to the provider proportional to the deposit.
     addLiquidity: function (xchain) {
         var self = xchain.getContractAddress();
@@ -122,7 +122,7 @@ module.exports = {
         return shares;
     },
 
-    // removeLiquidity() — BATCH after DEPOSITing LP shares back to the pool.
+    // removeLiquidity(): BATCH after DEPOSITing LP shares back to the pool.
     // Burns them and returns a proportional slice of both reserves.
     removeLiquidity: function (xchain) {
         var self = xchain.getContractAddress();
@@ -153,7 +153,7 @@ module.exports = {
         return JSON.stringify({ outA: outA, outB: outB });
     },
 
-    // swap(tokenIn, minOut) — BATCH after DEPOSITing `tokenIn`. Trades for the other
+    // swap(tokenIn, minOut): BATCH after DEPOSITing `tokenIn`. Trades for the other
     // token at the constant-product price, charging 0.3%, reverting if the output
     // would fall below `minOut` (slippage protection).
     swap: function (xchain) {
@@ -175,7 +175,7 @@ module.exports = {
         xchain.require(xchain.math.gt(amountIn, '0'), 'no input received (DEPOSIT in the same BATCH)');
 
         // Uniswap-v2 pricing: the trader is credited for 99.7% of the input
-        // (amountInWithFee), but the FULL input is later retained in reserves — that
+        // (amountInWithFee), but the FULL input is retained in reserves. That
         // 0.3% gap is the LP fee and is what makes k grow.
         var amountInWithFee = xchain.math.divide(xchain.math.multiply(amountIn, FEE_NUM), FEE_DEN);
         var amountOut = xchain.math.divide(
@@ -196,7 +196,7 @@ module.exports = {
         return amountOut;
     },
 
-    // info() — read-only pool state for UIs / tests.
+    // info(): read-only pool state for UIs / tests.
     info: function (xchain) {
         return JSON.stringify({
             tokenA: xchain.state.get('tokenA'),

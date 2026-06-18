@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// XChain Platform — Contract Template Library
-// vesting.js — linear token vesting with a cliff and optional revocation
+// XChain Platform: Contract Template Library
+// vesting.js: linear token vesting with a cliff and optional revocation
 //
 // Copyright (c) 2026 Dankest, LLC
 //
@@ -28,7 +28,7 @@
 // reclaim the still-unvested portion at any time (the already-vested portion
 // stays claimable by the beneficiary).
 //
-// Time is measured in BLOCKS, not wall-clock — XChain contracts have no clock,
+// Time is measured in BLOCKS, not wall-clock. XChain contracts have no clock,
 // only deterministic block height (`getBlockHeight()`).
 //
 // CUSTODY MODEL
@@ -40,7 +40,7 @@
 //
 // fund() verifies the contract actually holds `total` (via getBalance) and starts
 // the vesting clock from that block. The contract never trusts a caller-supplied
-// amount. Deposit EXACTLY `total` of the configured tick — surplus, or any other
+// amount. Deposit EXACTLY `total` of the configured tick; surplus, or any other
 // tick, is not recoverable by this template.
 // ---------------------------------------------------------------------------
 
@@ -48,7 +48,7 @@ module.exports = {
 
     // initialize(grantor, beneficiary, tick, total, cliffBlocks, durationBlocks, revocable)
     // `revocable` is the string "true" or "false". The vesting clock does NOT
-    // start here — it starts at fund(), so there is no claimable gap before the
+    // start here. It starts at fund(), so there is no claimable gap before the
     // grant is actually in custody.
     initialize: function (xchain) {
         var grantor     = xchain.getInputParam(0);
@@ -78,7 +78,7 @@ module.exports = {
         xchain.state.set('status', 'INIT');
     },
 
-    // fund() — confirm custody and start the clock. BATCH after a DEPOSIT.
+    // fund(): confirm custody and start the clock. BATCH after a DEPOSIT.
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'vesting not awaiting funds');
 
@@ -91,7 +91,7 @@ module.exports = {
         xchain.state.set('status', 'ACTIVE');
     },
 
-    // claim() — beneficiary withdraws everything vested-but-unclaimed so far.
+    // claim(): beneficiary withdraws everything vested-but-unclaimed so far.
     claim: function (xchain) {
         var status = xchain.state.get('status');
         xchain.require(status === 'ACTIVE' || status === 'REVOKED', 'vesting not active');
@@ -113,7 +113,7 @@ module.exports = {
         return claimable;
     },
 
-    // revoke() — grantor reclaims the still-unvested portion (revocable grants
+    // revoke(): grantor reclaims the still-unvested portion (revocable grants
     // only). Freezes the vested cap so the beneficiary can still claim what they
     // had already earned, but no more accrues.
     revoke: function (xchain) {
@@ -140,7 +140,7 @@ module.exports = {
         return unvested;
     },
 
-    // info() — read-only snapshot for UIs.
+    // info(): read-only snapshot for UIs.
     info: function (xchain) {
         return JSON.stringify({
             status: xchain.state.get('status'),
@@ -153,11 +153,11 @@ module.exports = {
     }
 };
 
-// vestedAmount(xchain) — total tokens vested as of the current block.
+// vestedAmount(xchain): total tokens vested as of the current block.
 //   - before the cliff: 0
 //   - at/after full duration: the whole grant
 //   - in between: total * elapsed / duration (math.divide truncates, so this
-//     rounds DOWN — the contract never over-pays; the remainder is released
+//     rounds DOWN; the contract never over-pays and the remainder is released
 //     exactly at full vesting)
 // Once REVOKED, the stored `total` is the frozen vested cap, returned directly.
 function vestedAmount(xchain) {
