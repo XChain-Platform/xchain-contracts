@@ -80,8 +80,7 @@ module.exports = {
         xchain.state.set('reserveB', '0');
         xchain.state.set('totalShares', '0');
 
-        // LP supply grows with liquidity; cap it high. Contract becomes owner, so
-        // it can mint on addLiquidity. A name collision reverts the deploy.
+        // A name collision on lpTick reverts the deploy (fail-fast by design).
         var big = '99999999999999999999';
         xchain.emit.issue({ tick: lpTick, maxSupply: big, maxMint: big, decimals: '8', description: 'AMM LP share' });
     },
@@ -135,7 +134,6 @@ module.exports = {
         xchain.require(xchain.math.gt(shares, '0'), 'must deposit LP shares');
         xchain.require(xchain.math.lte(shares, totalShares), 'shares exceed total');
 
-        // Strictly proportional to the share of the pool being burned.
         var outA = xchain.math.divide(xchain.math.multiply(reserveA, shares), totalShares);
         var outB = xchain.math.divide(xchain.math.multiply(reserveB, shares), totalShares);
         xchain.require(xchain.math.gt(outA, '0') && xchain.math.gt(outB, '0'), 'insufficient liquidity burned');
@@ -144,7 +142,6 @@ module.exports = {
         xchain.state.set('reserveB', xchain.math.subtract(reserveB, outB));
         xchain.state.set('totalShares', xchain.math.subtract(totalShares, shares));
 
-        // Burn the returned LP shares (the contract now custodies them).
         xchain.emit.destroy({ tick: lpTick, quantity: shares });
 
         var to = xchain.getSourceAddress();
@@ -186,7 +183,6 @@ module.exports = {
         xchain.require(xchain.math.lt(amountOut, reserveOut), 'output exceeds reserves');
         xchain.require(xchain.math.gte(amountOut, minOut), 'slippage: output below minOut');
 
-        // The FULL input (fee included) is retained in reserves, so k grows.
         var newIn  = xchain.math.add(reserveIn, amountIn);
         var newOut = xchain.math.subtract(reserveOut, amountOut);
         xchain.state.set(inIsA ? 'reserveA' : 'reserveB', newIn);
@@ -196,7 +192,6 @@ module.exports = {
         return amountOut;
     },
 
-    // info(): read-only pool state for UIs / tests.
     info: function (xchain) {
         return JSON.stringify({
             tokenA: xchain.state.get('tokenA'),

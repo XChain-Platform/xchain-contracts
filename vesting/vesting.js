@@ -78,7 +78,7 @@ module.exports = {
         xchain.state.set('status', 'INIT');
     },
 
-    // fund(): confirm custody and start the clock. BATCH after a DEPOSIT.
+    // fund(): confirm custody and start the vesting clock. BATCH after a DEPOSIT.
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'vesting not awaiting funds');
 
@@ -140,7 +140,6 @@ module.exports = {
         return unvested;
     },
 
-    // info(): read-only snapshot for UIs.
     info: function (xchain) {
         return JSON.stringify({
             status: xchain.state.get('status'),

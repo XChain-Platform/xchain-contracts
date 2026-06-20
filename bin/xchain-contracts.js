@@ -79,7 +79,6 @@ function cmdLint(args) {
     try { lintPath = require.resolve('xchain-vm/bin/lint.js'); }
     catch (e) { lintPath = path.join(ROOT, '..', 'xchain-vm', 'bin', 'lint.js'); }
 
-    // With no files (or only flags), lint the library's own sources.
     const onlyFlags = args.every((a) => a.startsWith('-'));
     let files = args.slice();
     if (onlyFlags) {

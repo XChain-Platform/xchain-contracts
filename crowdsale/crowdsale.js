@@ -83,8 +83,6 @@ module.exports = {
         xchain.state.set('withdrawn', 'false');
         xchain.state.set('status', 'OPEN');
 
-        // Create the sale token, owned by this contract, mintable up to the max
-        // sellable supply. Minted to buyers on claim().
         var maxSale = xchain.math.multiply(hardCap, rate);
         xchain.emit.issue({
             tick: saleTick,
@@ -95,8 +93,8 @@ module.exports = {
         });
     },
 
-    // buy(): attribute the caller's just-deposited payment and record it.
-    // BATCH after a DEPOSIT of payTick. No tokens are delivered yet (claim later).
+    // buy(): attribute the caller's deposit. BATCH after a DEPOSIT of payTick.
+    // No tokens are delivered yet (claim later).
     buy: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'sale not open');
         xchain.require(xchain.getBlockHeight() < parseInt(xchain.state.get('deadline')), 'sale closed (deadline passed)');
@@ -181,7 +179,6 @@ module.exports = {
         return xchain.state.get('raised');
     },
 
-    // info(): read-only snapshot for UIs.
     info: function (xchain) {
         return JSON.stringify({
             status: xchain.state.get('status'),

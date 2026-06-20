@@ -107,7 +107,6 @@ module.exports = {
         settle(xchain, ['buyer'], 'buyer', 'REFUNDED', true);
     },
 
-    // status(): read-only view of the current escrow state.
     status: function (xchain) {
         return xchain.state.get('status');
     }
