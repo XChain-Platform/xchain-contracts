@@ -11,7 +11,6 @@ If you're reporting a security issue, **stop here** and read [`SECURITY.md`](./S
 - Project overview: [`README.md`](./README.md)
 - Full component docs: the [`xchain-documentation`](https://github.com/XChain-platform/xchain-documentation) repository (architecture, contract patterns, protocol spec)
 - Disclosure policy: [`SECURITY.md`](./SECURITY.md)
-- Code of Conduct: [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
 - License: [`LICENSE`](./LICENSE) (MIT, intentionally permissive so you can build proprietary contracts on top)
 
 ---
@@ -113,12 +112,6 @@ CI is the full `npm test` + `npm run lint` gate. Before opening a PR:
 3. Open the PR with a clear title and a description of what changed and why.
 
 For non-security bugs, open an issue at <https://github.com/XChain-platform/xchain-contracts/issues/new>. For security bugs, see [`SECURITY.md`](./SECURITY.md).
-
----
-
-## Code of Conduct
-
-We follow our [Code of Conduct](./CODE_OF_CONDUCT.md), adapted from the Contributor Covenant 2.1. Be kind, assume good faith, and disagree without being a jerk.
 
 ---
 
