@@ -51,6 +51,18 @@
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        buy:      { summary: 'Attribute the deposited payment to the sale (BATCH after a DEPOSIT)', params: [] },
+        finalize: { summary: 'Lock in the outcome after the deadline or hard cap', params: [] },
+        claim:    { summary: 'Buyer mints purchased tokens (successful sale only)', params: [] },
+        refund:   { summary: 'Buyer reclaims their payment (failed sale only)', params: [] },
+        withdraw: { summary: 'Owner takes the proceeds (successful sale only)', params: [] },
+        info:     { summary: 'Read the sale terms and progress', params: [], view: true }
+    } },
+
     // initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)
     // Issues the sale token (max supply = hardCap * rate, contract-owned) and
     // opens the sale until getBlockHeight() + durationBlocks.

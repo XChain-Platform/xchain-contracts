@@ -46,6 +46,16 @@
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        fund:   { summary: 'Confirm custody and start the vesting clock (BATCH after a DEPOSIT)', params: [] },
+        claim:  { summary: 'Beneficiary withdraws everything vested but unclaimed', params: [] },
+        revoke: { summary: 'Grantor reclaims the unvested portion (revocable grants only)', params: [] },
+        info:   { summary: 'Read the vesting schedule and progress', params: [], view: true }
+    } },
+
     // initialize(grantor, beneficiary, tick, total, cliffBlocks, durationBlocks, revocable)
     // `revocable` is the string "true" or "false". The vesting clock does NOT
     // start here. It starts at fund(), so there is no claimable gap before the

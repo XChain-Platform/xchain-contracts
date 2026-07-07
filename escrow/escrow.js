@@ -48,6 +48,17 @@
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        fund:    { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
+        release: { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
+        refund:  { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
+        timeout: { summary: 'Buyer reclaims after the deadline', params: [] },
+        status:  { summary: 'Read the escrow status', params: [], view: true }
+    } },
+
     // initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)
     // Sets the immutable terms at deploy time. `amount` is the minimum that must
     // be on deposit before the escrow can be funded. `deadlineBlocks` is how many
