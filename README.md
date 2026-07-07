@@ -1,7 +1,7 @@
 # XChain Contract Template Library
 
 Audited, copy-pasteable smart-contract templates for the [XChain
-Platform](https://xchain.io) — worked examples of the **contracts-as-orchestration**
+Platform](https://xchain.io): worked examples of the **contracts-as-orchestration**
 model. Each template is a real contract you can fork, paired with a walkthrough and
 an explicit *"attacks we considered"* section, and verified by running the actual
 template through the XChain VM.
@@ -34,24 +34,25 @@ Node-22 requirement), and `sdk.deploy(..., { lint })` blocks a guaranteed-to-fai
 deploy. See the [developer guide](https://docs.xchain.io).
 
 Reusable building blocks (access control, pausable, safe-transfer, input
-validation, state machines) live in [`patterns/`](./patterns/README.md) — paste
+validation, state machines) live in [`patterns/`](./patterns/README.md); paste
 the helpers you need into your contract.
 
 ## The templates
 
 | Template | Contract | Guide | Tests | What it teaches |
 |---|---|---|---|---|
-| **Escrow** | [escrow.js](./escrow/escrow.js) | [README](./escrow/README.md) | [tests](./escrow/escrow.test.js) | The custody baseline — DEPOSIT funding verified on-chain, conditional release/refund, an arbiter, and a deadline so funds can't be locked forever. |
+| **Escrow** | [escrow.js](./escrow/escrow.js) | [README](./escrow/README.md) | [tests](./escrow/escrow.test.js) | The custody baseline: DEPOSIT funding verified on-chain, conditional release/refund, an arbiter, and a deadline so funds can't be locked forever. |
 | **Vesting** | [vesting.js](./vesting/vesting.js) | [README](./vesting/README.md) | [tests](./vesting/vesting.test.js) | Linear release with a cliff, partial-claim accounting, and optional revocation. |
-| **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds — and a **contract that issues its own token** and mints it to buyers. |
+| **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds, plus a **contract that issues its own token** and mints it to buyers. |
 | **AMM** | [amm.js](./amm/amm.js) | [README](./amm/README.md) | [tests](./amm/amm.test.js) | A constant-product market maker. LP positions are **real, tradeable ticks**; 0.3% fee; slippage protection; the `k`-invariant is fuzz-tested. |
+| **Treasury** | [treasury.js](./treasury/treasury.js) | [README](./treasury/README.md) | [tests](./treasury/treasury.test.js) | A poll-governed treasury hardened against low-turnout governance raids: binding `VOTE` polls, a timelock between "passed" and "paid", and a guardian veto. |
 
-Start with **escrow** — it explains the custody model the others build on.
+Start with **escrow**: it explains the custody model the others build on.
 
 ## What these are (and are not)
 
 These templates do **not** reimplement native protocol actions. XChain already has
-native `ORDER`/`SWAP` (an orderbook DEX), `DISPENSER`, `DIVIDEND`, and `ISSUE` — use
+native `ORDER`/`SWAP` (an orderbook DEX), `DISPENSER`, `DIVIDEND`, and `ISSUE`; use
 those directly. Templates exist for what native actions *can't* do: custody with
 custom release rules, multi-step state machines, and (in the showcase tier) the
 cross-chain, oracle, and attestation primitives.
@@ -62,7 +63,7 @@ genuinely useful and the best proof that the VM's custody model is real.
 
 ## The custody model (read before forking)
 
-XChain has **no `msg.value`** — a contract call carries no tokens. Instead:
+XChain has **no `msg.value`**, so a contract call carries no tokens. Instead:
 
 - A contract is an address (`C:<CHAIN>:<index>`) that holds balances like a wallet.
 - Tokens enter via a separate **`DEPOSIT`** action to that address.
@@ -73,15 +74,15 @@ XChain has **no `msg.value`** — a contract call carries no tokens. Instead:
   BATCH( DEPOSIT(contract, TICK, amount), EXECUTE(contract, "method", ...args) )
   ```
 
-A safe contract **never trusts a caller-supplied amount** — it reads its own balance
+A safe contract **never trusts a caller-supplied amount**: it reads its own balance
 with `xchain.getBalance(xchain.getContractAddress(), tick)`. Every template here
 follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 
 ## Linting
 
 `xchain-contracts lint` runs each contract through the VM's **exact** deploy-time
-validation — V8 syntax, the acorn metering pass, reserved identifiers, banned
-`Math.*`, banned `BigInt`/`RegExp` literals, plus the logic-level advisories
+validation (V8 syntax, the acorn metering pass, reserved identifiers, banned
+`Math.*`, banned `BigInt`/`RegExp` literals) plus the logic-level advisories
 (crossCallable integrity, unbounded loops, unchecked `state.get`, …). A clean
 result means the contract clears deployment. It delegates to `xchain-vm`'s linter,
 so it needs **Node 22** / `isolated-vm`.
@@ -111,7 +112,7 @@ npx mocha --timeout 0 patterns/patterns.test.js   # pattern lint-gate only (runs
 ## Prerequisite
 
 Value-holding contracts require the VM gateway's `getBalance` / `getTokenInfo` to
-return real data — wired in `xchain-indexer`. Without it a contract cannot read its
+return real data, wired in `xchain-indexer`. Without it a contract cannot read its
 own holdings to verify deposits.
 
 ## License

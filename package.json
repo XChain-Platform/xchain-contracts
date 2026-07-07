@@ -1,7 +1,7 @@
 {
   "name": "xchain-contracts",
   "version": "0.1.0",
-  "description": "XChain Platform contract template & pattern library — audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
+  "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
   "license": "MIT",
   "bin": {
     "xchain-contracts": "bin/xchain-contracts.js"
@@ -16,6 +16,6 @@
     "lint": "node bin/xchain-contracts.js lint",
     "scaffold": "node bin/xchain-contracts.js scaffold",
     "list": "node bin/xchain-contracts.js list",
-    "test": "mocha --timeout 0 escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js"
+    "test": "mocha --timeout 0 escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js treasury/treasury.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js"
   }
 }
