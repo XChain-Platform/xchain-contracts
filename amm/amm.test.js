@@ -50,6 +50,12 @@ const k = (r) => math.multiply(bn(r.a), bn(r.b));
             h.seedBalance(u, A, '100000000');
             h.seedBalance(u, B, '100000000');
         }
+        // The real indexer knows each tick's decimals: it exposes them to the contract
+        // (getTokenInfo) and truncates emitted amounts to them at write time. Register
+        // the pair + LP tick at 8 dp so the harness models both.
+        h.ledger.setTokenDecimals(A, 8);
+        h.ledger.setTokenDecimals(B, 8);
+        h.ledger.setTokenDecimals(LP, 8);
         return h.deploy({ code: CODE, deployer: LP1, contractAddress: ADDR, params: [A, B, LP] });
     }
     async function addLiq(who, a, b) {
@@ -166,6 +172,58 @@ const k = (r) => math.multiply(bn(r.a), bn(r.b));
         it('reverts swapping into an empty pool', async function () {
             await deploy();
             assertReverted(await swap(T1, A, '100', '0'), 'no liquidity');
+        });
+    });
+
+    describe('precision reconciliation (finding: reserves/totalShares drift)', function () {
+        // Half-even normalization to d decimals == what the indexer stores on the ledger.
+        const norm = (v, d) => math.format(bn(v), { notation: 'fixed', precision: d });
+        // Fractional-digit count; a value with <= d fraction digits sits on the tick grid,
+        // so the indexer's write-time re-normalization is a numeric no-op.
+        const fracLen = (v) => { const s = String(v); const i = s.indexOf('.'); return i < 0 ? 0 : s.length - i - 1; };
+        const onGrid = (v, d) => fracLen(v) <= d;
+
+        it('quantises totalShares to the LP grid so the last LP fully drains', async function () {
+            await deploy();
+            // sqrt(1000 * 3000) = 1732.05080756887... : off the 8-dp grid.
+            const r1 = await addLiq(LP1, '1000', '3000');
+            assertSuccess(r1);
+            const mint1 = emitted(r1, 'MINT', LP).params.quantity;
+            assert.ok(onGrid(reserves().shares, 8),
+                'totalShares must sit on the 8-dp LP grid, got ' + reserves().shares);
+            assert.ok(math.equal(bn(reserves().shares), bn(norm(mint1, 8))),
+                'state totalShares must equal the LP supply the indexer actually mints');
+
+            // Second provider deposits in-ratio; the proportional share repeats.
+            const r2 = await addLiq(LP2, '333', '999');
+            assertSuccess(r2);
+            const mint2 = emitted(r2, 'MINT', LP).params.quantity;
+            assert.ok(onGrid(reserves().shares, 8), 'totalShares stays gridded after the 2nd add');
+            assert.ok(math.equal(bn(reserves().shares), math.add(bn(norm(mint1, 8)), bn(norm(mint2, 8)))),
+                'totalShares == sum of minted LP');
+
+            // Both LPs redeem everything; the pool must drain to exactly zero. The bug
+            // divided by an inflated totalShares, so the final dust was unwithdrawable.
+            h.ledger.contractBalances[ADDR][LP] = '0'; // undo the mock MINT-to-contract quirk
+            h.ledger.setBalance(LP2, LP, mint2);
+            h.deposit(LP2, ADDR, LP, mint2);
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP2 }));
+            assert.ok(onGrid(reserves().a, 8) && onGrid(reserves().b, 8), 'reserves gridded after partial exit');
+
+            h.ledger.setBalance(LP1, LP, mint1);
+            h.deposit(LP1, ADDR, LP, mint1);
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }));
+            assert.deepStrictEqual(reserves(), { a: '0', b: '0', shares: '0' }, 'last LP drains the pool to zero');
+        });
+
+        it('quantises swap output so reserves reconcile with token custody', async function () {
+            await deploy();
+            await addLiq(LP1, '1000', '1000');
+            const r = await swap(T1, A, '100', '0');
+            assertSuccess(r);
+            const out = emitted(r, 'SEND', B).params.quantity;
+            assert.ok(onGrid(out, 8), 'swap output is 8-dp gridded, got ' + out);
+            assert.ok(onGrid(reserves().b, 8), 'reserveB stays on the 8-dp grid, got ' + reserves().b);
         });
     });
 

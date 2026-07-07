@@ -61,6 +61,51 @@
 var FEE_NUM = '997';   // 0.3% fee: keep 99.7% of the input in the pricing math
 var FEE_DEN = '1000';
 
+// LP shares are issued with 8 decimals (see initialize); share math is quantised to
+// this same grid before it touches state or an emission.
+var LP_DECIMALS = 8;
+
+// RESERVE RECONCILIATION (see finding: reserves/totalShares drift)
+//
+// xchain.math computes at 64 significant digits, but the indexer normalises every
+// emitted amount to its tick's decimals at ledger-write time (util.bcadd -> mathjs
+// half-even round). So a computed share/payout written to state at full precision is
+// MORE precise than the LP or tokens the ledger actually mints/moves: state drifts
+// above real custody, totalShares inflates, and the last LP can never drain the pool.
+//
+// Fix: quantise every computed quantity DOWN to its tick's decimal grid BEFORE both
+// the state write and the emission. Once a value has <= `decimals` fraction digits the
+// indexer's re-normalisation is a numeric no-op, so state stays reconciled with
+// custody. Rounding DOWN (never up) guarantees the pool never credits/pays more than it
+// holds and keeps k non-decreasing.
+//
+// The truncation is pure string surgery on the fixed-notation decimal xchain.math
+// returns: it is exact and deterministic, and it deliberately avoids mathjs floor/mod,
+// which round a large bignumber to the configured significant-digit precision (not the
+// decimal grid) and would corrupt the result.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of a tick the pool custodies, read from the ledger snapshot. The pool always
+// holds the tokens it pays out (reserves) and receives (deposits), so their token info
+// is present whenever balances are (same VM_BALANCE_TOKENINFO gate getBalance rides on).
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
+}
+
 module.exports = {
 
     // initialize(tokenA, tokenB, lpTick): create an empty pool and issue the LP tick.
@@ -82,7 +127,7 @@ module.exports = {
 
         // A name collision on lpTick reverts the deploy (fail-fast by design).
         var big = '99999999999999999999';
-        xchain.emit.issue({ tick: lpTick, maxSupply: big, maxMint: big, decimals: '8', description: 'AMM LP share' });
+        xchain.emit.issue({ tick: lpTick, maxSupply: big, maxMint: big, decimals: String(LP_DECIMALS), description: 'AMM LP share' });
     },
 
     // addLiquidity(): BATCH after DEPOSITing both tokenA and tokenB. Mints LP
@@ -111,6 +156,8 @@ module.exports = {
             var sB = xchain.math.divide(xchain.math.multiply(depB, totalShares), reserveB);
             shares = xchain.math.min(sA, sB);
         }
+        // Quantise to the LP grid so state totalShares matches the LP the indexer mints.
+        shares = floorToDecimals(shares, LP_DECIMALS);
         xchain.require(xchain.math.gt(shares, '0'), 'insufficient liquidity minted');
 
         xchain.state.set('reserveA', xchain.math.add(reserveA, depA));
@@ -126,6 +173,8 @@ module.exports = {
     removeLiquidity: function (xchain) {
         var self = xchain.getContractAddress();
         var lpTick = xchain.state.get('lpTick');
+        var tokenA = xchain.state.get('tokenA');
+        var tokenB = xchain.state.get('tokenB');
         var reserveA = xchain.state.get('reserveA');
         var reserveB = xchain.state.get('reserveB');
         var totalShares = xchain.state.get('totalShares');
@@ -134,8 +183,10 @@ module.exports = {
         xchain.require(xchain.math.gt(shares, '0'), 'must deposit LP shares');
         xchain.require(xchain.math.lte(shares, totalShares), 'shares exceed total');
 
-        var outA = xchain.math.divide(xchain.math.multiply(reserveA, shares), totalShares);
-        var outB = xchain.math.divide(xchain.math.multiply(reserveB, shares), totalShares);
+        // Quantise each payout DOWN to its token grid so the state debit matches the
+        // amount the indexer actually sends from custody (dust favours the pool).
+        var outA = floorToDecimals(xchain.math.divide(xchain.math.multiply(reserveA, shares), totalShares), tickDecimals(xchain, tokenA));
+        var outB = floorToDecimals(xchain.math.divide(xchain.math.multiply(reserveB, shares), totalShares), tickDecimals(xchain, tokenB));
         xchain.require(xchain.math.gt(outA, '0') && xchain.math.gt(outB, '0'), 'insufficient liquidity burned');
 
         xchain.state.set('reserveA', xchain.math.subtract(reserveA, outA));
@@ -145,8 +196,8 @@ module.exports = {
         xchain.emit.destroy({ tick: lpTick, quantity: shares });
 
         var to = xchain.getSourceAddress();
-        xchain.emit.send({ destination: to, tick: xchain.state.get('tokenA'), quantity: outA });
-        xchain.emit.send({ destination: to, tick: xchain.state.get('tokenB'), quantity: outB });
+        xchain.emit.send({ destination: to, tick: tokenA, quantity: outA });
+        xchain.emit.send({ destination: to, tick: tokenB, quantity: outB });
         return JSON.stringify({ outA: outA, outB: outB });
     },
 
@@ -175,10 +226,12 @@ module.exports = {
         // (amountInWithFee), but the FULL input is retained in reserves. That
         // 0.3% gap is the LP fee and is what makes k grow.
         var amountInWithFee = xchain.math.divide(xchain.math.multiply(amountIn, FEE_NUM), FEE_DEN);
-        var amountOut = xchain.math.divide(
+        // Quantise the output DOWN to the out-token grid before the reserve write + send,
+        // so state reserveOut stays reconciled with real custody and k never decreases.
+        var amountOut = floorToDecimals(xchain.math.divide(
             xchain.math.multiply(reserveOut, amountInWithFee),
             xchain.math.add(reserveIn, amountInWithFee)
-        );
+        ), tickDecimals(xchain, tokenOut));
         xchain.require(xchain.math.gt(amountOut, '0'), 'insufficient output');
         xchain.require(xchain.math.lt(amountOut, reserveOut), 'output exceeds reserves');
         xchain.require(xchain.math.gte(amountOut, minOut), 'slippage: output below minOut');
