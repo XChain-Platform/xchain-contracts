@@ -1,7 +1,7 @@
 # Escrow
 
 A buyer locks tokens for a seller. The funds release to the seller, or refund to
-the buyer, only on an authorized instruction — with an arbiter to settle disputes
+the buyer, only on an authorized instruction - with an arbiter to settle disputes
 and a deadline so the buyer can never be locked out forever.
 
 This is the simplest real-money contract in the library and the best place to
@@ -9,7 +9,7 @@ learn XChain's custody model. Read it before the crowdsale and AMM templates.
 
 ## The custody model (the one thing to understand first)
 
-XChain has **no `msg.value`** — a contract call does not carry tokens. Instead:
+XChain has **no `msg.value`** - a contract call does not carry tokens. Instead:
 
 - A contract is an address (`C:<CHAIN>:<index>`) that holds balances like a wallet.
 - Tokens enter a contract through a separate **`DEPOSIT`** action to that address.
@@ -22,7 +22,7 @@ BATCH( DEPOSIT(escrow, TICK, 200), EXECUTE(escrow, "fund") )
 ```
 
 Batched sub-actions apply in order, and the deposit is persisted before the
-`EXECUTE` runs — so `fund()` sees the deposited balance. The contract **never
+`EXECUTE` runs - so `fund()` sees the deposited balance. The contract **never
 trusts a caller-supplied amount**; it reads its own balance with
 `xchain.getBalance(xchain.getContractAddress(), tick)`. That single habit is what
 makes custody contracts safe on XChain.
@@ -54,7 +54,7 @@ await sdk.batch()
   .execute({ contractActionIndex: escrowIndex, method: 'fund' })
   .build();
 
-// Later: release (buyer) — or refund (seller) — or timeout (buyer, after deadline)
+// Later: release (buyer) - or refund (seller) - or timeout (buyer, after deadline)
 await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release' });
 ```
 
@@ -64,8 +64,8 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
   reads the on-chain balance via `getBalance(self, tick)`. An underfunded escrow
   cannot be armed.
 - **Unauthorized settlement.** `release`/`refund`/`timeout` check
-  `getSourceAddress()` against the stored roles. A stranger — or the wrong party
-  (seller calling `release`, buyer calling `refund`) — is rejected.
+  `getSourceAddress()` against the stored roles. A stranger - or the wrong party
+  (seller calling `release`, buyer calling `refund`) - is rejected.
 - **Double payout / replay.** Every settlement path requires `status === FUNDED`
   and sets a terminal status (`RELEASED`/`REFUNDED`) in the same execution. The
   state write commits atomically with the emitted `SEND`, so a second EXECUTE sees
@@ -76,7 +76,7 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
 - **Buyer locked out by a stalling seller/arbiter.** `timeout()` lets the buyer
   reclaim after `deadlineBlocks`. Before the deadline it reverts.
 - **Reentrancy.** Emissions are deferred and processed by the indexer after the
-  method returns, inside one atomic scope — there is no mid-method callback into
+  method returns, inside one atomic scope - there is no mid-method callback into
   this contract, and the terminal status is already written.
 - **Rounding / float drift.** All amount comparisons use `xchain.math` bignumber
   ops; there are no float literals (the SDK validator confirms this).
@@ -85,7 +85,7 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
 
 - **Single tick.** The escrow handles exactly the configured tick. Tokens of any
   *other* tick sent to the contract address are **not recoverable** by this
-  template — only ever deposit the configured tick.
+  template - only ever deposit the configured tick.
 - **Overfunding goes to the payee.** Because settlement sweeps the full held
   balance, depositing more than `amount` simply pays the extra to whoever the
   escrow settles to. Deposit the exact amount.
@@ -103,6 +103,6 @@ cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/escrow/escrow.test.js
 
 ## License
 
-MIT — fork it, ship it, change it. (The XChain *platform* is AGPL-3.0; these
+MIT - fork it, ship it, change it. (The XChain *platform* is AGPL-3.0; these
 *templates* are deliberately permissive so you can build proprietary contracts on
 top.)

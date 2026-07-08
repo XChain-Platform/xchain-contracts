@@ -2,16 +2,16 @@
 
 A capped token sale with a soft cap, a deadline, and refunds. Buyers pay in one
 token (`payTick`) and are promised a brand-new sale token (`saleTick`) at a fixed
-`rate`. If the sale meets its soft cap it succeeds — buyers claim their tokens and
+`rate`. If the sale meets its soft cap it succeeds - buyers claim their tokens and
 the owner withdraws the proceeds. If it misses the soft cap by the deadline it
-fails — every buyer refunds in full.
+fails - every buyer refunds in full.
 
 This is the first template where **the contract creates and distributes a token**:
 it `emit.issue`s the sale token at deploy (becoming its owner) and `emit.mint`s to
-each buyer on claim. Pick a `saleTick` name that isn't already taken — ticks are a
+each buyer on claim. Pick a `saleTick` name that isn't already taken - ticks are a
 global namespace, and the deploy's constructor issue fails on a name collision.
 
-## Custody model — note the footgun
+## Custody model - note the footgun
 
 There is no `msg.value`. Buyers pay by DEPOSITing `payTick` and EXECUTEing `buy()`
 atomically:
@@ -21,7 +21,7 @@ BATCH( DEPOSIT(sale, PAY, amount), EXECUTE(sale, "buy") )
 ```
 
 `buy()` attributes the payment to its caller by reading how much the contract's
-`payTick` balance grew since the last accounted buy — which is only safe because
+`payTick` balance grew since the last accounted buy - which is only safe because
 the DEPOSIT and `buy()` are in the **same transaction**. **Never DEPOSIT without
 `buy()` in the same BATCH**: an un-bought deposit would be credited to the next
 buyer who calls `buy()`. (This per-caller attribution is the pattern the AMM will
@@ -42,7 +42,7 @@ build on.)
 ## Attacks we considered
 
 - **Deposit misattribution.** Contributions are credited to the `buy()` caller via
-  the balance delta — safe under atomic `BATCH(DEPOSIT, buy)`. The footgun (orphan
+  the balance delta - safe under atomic `BATCH(DEPOSIT, buy)`. The footgun (orphan
   deposits) is documented above; it is a usage rule, not a contract bug.
 - **Buying after close.** `buy()` reverts past the deadline and rejects any
   contribution that would push `raised` over the hard cap.
@@ -50,7 +50,7 @@ build on.)
   cap; it can't be called early to lock a favorable/unfavorable outcome.
 - **Double claim / double refund.** Each deletes the caller's contribution record
   before emitting, so a second call finds nothing.
-- **Claim on a failed sale / refund on a success.** Status-gated — `claim()` is
+- **Claim on a failed sale / refund on a success.** Status-gated - `claim()` is
   SUCCESS-only, `refund()` is FAILED-only.
 - **Unauthorized or repeated withdrawal.** `withdraw()` is owner-only and guarded
   by a `withdrawn` flag.
@@ -79,4 +79,4 @@ movements via resulting balances.
 
 ## License
 
-MIT — fork it, ship it, change it.
+MIT - fork it, ship it, change it.

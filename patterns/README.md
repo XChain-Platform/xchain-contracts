@@ -1,11 +1,11 @@
 # Contract Pattern Library
 
-Small, audited, **copy-paste** building blocks for XChain contracts — the
+Small, audited, **copy-paste** building blocks for XChain contracts - the
 idioms the [templates](../README.md) use, factored out so you can drop them into
 your own contract.
 
 XChain contracts are a single self-contained JavaScript blob with **no imports
-and no npm at runtime**, so these aren't a package you depend on — they're
+and no npm at runtime**, so these aren't a package you depend on - they're
 vetted source you paste in. Each file is a set of top-level helper functions
 that take `xchain` as their first argument (the same shape as the templates'
 own `settle` / `vestedAmount` helpers).
@@ -40,7 +40,7 @@ module.exports = {
 };
 ```
 
-Paste only the helpers you actually call — every byte counts against the 64 KB
+Paste only the helpers you actually call - every byte counts against the 64 KB
 code ceiling.
 
 ## The patterns
@@ -63,7 +63,7 @@ node ../xchain-vm/bin/lint.js my-contract.js
 ## You do NOT need a reentrancy guard
 
 If you're coming from Solidity, you'll reach for a `nonReentrant` modifier.
-**XChain doesn't need one — reentrancy is impossible by construction.**
+**XChain doesn't need one - reentrancy is impossible by construction.**
 
 - Token emissions (`emit.send`, `emit.mint`, …) are **deferred**: they're queued
   during your method and applied **after** it returns. A contract cannot observe
@@ -71,11 +71,11 @@ If you're coming from Solidity, you'll reach for a `nonReentrant` modifier.
   as of the start of execution.
 - Cross-contract calls (`emit.execute`) are also **deferred, not inline**: the
   callee runs after your method finishes, in the order you emitted, within the
-  same atomic scope — it sees your already-committed state and there is no return
+  same atomic scope - it sees your already-committed state and there is no return
   value. There is no synchronous re-entry to exploit.
 
 The discipline that replaces a reentrancy guard is simply **commit state before
-emitting** — set your terminal status / delete the per-caller record first, then
+emitting** - set your terminal status / delete the per-caller record first, then
 emit. The `state-machine` and `safe-transfer` patterns encode exactly that
 ordering. If any emitted action later fails validation, the whole execution
 (state changes *and* emissions) is rolled back atomically.

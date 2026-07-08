@@ -3,22 +3,22 @@
 A grantor locks tokens for a beneficiary that unlock gradually over time. The
 beneficiary claims whatever has vested. With a **cliff**, nothing unlocks until
 `cliffBlocks` have passed; after that the grant vests **linearly** and is fully
-vested at `durationBlocks`. A grant can optionally be **revocable** — the grantor
+vested at `durationBlocks`. A grant can optionally be **revocable** - the grantor
 reclaims the still-unvested portion, while the beneficiary keeps what they earned.
 
-Time is measured in **blocks**, not wall-clock — XChain contracts have no clock,
+Time is measured in **blocks**, not wall-clock - XChain contracts have no clock,
 only deterministic `getBlockHeight()`.
 
 ## Custody model
 
-Same as [escrow](../escrow/) — there is no `msg.value`. Fund atomically:
+Same as [escrow](../escrow/) - there is no `msg.value`. Fund atomically:
 
 ```
 BATCH( DEPOSIT(vesting, TICK, TOTAL), EXECUTE(vesting, "fund") )
 ```
 
 `fund()` verifies the contract holds `total` (via `getBalance`) and starts the
-vesting clock from that block — so there's no claimable gap before the grant is
+vesting clock from that block - so there's no claimable gap before the grant is
 actually in custody. Deposit **exactly** `total` of the configured tick; surplus
 or other ticks are not recoverable by this template.
 
@@ -43,7 +43,7 @@ vested(now) =
 
 `elapsed = now - start`. The cliff gates the *start* of vesting but not its slope:
 at the cliff a chunk (`total * cliff / duration`) becomes claimable at once, then
-it continues linearly. Division truncates, so the contract **never over-pays** —
+it continues linearly. Division truncates, so the contract **never over-pays** -
 the rounding remainder is released exactly when the grant fully vests.
 
 ## Attacks we considered
@@ -51,7 +51,7 @@ the rounding remainder is released exactly when the grant fully vests.
 - **Caller lies about the deposit.** `fund()` reads the on-chain balance; an
   underfunded grant cannot be activated.
 - **Unauthorized claim.** `claim()` checks `getSourceAddress()` against the stored
-  beneficiary — no one else can claim.
+  beneficiary - no one else can claim.
 - **Over-claim / double-claim.** Each claim pays `vested - claimed` and advances
   `claimed` in the same atomic execution; a repeat in the same block claims zero.
   Vested is capped at `total`, so the beneficiary can never extract more than the
@@ -60,7 +60,7 @@ the rounding remainder is released exactly when the grant fully vests.
   grant pays nothing.
 - **Revocation abuse.** `revoke()` is grantor-only, revocable-only, and reverts
   once fully vested. It freezes the cap at the amount vested *at revoke time*, so
-  the beneficiary keeps exactly what they had earned and nothing further accrues —
+  the beneficiary keeps exactly what they had earned and nothing further accrues -
   while the grantor recovers only the genuinely-unvested remainder.
 - **Rounding.** `xchain.math` bignumber throughout; `divide` truncates in the
   contract's favor. No float literals (SDK-validated).
@@ -82,4 +82,4 @@ cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/vesting/vesting.test.j
 
 ## License
 
-MIT — fork it, ship it, change it.
+MIT - fork it, ship it, change it.
