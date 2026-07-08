@@ -33,9 +33,24 @@ function requireEnum(xchain, v, allowed, name) {
     xchain.require(ok, name + ' must be one of: ' + allowed.join(', '));
 }
 
-// Throw unless parseInt(v) is an integer within [min, max] inclusive.
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt
+// silently accepts non-integers a range check then blesses ('5.99' -> 5,
+// '500abc' -> 500, '0x100' -> 256, ' 5' -> 5), so a template that stored the raw
+// param would carry a value the check never truly approved. Scan for an exact
+// integer shape (optional leading '-', then one-or-more digits, nothing else)
+// with plain character comparisons; a regex literal would be rejected by the VM's
+// determinism validator (RegExp is not allowed in contract source).
 function requireIntInRange(xchain, v, min, max, name) {
-    var n = parseInt(v);
-    xchain.require(n >= min && n <= max,
-        name + ' must be an integer in [' + min + ', ' + max + ']');
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }

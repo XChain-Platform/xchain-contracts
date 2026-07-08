@@ -49,6 +49,30 @@
 // transaction.** An un-bought deposit would be credited to the NEXT buyer.
 // ---------------------------------------------------------------------------
 
+// Quantise a computed amount DOWN to its tick's decimal grid before emitting it.
+// xchain.math computes at 64 significant digits, but the indexer normalises every
+// emitted amount to its tick's decimals at ledger-write time (mathjs half-even
+// round), which can round a computed quantity UP. For claim() that means minting
+// MORE saleTick than paid*rate and, cumulatively across buyers, past the maxMint
+// supply cap so a later honest claim reverts and (because the whole EXECUTE rolls
+// back) that buyer's contribution record survives and is permanently unclaimable.
+// Flooring the mint onto saleTick's grid makes the indexer re-normalisation a no-op.
+// Same helper and rationale as amm.js:floorToDecimals; pure exact string surgery on
+// the fixed-notation decimal, deliberately not mathjs floor/mod (which round to the
+// significant-digit precision, not the decimal grid).
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -74,7 +98,7 @@ module.exports = {
         var softCap  = xchain.getInputParam(4);
         var hardCap  = xchain.getInputParam(5);
         var duration = parseInt(xchain.getInputParam(6));
-        var decimals = xchain.getInputParam(7);
+        var decimals = xchain.getInputParam(7) || '8';
 
         xchain.require(owner && payTick && saleTick, 'owner, payTick, saleTick required');
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
@@ -94,13 +118,17 @@ module.exports = {
         xchain.state.set('accountedPay', '0');
         xchain.state.set('withdrawn', 'false');
         xchain.state.set('status', 'OPEN');
+        // Persist the sale token's decimal grid so claim() can floor its mint onto
+        // it (initialize is the only place the grid is known; getTokenInfo(saleTick)
+        // is not reliably readable by a contract that holds no saleTick balance).
+        xchain.state.set('saleDecimals', decimals);
 
         var maxSale = xchain.math.multiply(hardCap, rate);
         xchain.emit.issue({
             tick: saleTick,
             maxSupply: maxSale,
             maxMint: maxSale,
-            decimals: decimals || '8',
+            decimals: decimals,
             description: 'Crowdsale token'
         });
     },
@@ -148,7 +176,13 @@ module.exports = {
         var paid   = xchain.state.get('c:' + caller) || '0';
         xchain.require(xchain.math.gt(paid, '0'), 'nothing to claim');
 
-        var tokens = xchain.math.multiply(paid, xchain.state.get('rate'));
+        // Floor the mint onto saleTick's decimal grid so the indexer's half-even
+        // re-normalisation cannot round it UP (over-issuing past the rate and, across
+        // buyers, past maxMint - which would revert a later claim and, on the rollback,
+        // permanently strand that buyer's contribution). Legacy pre-fix deploys have no
+        // saleDecimals key; default to the 8dp the issue used so old contracts still claim.
+        var saleDecimals = parseInt(xchain.state.get('saleDecimals') || '8', 10);
+        var tokens = floorToDecimals(xchain.math.multiply(paid, xchain.state.get('rate')), saleDecimals);
         xchain.state.delete('c:' + caller); // zero out first (no double claim)
 
         xchain.emit.mint({
