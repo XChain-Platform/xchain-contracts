@@ -101,6 +101,35 @@ const TICK    = 'TEST';
             assertBalance(h.ledger, BUYER, TICK, '200');
             assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
         });
+
+        // Regression: the reclaim deadline is anchored at fund(), not deploy.
+        // When the deadline was set in initialize(), any deploy-to-funding delay
+        // ate the seller's window, and funding at/after the deploy-anchored
+        // deadline armed an escrow the buyer could timeout()-reclaim in the
+        // same block, bypassing the seller/arbiter settlement path entirely.
+        it('delayed funding still gives the seller the full reclaim window', async function () {
+            await deployEscrow(3); // deployed at height 1
+            // Negotiation drags on: 5 blocks pass before the buyer funds, well
+            // past the old deploy-anchored deadline (1 + 3 = 4).
+            for (let i = 0; i < 5; i++) h.mineBlock(); // height 6
+            assertSuccess(await depositAndFund());
+
+            // A just-funded escrow must NOT be instantly reclaimable.
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
+                'deadline not reached');
+
+            // The seller/arbiter settlement path stays alive for the full window...
+            h.mineBlock(); h.mineBlock(); // height 8 < deadline (6 + 3 = 9)
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
+                'deadline not reached');
+
+            // ...and reclaim opens exactly at fund_height + window.
+            h.mineBlock(); // height 9 >= deadline(9)
+            const r = await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER });
+            assertSuccess(r);
+            assertBalance(h.ledger, BUYER, TICK, '200');
+            assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
+        });
     });
 
     describe('attacks we considered', function () {

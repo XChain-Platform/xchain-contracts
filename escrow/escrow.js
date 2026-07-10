@@ -62,7 +62,13 @@ module.exports = {
     // initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)
     // Sets the immutable terms at deploy time. `amount` is the minimum that must
     // be on deposit before the escrow can be funded. `deadlineBlocks` is how many
-    // blocks from now the buyer must wait before they can unilaterally reclaim.
+    // blocks from fund() the buyer must wait before they can unilaterally
+    // reclaim. The reclaim clock deliberately does NOT start here: anchoring it
+    // at deploy would let any deploy-to-funding delay eat the seller's
+    // protection window, and a contract funded at/after the deploy-anchored
+    // deadline would be instantly reclaimable by the buyer, bypassing the
+    // seller/arbiter settlement path. fund() arms the clock when custody is
+    // actually taken (same pattern as the sibling vesting template).
     initialize: function (xchain) {
         var buyer         = xchain.getInputParam(0);
         var seller        = xchain.getInputParam(1);
@@ -84,13 +90,18 @@ module.exports = {
         xchain.state.set('arbiter', arbiter);
         xchain.state.set('tick', tick);
         xchain.state.set('amount', amount);
-        xchain.state.set('deadline', String(xchain.getBlockHeight() + window));
+        // Persist the window; the deadline itself is anchored in fund() so the
+        // buyer's reclaim clock starts when custody is taken, not at deploy.
+        xchain.state.set('window', String(window));
         xchain.state.set('status', 'INIT');
     },
 
     // fund(): confirm the escrow is funded. Typically BATCHed after a DEPOSIT.
     // Verifies the contract actually holds at least `amount` of `tick` before
-    // arming the escrow; the on-chain balance is the source of truth.
+    // arming the escrow; the on-chain balance is the source of truth. Arming
+    // includes the buyer's reclaim deadline: it is anchored HERE, at the block
+    // custody is confirmed, so the seller always gets the full `deadlineBlocks`
+    // window regardless of how long after deploy the funding lands.
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'escrow not awaiting funds');
 
@@ -100,6 +111,7 @@ module.exports = {
 
         xchain.require(xchain.math.gte(held, amount), 'insufficient deposit');
 
+        xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
         xchain.state.set('status', 'FUNDED');
     },
 

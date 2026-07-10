@@ -32,7 +32,7 @@ makes custody contracts safe on XChain.
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
-| `fund()` | anyone (usually buyer, BATCHed after DEPOSIT) | Verifies the contract holds ≥ `amount` of `tick`; status → `FUNDED`. |
+| `fund()` | anyone (usually buyer, BATCHed after DEPOSIT) | Verifies the contract holds ≥ `amount` of `tick`; anchors the reclaim deadline (`deadlineBlocks` from **this** block); status → `FUNDED`. |
 | `release()` | buyer **or** arbiter | Sends the held balance to the seller; status → `RELEASED`. |
 | `refund()` | seller **or** arbiter | Sends the held balance to the buyer; status → `REFUNDED`. |
 | `timeout()` | buyer | After the deadline, buyer reclaims; status → `REFUNDED`. |
@@ -75,6 +75,12 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
   escrow cannot pay out.
 - **Buyer locked out by a stalling seller/arbiter.** `timeout()` lets the buyer
   reclaim after `deadlineBlocks`. Before the deadline it reverts.
+- **Delayed funding arms an instantly-reclaimable escrow.** The reclaim clock
+  starts in `fund()`, when custody is actually taken - not at deploy. If it were
+  deploy-anchored, a contract deployed during negotiation and funded later would
+  hand the seller a shrunken (or already-expired) protection window, letting the
+  buyer `timeout()`-reclaim a just-funded escrow and bypass the seller/arbiter
+  settlement path. Same clock-starts-at-funding pattern as the vesting template.
 - **Reentrancy.** Emissions are deferred and processed by the indexer after the
   method returns, inside one atomic scope - there is no mid-method callback into
   this contract, and the terminal status is already written.

@@ -43,8 +43,10 @@ vested(now) =
 
 `elapsed = now - start`. The cliff gates the *start* of vesting but not its slope:
 at the cliff a chunk (`total * cliff / duration`) becomes claimable at once, then
-it continues linearly. Division truncates, so the contract **never over-pays** -
-the rounding remainder is released exactly when the grant fully vests.
+it continues linearly. The division is computed at bignumber precision and every
+payout is **floored onto the tick's decimal grid** before it is emitted, so the
+contract **never over-pays** - each sub-grid remainder stays in custody, remains
+claimable, and is released with a later claim (fully, once the grant vests).
 
 ## Attacks we considered
 
@@ -62,8 +64,14 @@ the rounding remainder is released exactly when the grant fully vests.
   once fully vested. It freezes the cap at the amount vested *at revoke time*, so
   the beneficiary keeps exactly what they had earned and nothing further accrues -
   while the grantor recovers only the genuinely-unvested remainder.
-- **Rounding.** `xchain.math` bignumber throughout; `divide` truncates in the
-  contract's favor. No float literals (SDK-validated).
+- **Rounding.** `xchain.math` bignumber throughout; no float literals
+  (SDK-validated). Computed payouts can land off the tick's decimal grid
+  (e.g. 2.666... on a 0-decimal tick), and the indexer re-normalises every
+  emitted amount to the tick's decimals with half-even rounding - which can
+  round UP past custody and revert the final tranche. Both `claim()` and
+  `revoke()` therefore floor their payout onto the grid before emitting
+  (same `floorToDecimals` treatment as the amm and crowdsale templates), and
+  `claimed` advances by the floored amount actually paid.
 
 ## Known limitations (teaching baseline)
 

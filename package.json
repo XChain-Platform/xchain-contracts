@@ -2,6 +2,9 @@
   "name": "xchain-contracts",
   "version": "0.1.0",
   "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "license": "MIT",
   "bin": {
     "xchain-contracts": "bin/xchain-contracts.js"

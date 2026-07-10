@@ -21,7 +21,7 @@ try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
 catch (e) { console.log('Skipping vesting tests: isolated-vm not available (need Node 22)'); }
 
 const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
-const { assertSuccess, assertReverted, assertEmittedActions, assertBalance }
+const { assertSuccess, assertReverted, assertEmittedActions, assertBalance, assertContractBalance }
         = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js'));
 
 const CODE = fs.readFileSync(path.join(__dirname, 'vesting.js'), 'utf8');
@@ -43,6 +43,11 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
         h = new E2EHarness(XChainVM);
         h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
         h.seedBalance(GRANTOR, TICK, '1000');
+        // The real indexer knows every issued tick's decimals: it exposes them
+        // to the contract (getTokenInfo, which claim/revoke use to floor their
+        // payouts onto the grid) and normalises emitted amounts to them at
+        // write time. Register the grant tick at 8 dp so the harness models both.
+        h.ledger.setTokenDecimals(TICK, 8);
         await h.deploy({
             code: CODE, deployer: GRANTOR, contractAddress: ADDR,
             params: [GRANTOR, BENE, TICK, total || TOTAL, String(CLIFF), String(DURATION), revocable || 'false']
@@ -162,6 +167,80 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
         });
         it('rejects a non-boolean revocable flag', async function () {
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '10', '100', 'maybe'])).success, false);
+        });
+    });
+
+    // Regression: payouts must be floored onto the tick's decimal grid before
+    // emission. total=8 over duration=3 on a 0-decimal tick makes every tranche
+    // off-grid (2.666...): unfloored, the ledger's half-even normalisation
+    // rounded each SEND up to 3, over-drew custody, and the final claim
+    // reverted with 2 tokens permanently stranded.
+    describe('off-grid schedules (payout flooring)', function () {
+        const TOTAL8 = '8', DUR3 = 3;
+
+        async function deployOffGrid(revocable) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
+            h.seedBalance(GRANTOR, TICK, TOTAL8);
+            h.ledger.setTokenDecimals(TICK, 0); // integer-only grid
+            await h.deploy({
+                code: CODE, deployer: GRANTOR, contractAddress: ADDR,
+                params: [GRANTOR, BENE, TICK, TOTAL8, '0', String(DUR3), revocable || 'false']
+            });
+            h.deposit(GRANTOR, ADDR, TICK, TOTAL8);
+            await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
+        }
+
+        it('every tranche is floored, custody is never over-drawn, and the final claim succeeds', async function () {
+            await deployOffGrid();
+
+            atElapsed(1);                     // vested 2.666... → pay 2
+            let r = await claim();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '2' } }]);
+
+            atElapsed(2);                     // vested 5.333..., claimed 2 → pay 3
+            r = await claim();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '3' } }]);
+
+            atElapsed(DUR3);                  // fully vested → remainder 3, nothing stranded
+            r = await claim();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '3' } }]);
+
+            assertBalance(h.ledger, BENE, TICK, '8');           // whole grant delivered
+            assertContractBalance(h.ledger, ADDR, TICK, '0');   // custody fully drained
+            assertReverted(await claim(), 'nothing to claim');
+        });
+
+        it('a sub-grid accrual reverts instead of emitting a rounded-up payout', async function () {
+            await deployOffGrid();
+            atElapsed(1);
+            assertSuccess(await claim());     // pays 2, claimed=2
+            // Immediately claiming again: accrued 0.666... < 1 tick unit → floored
+            // to 0 → must revert, never emit an off-grid or rounded-up quantity.
+            assertReverted(await claim(), 'nothing to claim');
+        });
+
+        it('revoke() floors the reclaimed payout and the beneficiary keeps the rest claimable', async function () {
+            await deployOffGrid('true');
+
+            atElapsed(1);                     // vested 2.666..., unvested 5.333... → grantor gets 5
+            const r = await h.execute({ contractAddress: ADDR, method: 'revoke', params: [], caller: GRANTOR });
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '5' } }]);
+
+            atElapsed(DUR3);                  // cap frozen at 2.666... → beneficiary claims 2
+            const c = await claim();
+            assertSuccess(c);
+            assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '2' } }]);
+
+            // Custody retains only sub-grid dust (< 1 tick unit) and never went negative.
+            assertBalance(h.ledger, GRANTOR, TICK, '5');
+            assertBalance(h.ledger, BENE, TICK, '2');
+            assertContractBalance(h.ledger, ADDR, TICK, '1');
+            assertReverted(await claim(), 'nothing to claim');
         });
     });
 });

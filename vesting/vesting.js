@@ -44,6 +44,39 @@
 // tick, is not recoverable by this template.
 // ---------------------------------------------------------------------------
 
+// Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
+// The indexer normalises every emitted amount to its tick's decimals at
+// ledger-write time (mathjs half-even round), which can round a computed
+// quantity UP past what the contract actually holds; on the final tranche that
+// over-send exceeds custody, the whole EXECUTE reverts, and the remainder is
+// stranded. Same helper and rationale as amm.js:floorToDecimals; pure exact
+// string surgery on the fixed-notation decimal, deliberately not mathjs
+// floor/mod (which round to the significant-digit precision, not the decimal
+// grid).
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of the vested tick, read from the ledger snapshot. The contract
+// always holds the tokens it pays out (the grant is in custody from fund()
+// onward), so their token info is present whenever balances are (same
+// VM_BALANCE_TOKENINFO gate getBalance rides on). Mirrors amm.js:tickDecimals.
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
+}
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -108,16 +141,27 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('beneficiary'),
             'only the beneficiary can claim');
 
+        var tick      = xchain.state.get('tick');
         var vested    = vestedAmount(xchain);
         var claimed   = xchain.state.get('claimed');
-        var claimable = xchain.math.subtract(vested, claimed);
+        // Floor the payout onto the tick's decimal grid BEFORE it is emitted
+        // (see floorToDecimals above), and advance `claimed` by the floored
+        // amount actually paid, not the full-precision accrual: `claimed` then
+        // always equals what the beneficiary really received, the sub-grid
+        // remainder stays claimable instead of silently evaporating, and the
+        // final claim pays out the accumulated dust exactly (total custody is
+        // conserved to within one tick unit).
+        var claimable = floorToDecimals(
+            xchain.math.subtract(vested, claimed),
+            tickDecimals(xchain, tick)
+        );
         xchain.require(xchain.math.gt(claimable, '0'), 'nothing to claim');
 
         xchain.state.set('claimed', xchain.math.add(claimed, claimable));
 
         xchain.emit.send({
             destination: xchain.state.get('beneficiary'),
-            tick: xchain.state.get('tick'),
+            tick: tick,
             quantity: claimable
         });
         return claimable;
@@ -132,9 +176,17 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('grantor'),
             'only the grantor can revoke');
 
+        var tick     = xchain.state.get('tick');
         var vested   = vestedAmount(xchain);
         var total    = xchain.state.get('total');
-        var unvested = xchain.math.subtract(total, vested);
+        // Floor the reclaimed payout onto the tick's decimal grid BEFORE it is
+        // emitted (see floorToDecimals above): the indexer's half-even rounding
+        // could otherwise round it UP past custody and revert the revoke. The
+        // sub-grid fraction stays in custody for the beneficiary's final claim.
+        var unvested = floorToDecimals(
+            xchain.math.subtract(total, vested),
+            tickDecimals(xchain, tick)
+        );
         xchain.require(xchain.math.gt(unvested, '0'), 'nothing to revoke (fully vested)');
 
         // Freeze the cap at what had vested; status REVOKED makes vestedAmount()
@@ -144,7 +196,7 @@ module.exports = {
 
         xchain.emit.send({
             destination: xchain.state.get('grantor'),
-            tick: xchain.state.get('tick'),
+            tick: tick,
             quantity: unvested
         });
         return unvested;
@@ -165,9 +217,12 @@ module.exports = {
 // vestedAmount(xchain): total tokens vested as of the current block.
 //   - before the cliff: 0
 //   - at/after full duration: the whole grant
-//   - in between: total * elapsed / duration (math.divide truncates, so this
-//     rounds DOWN; the contract never over-pays and the remainder is released
-//     exactly at full vesting)
+//   - in between: total * elapsed / duration, at xchain.math's full
+//     significant-digit precision. NOTE: this value is NOT on the tick's
+//     decimal grid (e.g. 2.666... on a 0-decimal tick); every payout derived
+//     from it is floored onto the grid at the emission sites (claim/revoke)
+//     so the ledger's half-even re-normalisation can never round a payout UP
+//     past custody.
 // Once REVOKED, the stored `total` is the frozen vested cap, returned directly.
 function vestedAmount(xchain) {
     if (xchain.state.get('status') === 'REVOKED')
