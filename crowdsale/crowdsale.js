@@ -183,6 +183,12 @@ module.exports = {
         // saleDecimals key; default to the 8dp the issue used so old contracts still claim.
         var saleDecimals = parseInt(xchain.state.get('saleDecimals') || '8', 10);
         var tokens = floorToDecimals(xchain.math.multiply(paid, xchain.state.get('rate')), saleDecimals);
+        // A sub-grid contribution (fractional rate + low saleDecimals) can floor to '0';
+        // guard before deleting the record so the payment is never silently destroyed
+        // (sibling templates guard every emitted quantity: amm 'insufficient liquidity
+        // minted', vesting 'nothing to claim'). Leaves c:<caller> intact so the failure
+        // is visible rather than burning the buyer's stake into an AMOUNT=0 no-op mint.
+        xchain.require(xchain.math.gt(tokens, '0'), 'contribution below one sale-token unit');
         xchain.state.delete('c:' + caller); // zero out first (no double claim)
 
         xchain.emit.mint({
