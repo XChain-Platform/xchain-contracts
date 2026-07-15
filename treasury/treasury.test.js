@@ -16,13 +16,13 @@ const fs = require('fs');
 const path = require('path');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
-let XChainVM;
-try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping treasury tests: isolated-vm not available (need Node 22)'); }
-
-const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
-const { assertSuccess, assertReverted, assertEmittedActions, assertBalance }
-        = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js'));
+let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance;
+try {
+    XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
+    ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
+    ({ assertSuccess, assertReverted, assertEmittedActions, assertBalance }
+       = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+} catch (e) { XChainVM = null; console.log('Skipping treasury tests: xchain-vm harness not available (need adjacent xchain-vm install on Node 22)'); }
 
 const CODE = fs.readFileSync(path.join(__dirname, 'treasury.js'), 'utf8');
 
