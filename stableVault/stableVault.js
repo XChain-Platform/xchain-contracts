@@ -233,7 +233,18 @@ module.exports = {
             xchain.math.multiply(debt, xchain.math.add('100', xchain.state.get('liqBonusPct'))),
             xchain.math.multiply(price, '100')
         );
-        var seize = xchain.math.min(owed, coll);
+        // Quantise the seizure DOWN to the collateral tick's decimal grid
+        // BEFORE the state writes and the emission. The indexer re-rounds every
+        // emitted amount to the tick's decimals half-even at ledger-write time;
+        // an off-grid seize written exactly into trackedColl/vault books but
+        // rounded UP on the wire would debit custody more than books, opening a
+        // pooled shortfall other vaults would eat (bad-debt DoS on the last
+        // full-balance withdrawal). Flooring makes the indexer's normalisation
+        // a numeric no-op, so custody == books holds exactly.
+        var seize = floorToDecimals(
+            xchain.math.min(owed, coll),
+            tickDecimals(xchain, xchain.state.get('collateralTick'))
+        );
 
         setVault(xchain, owner, 'debt', '0');
         setVault(xchain, owner, 'coll', xchain.math.subtract(coll, seize));
@@ -319,6 +330,34 @@ function freshPrice(xchain) {
     price = String(price);
     xchain.require(xchain.math.gt(price, '0'), 'oracle price must be positive');
     return price;
+}
+
+// Truncate a fixed-notation decimal string DOWN to `decimals` fraction digits.
+// Pure string surgery (same helper as amm.js/crowdsale.js): exact and
+// deterministic, and it deliberately avoids mathjs floor/mod, which round a
+// large bignumber to the configured significant-digit precision (not the
+// decimal grid) and would corrupt the result.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of a tick the vault custodies, read from the ledger snapshot. The
+// contract always holds the collateral it seizes, so its token info is present
+// whenever balances are (same gate getBalance rides on).
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
 }
 
 // Collateralization check without division:

@@ -50,6 +50,10 @@ const MAXAGE = '10';        // oracle freshness window, blocks
         h.seedBalance(ALICE, 'XCHAIN', '1000000');
         h.seedBalance(ALICE, COLL, '100');
         h.seedBalance(BOB, COLL, '100');
+        // Register decimals so the ledger normalizes emissions the way the real
+        // indexer does and getTokenInfo (used by liquidate's grid-flooring) works.
+        h.ledger.setTokenDecimals(COLL, 8);
+        h.ledger.setTokenDecimals(STABLE, 8);
         await h.deploy({
             code: CODE, deployer: ALICE, contractAddress: ADDR,
             params: [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE]
@@ -166,6 +170,45 @@ const MAXAGE = '10';        // oracle freshness window, blocks
 
             // The leftover 0.25 GOLD still belongs to Alice.
             assertSuccess(await withdraw(ALICE, '0.25'));
+        });
+
+        it('non-grid seizure is floored to the collateral decimals: custody == books', async function () {
+            // 0-decimal collateral with a price that puts the raw seizure
+            // (2.75) off the decimal grid. Before the floorToDecimals fix the
+            // books recorded 2.75 while the indexer rounded the wire amount
+            // half-even to 3, debiting custody 0.25 more than books and
+            // leaving a pooled shortfall other vaults would eat.
+            const COLL0 = 'IRON';
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(ALICE, 'XCHAIN', '1000000');
+            h.seedBalance(ALICE, COLL0, '100');
+            h.ledger.setTokenDecimals(COLL0, 0);
+            h.ledger.setTokenDecimals(STABLE, 8);
+            await h.deploy({
+                code: CODE, deployer: ALICE, contractAddress: ADDR,
+                params: [COLL0, STABLE, PAIR, RATIO, BONUS, MAXAGE]
+            });
+            setPrice('100');
+            h.deposit(ALICE, ADDR, COLL0, '3');
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'deposit', params: [], caller: ALICE }));
+            assertSuccess(await borrow(ALICE, '200'));
+
+            setPrice('80'); // raw seize = 200 * 110 / 8000 = 2.75, off the 0dp grid
+            h.seedBalance(LIQ, STABLE, '200');
+            assertSuccess(await liquidate(LIQ, ALICE, '200'));
+
+            // Floored to 2 whole IRON; books and custody agree exactly.
+            assertBalance(h.ledger, LIQ, COLL0, '2');
+            assertContractState(h.ledger, ADDR, 'v:' + ALICE + ':coll', '1');
+            assertContractState(h.ledger, ADDR, 'trackedColl', '1');
+            assert.strictEqual(h.ledger.getContractBalance(ADDR, COLL0) || '0', '1',
+                'contract custody must equal trackedColl after a non-grid liquidation');
+
+            // The invariant holds end-to-end: the owner can withdraw the full
+            // remaining balance (this reverted under the pre-fix drift).
+            assertSuccess(await withdraw(ALICE, '1'));
+            assert.strictEqual(h.ledger.getContractBalance(ADDR, COLL0) || '0', '0');
+            assertContractState(h.ledger, ADDR, 'trackedColl', '0');
         });
 
         it('info() reports the system terms and totals', async function () {
