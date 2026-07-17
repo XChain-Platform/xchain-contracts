@@ -80,6 +80,24 @@ emit. The `state-machine` and `safe-transfer` patterns encode exactly that
 ordering. If any emitted action later fails validation, the whole execution
 (state changes *and* emissions) is rolled back atomically.
 
+## Writing a controller `guard`: bulk distributions are sender-side only
+
+If your contract is a token controller (bound via `ISSUE` v6, see
+`xchain-documentation/protocol/Controller_Bound_Tokens.md`), remember that bulk
+distribution actions (`AIRDROP`, `DIVIDEND`, `SWEEP` balance moves) invoke your
+`guard` **once per controlled tick, on the sender's aggregate outbound move**:
+`from` is the distributor, `to` is empty, `amount` is the total leaving the
+sender. There is **no per-recipient invocation**; that is a deliberate protocol
+property (bounded VM work, no recipient-side griefing of a whole drop).
+
+Do not write per-recipient allowlist logic into the bulk branch of a guard; it
+will never see individual recipients. Receive-side policy belongs in **transfer
+restrictions** instead: enforce holder eligibility in the `transfer` guard on the
+token's subsequent `SEND`s and listings (an unapproved holder's dropped balance
+is inert), or deny the aggregate to force individually guarded `SEND`s. Accounts
+that want to refuse unsolicited direct sends use an inbound `ADDRESS` `transfer`
+binding, which likewise does not gate bulk drops.
+
 ## License
 
 [MIT](../LICENSE), fork freely, including into closed-source contracts.
