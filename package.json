@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
   "engines": {
-    "node": ">=22.0.0"
+    "comment": "Bounded to Node 22: the tests load xchain-vm, whose isolated-vm binding is V8-ABI-specific (Node 24 cannot build it). See .nvmrc.",
+    "node": ">=22.0.0 <23"
   },
   "license": "MIT",
   "bin": {
