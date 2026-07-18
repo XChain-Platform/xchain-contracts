@@ -1,4 +1,4 @@
-# cardDispenser — random card-pack dispenser (inventory-backed, no mint)
+# cardDispenser: random card-pack dispenser (inventory-backed, no mint)
 
 A buyer pays a fixed `price` of `payTick` and receives **one unit of a random
 card tick**, drawn from the contract's own deposited inventory with probability
@@ -31,7 +31,7 @@ Fund the pool by DEPOSITing card tokens into the contract address before sales
 open. The VM cannot enumerate holdings, so the candidate card ticks are fixed at
 deploy time.
 
-## Randomness — read before using for anything valuable
+## Randomness (read before using for anything valuable)
 
 Entropy is `xchain.getBlockHash()`, which the indexer derives as
 `sha256(blockHeight:blockTime)`. The output is uniform (good distribution;
@@ -41,6 +41,40 @@ card packs; for high-value randomness use commit-reveal or an attestation
 oracle (`xchain.attestation`). The block hash is identical for every tx in a
 block, so `draw()` mixes in the buyer address and a per-contract draw counter to
 de-correlate same-block draws.
+
+## Attacks we considered
+
+- **Caller lies about the payment.** `draw()` never trusts a caller-supplied
+  amount; it computes the payment as the delta of the contract's `payTick`
+  balance since the last accounted draw (`acctPay`). Underpayment reverts.
+- **Un-BATCHed DEPOSIT credited to a stranger.** A DEPOSIT without an
+  immediately batched `draw()` sits in the delta and is claimed by the next
+  caller of `draw()` (same footgun as the crowdsale template). Always
+  `BATCH(DEPOSIT, draw)`. Overpayment inside a batch is kept as a tip by
+  design; `acctPay` advances to the full balance each draw.
+- **Same-block draw correlation.** The block hash is identical for every tx in
+  a block, so a naive seed would give every same-block buyer the same card.
+  `pick()` mixes in the buyer address and a per-contract draw counter (nonce)
+  so same-block draws de-correlate by construction.
+- **Miner grinds the entropy.** `getBlockHash()` derives from
+  `sha256(blockHeight:blockTime)`; a miner can grind the timestamp to bias a
+  draw. This is an accepted, documented limitation for low-value packs (see
+  the Randomness section); for high-value randomness use commit-reveal or an
+  attestation oracle instead of this template.
+- **Sold-out payment stranding.** If `draw()` reverted when stock is empty,
+  the batched DEPOSIT before it would NOT roll back and the buyer's payment
+  would strand in the contract. Instead the payment is refunded and
+  `'sold_out'` is returned as a valid execution.
+- **Card-list injection at deploy.** `initialize` rejects card ticks
+  containing the `|` state delimiter and rejects a card tick equal to
+  `payTick` (which would let payments masquerade as stock).
+- **Fractional stock inflation.** Copies are `floor(balance / unit)`, so a
+  dust deposit below one `unit` adds zero draw weight and can never dispense a
+  partial card.
+- **Unauthorized sweep.** `withdraw(tick)` is owner-only
+  (`getSourceAddress()` checked against the stored deployer).
+- **Rounding / float drift.** All arithmetic uses `xchain.math` bignumber ops;
+  there are no float literals (the deploy-time validator enforces this).
 
 ## Test
 
@@ -52,6 +86,6 @@ npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
 > ⚠️ **Deploying on-chain currently requires `getBalance()` to be wired in the
 > indexer.** As of this writing `xchain-indexer/src/actions/execute.js` passes
 > `balances: null` to the VM (a TODO), so `getBalance()` returns `null` in the
-> live indexer — which blocks every custody template (escrow/vesting/crowdsale/
+> live indexer, which blocks every custody template (escrow/vesting/crowdsale/
 > amm too), not just this one. The VM E2E harness supplies balances, so the test
 > above validates the contract logic regardless.

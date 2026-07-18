@@ -1,8 +1,8 @@
-# priceBetTimed — binary option settled by the first oracle round at/after a timestamp
+# priceBetTimed: binary option settled by the first oracle round at/after a timestamp
 
 The timestamp variant (v2) of the sibling [priceBet](../priceBet/) template. In
 priceBet the parties agree on an oracle **round number** up front; here they
-agree on a **settle time** (unix seconds — "Friday 15:00 UTC") and the bet is
+agree on a **settle time** (unix seconds, e.g. "Friday 15:00 UTC") and the bet is
 decided by the **first finalized oracle round whose consensus timestamp is
 at/after that instant**. Humans think in clock time, not round numbers; this
 template translates one into the other deterministically.
@@ -23,7 +23,7 @@ pick a favorable moment. Instead:
   pages across calls without exhausting gas.
 
 The deciding round is a pure function of consensus history: any node, any
-caller, any time — same winner. Assumes round timestamps are non-decreasing in
+caller, any time: same winner. Assumes round timestamps are non-decreasing in
 round number.
 
 ## settle() return values
@@ -32,7 +32,7 @@ round number.
 |---|---|
 | `SETTLED` / `PUSH` | Terminal: pot paid to the winner / stakes returned (tie). |
 | `PENDING` | No round at/after `settleTime` exists yet. Valid no-op; try later. |
-| `SCANNING` | Qualifying round exists but the 200-read cap was hit paging the backlog; cursor saved — call again. |
+| `SCANNING` | Qualifying round exists but the 200-read cap was hit paging the backlog; cursor saved; call again. |
 
 `PENDING`/`SCANNING` **return** rather than revert because a revert would
 discard the cursor advance (state writes only commit on success).
@@ -57,6 +57,42 @@ discard the cursor advance (state writes only commit on success).
   and settle reverts loudly (`oracle accessor lacks round metadata`).
 - `reclaim()` cannot dodge a lost bet: it requires that **no** qualifying
   round exists; once one is finalized, `settle()` is the only path.
+
+## Attacks we considered
+
+All of the sibling [priceBet](../priceBet/README.md) protections apply
+(balance-verified stakes, no self-match, terminal-status-before-emit guard,
+`reclaim()` unusable once a deciding round exists, over-deposit drains on
+refund, deferred-emission reentrancy model). The timestamp translation adds
+its own surface:
+
+- **Spot-price timing discretion.** Settling on `getPrice()` would let the
+  first caller pick the moment. The deciding round is *the first finalized
+  round with timestamp >= settleTime*, a pure function of consensus history:
+  any node, any caller, any time, same winner.
+- **Retroactive rounds qualifying.** `accept()` requires block time <
+  `settleTime` and anchors the scan cursor at the round current at the match,
+  so rounds finalized before the match can never decide the bet (their
+  consensus timestamps predate it). The current round stays in scope as slack
+  for clock skew between round consensus time and block time.
+- **Gas exhaustion on a long round backlog.** The `settle()` walk is capped at
+  200 `getPriceAtRound` reads per call (each a metered VM_STATE-class charge)
+  and the cursor persists between calls, so an arbitrarily long stretch of
+  pre-deadline rounds pages across calls (`SCANNING`) instead of making
+  settlement impossible.
+- **Losing the scan progress.** `PENDING`/`SCANNING` are *returns*, not
+  reverts: a revert would discard the cursor advance (state writes only
+  commit on success) and re-scan the same backlog forever.
+- **Oracle gaps mis-deciding the bet.** Skipped/disputed rounds return null
+  from `getPriceAtRound` and are stepped over; they can neither decide the
+  bet nor wedge the walk.
+- **Legacy oracle accessor mis-settling.** A bare-string price carries no
+  round metadata; `latestRound()` reverts loudly (`oracle accessor lacks
+  round metadata`) rather than settling on unverifiable data.
+- **Dodging a loss via `reclaim()`.** The O(1) guard (latest round's
+  timestamp < `settleTime`) means reclaim is only possible while *no*
+  qualifying round exists anywhere; once one is finalized, `settle()` is the
+  only path.
 
 ## Tests
 

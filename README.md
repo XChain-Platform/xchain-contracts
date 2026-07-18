@@ -46,6 +46,11 @@ the helpers you need into your contract.
 | **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds, plus a **contract that issues its own token** and mints it to buyers. |
 | **AMM** | [amm.js](./amm/amm.js) | [README](./amm/README.md) | [tests](./amm/amm.test.js) | A constant-product market maker. LP positions are **real, tradeable ticks**; 0.3% fee; slippage protection; the `k`-invariant is fuzz-tested. |
 | **Treasury** | [treasury.js](./treasury/treasury.js) | [README](./treasury/README.md) | [tests](./treasury/treasury.test.js) | A poll-governed treasury hardened against low-turnout governance raids: binding `VOTE` polls, a timelock between "passed" and "paid", and a guardian veto. |
+| **Card dispenser** | [cardDispenser.js](./cardDispenser/cardDispenser.js) | [README](./cardDispenser/README.md) | [tests](./cardDispenser/cardDispenser.test.js) | A random card-pack dispenser backed by the contract's own token inventory (no mint): stock-weighted rarity, deterministic on-chain randomness and its limits. |
+| **Price bet** | [priceBet.js](./priceBet/priceBet.js) | [README](./priceBet/README.md) | [tests](./priceBet/priceBet.test.js) | A two-party binary option settled by the PRICE oracle at an agreed round: round-anchored determinism, permissionless settlement, liveness escape hatches. |
+| **Price bet (timed)** | [priceBetTimed.js](./priceBetTimed/priceBetTimed.js) | [README](./priceBetTimed/README.md) | [tests](./priceBetTimed/priceBetTimed.test.js) | The timestamp variant: the first oracle round at/after a settle time decides, with a gas-capped, cursor-persisted round scan. |
+| **Stable vault** | [stableVault.js](./stableVault/stableVault.js) | [README](./stableVault/README.md) | [tests](./stableVault/stableVault.test.js) | A mini-MakerDAO: over-collateralized vaults that mint the contract's own stable token, oracle staleness gating, and permissionless liquidation. |
+| **URL oracle** | [urlOracle.js](./urlOracle/urlOracle.js) | [README](./urlOracle/README.md) | [tests](./urlOracle/urlOracle.test.js) | Reading off-chain HTTP data without breaking determinism: the ATTEST request/callback round-trip. |
 
 Start with **escrow**: it explains the custody model the others build on.
 

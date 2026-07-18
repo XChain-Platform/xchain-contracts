@@ -1,4 +1,4 @@
-# stableVault — a mini-MakerDAO: over-collateralized stablecoin vaults
+# stableVault: a mini-MakerDAO (over-collateralized stablecoin vaults)
 
 A single-collateral stablecoin engine. Anyone deposits a collateral token
 into a personal vault; against it the **contract mints its own stable token**
@@ -26,12 +26,12 @@ of truth; caller-supplied funding amounts are never trusted.
 
 ## Oracle policy
 
-- `getPrice(coinPair)` — latest finalized round, production object shape
+- `getPrice(coinPair)`: latest finalized round, production object shape
   `{ price, roundNumber, timestamp }` (a bare string is also accepted).
 - Price-sensitive ops (**borrow / withdraw-with-debt / liquidate**) require
   `getSnapshotAge() <= maxSnapshotAge` blocks: nobody acts on a stale price
   during an oracle outage.
-- De-risking (**deposit / repay**) never touches the oracle — making a vault
+- De-risking (**deposit / repay**) never touches the oracle: making a vault
   safer must never be blocked. A debt-free `withdraw` skips the oracle too.
 
 ## Methods
@@ -52,7 +52,7 @@ of truth; caller-supplied funding amounts are never trusted.
   the indexer rejects every subsequent MINT.
 - **Emitted amounts are normalized to the tick's decimals** at the ledger. A
   fractional seizure (e.g. `2.75` of a 0-decimals collateral) gets rounded in
-  the actual transfer while the contract state keeps the exact figure — the
+  the actual transfer while the contract state keeps the exact figure, so the
   vault accounting drifts from custody. Pick `liqBonusPct` and price grids
   that keep amounts on the tick's grid, or add explicit rounding.
 - MINT on XChain is fair-mint flavored (caps and windows, not issuer-gated):
@@ -60,11 +60,58 @@ of truth; caller-supplied funding amounts are never trusted.
   `maxSupply`. A production deployment would gate minting (allowList) or
   pre-mint into contract custody at ISSUE time.
 
+## Attacks we considered
+
+- **Caller lies about funding.** `deposit()`, `repay()`, and `liquidate()`
+  never trust a caller-supplied amount: the credited amount is the custody
+  delta (`actual balance - trackedColl/trackedStable`). You cannot be
+  credited collateral, repay debt, or cover a liquidation with tokens the
+  contract does not actually hold.
+- **Un-BATCHed DEPOSIT claimed by a stranger.** A DEPOSIT without an
+  immediately batched method call sits in the delta and is attributed to the
+  next caller (same footgun as the crowdsale template). Always
+  `BATCH(DEPOSIT, deposit/repay/liquidate)`.
+- **Borrowing or withdrawing on a stale price.** Price-sensitive operations
+  (`borrow`, `withdraw` with debt, `liquidate`) require
+  `getSnapshotAge() <= maxSnapshotAge`; nobody can mint against or seize on a
+  price frozen by an oracle outage. De-risking (`deposit`/`repay`, debt-free
+  `withdraw`) deliberately skips the oracle so a vault can always be made
+  safer.
+- **Under-collateralized mint / exit.** `borrow()` and `withdraw()` check
+  `collateral * price * 100 >= debt * minRatioPct` *after* the requested
+  change, at the fresh price; `initialize` rejects `minRatioPct <= 100`
+  (below 100% the stable would be under-backed by construction).
+- **Liquidating a healthy vault.** `liquidate()` requires the vault to fail
+  the ratio check at the fresh oracle price, requires the deposited stable to
+  cover the *full* debt (burned), and caps the seizure at the vault's actual
+  collateral. Excess stable is returned to the liquidator; leftover
+  collateral stays credited to the owner.
+- **Self-liquidation for the bonus.** `liquidate()` rejects
+  `liquidator === vaultOwner`.
+- **Rounding shortfall drains other vaults.** The seizure is floored to the
+  collateral tick's decimal grid *before* the books are written
+  (`floorToDecimals`). The indexer re-rounds every emitted amount half-even
+  at ledger-write time; an off-grid seize rounded UP on the wire would debit
+  custody more than the books, a pooled shortfall the last full-balance
+  withdrawal would eat. Flooring makes the indexer's normalization a numeric
+  no-op, so custody == books holds exactly.
+- **Uncapped stable supply.** The emitted ISSUE declares `maxSupply`
+  (an unset cap reads as 0 and the indexer rejects every MINT). Note the
+  fair-mint caveat below: on a real network others could MINT the stable
+  tick within the cap; a production deployment gates minting.
+- **Double payout / reentrancy.** Books (vault debt/collateral, totals,
+  tracked custody) are written before the emissions, and emissions are
+  deferred and applied atomically with the state writes after the method
+  returns; there is no mid-method callback.
+- **Rounding / float drift.** All arithmetic is `xchain.math` bignumber; the
+  ratio check multiplies instead of dividing; no float literals (enforced at
+  deploy).
+
 ## Deliberately NOT production-grade
 
 No stability fees, partial liquidations, auctions, debt ceilings, multiple
-collateral types, or emergency shutdown. The template shows the mechanism —
-vaults, oracle-gated minting, permissionless liquidation — in its smallest
+collateral types, or emergency shutdown. The template shows the mechanism
+(vaults, oracle-gated minting, permissionless liquidation) in its smallest
 deterministic form.
 
 ## Tests
