@@ -39,6 +39,26 @@ const ADDR = 'C:BTC:1', A = 'AAA', B = 'BBB', LP = 'AAABBBLP';
 const bn = (x) => math.bignumber(x);
 const k = (r) => math.multiply(bn(r.a), bn(r.b));
 
+// ABI metadata (spec: xchain-documentation/protocol/Contract_ABI.md). Static
+// module surface; no VM harness needed, so this suite always runs.
+describe('Template: amm abi', function () {
+    const abi = require('./amm.js').abi;
+
+    it('declares an abi block covering every public method', function () {
+        assert.strictEqual(abi.version, 1);
+        assert.deepStrictEqual(Object.keys(abi.methods).sort(),
+            ['addLiquidity', 'info', 'removeLiquidity', 'swap']);
+    });
+
+    it('declares swap params in wire order with valid types', function () {
+        assert.deepStrictEqual(abi.methods.swap.params,
+            [{ name: 'tokenIn', type: 'tick' }, { name: 'minOut', type: 'amount' }]);
+        assert.deepStrictEqual(abi.methods.addLiquidity.params, []);
+        assert.deepStrictEqual(abi.methods.removeLiquidity.params, []);
+        assert.strictEqual(abi.methods.info.view, true);
+    });
+});
+
 (XChainVM ? describe : describe.skip)('Template: amm', function () {
     this.timeout(0);
     let h;

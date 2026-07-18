@@ -108,6 +108,16 @@ function tickDecimals(xchain, tick) {
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        addLiquidity:    { summary: 'Mint LP shares for deposited liquidity (BATCH after DEPOSITing both tokens)', params: [] },
+        removeLiquidity: { summary: 'Burn LP shares and withdraw both tokens (BATCH after DEPOSITing LP shares)', params: [] },
+        swap:            { summary: 'Trade tokenIn for the other token at the constant-product price, 0.3% fee (BATCH after a DEPOSIT)', params: [ { name: 'tokenIn', type: 'tick' }, { name: 'minOut', type: 'amount' } ] },
+        info:            { summary: 'Read the pair, reserves, and total LP shares', params: [], view: true }
+    } },
+
     // initialize(tokenA, tokenB, lpTick): create an empty pool and issue the LP tick.
     initialize: function (xchain) {
         var tokenA = xchain.getInputParam(0);
