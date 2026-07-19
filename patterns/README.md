@@ -60,6 +60,33 @@ Run the linter on your finished contract before deploying:
 node ../xchain-vm/bin/lint.js my-contract.js
 ```
 
+## Coming from OpenZeppelin
+
+If you know OpenZeppelin, find the building block by the name you already use.
+These are **OZ-equivalents**, not the OZ contracts: XChain contracts are a single
+import-free JS blob, so you paste the helper, you do not depend on a package. For
+several OZ contracts the answer is "you don't need it" - a native protocol action
+or the deferred-emission model already covers it. A machine-readable version of
+this table lives in [oz-aliases.json](./oz-aliases.json) (consumed by the docs
+and the Solidity-to-XChain on-ramp tooling).
+
+| OpenZeppelin | XChain equivalent | Where |
+|---|---|---|
+| `Ownable` | `onlyOwner` / `isOwner` | [access-control.js](./access-control.js) |
+| `AccessControl` | `onlyRole` | [access-control.js](./access-control.js) |
+| `Pausable` | `whenNotPaused` / `isPaused` / `setPaused` (or token-wide `SLEEP`) | [pausable.js](./pausable.js) |
+| `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) |
+| `Address` | `requireAddress` | [validation.js](./validation.js) |
+| `ReentrancyGuard` | **not needed** - deferred emissions (see below) | - |
+| `SafeMath` | **not needed** - built-in `xchain.math.*` bignumber, floats rejected at deploy | - |
+| `ERC20` | **not a contract** - native `ISSUE` + `SEND` | protocol action |
+| `ERC721` | **not a contract** - `ISSUE` with `DECIMALS=0`, `LOCK_MAX_SUPPLY=1` | protocol action |
+| `ERC2981` (royalties) | **controller-bound token** - `ISSUE` v6 binds a guard | protocol action |
+
+For the full concept map (`msg.sender`, `msg.value`, `mapping`, `modifier`, and
+worked side-by-side examples), see **Solidity to XChain** in
+`xchain-documentation/developer-guide/Solidity_To_XChain.md`.
+
 ## You do NOT need a reentrancy guard
 
 If you're coming from Solidity, you'll reach for a `nonReentrant` modifier.

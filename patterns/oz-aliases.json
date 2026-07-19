@@ -1,0 +1,78 @@
+{
+  "$comment": "Machine-readable OpenZeppelin -> XChain pattern-helper map. Lets tooling (docs, scaffolders, AI on-ramp) resolve a name a Solidity dev already knows to the paste-in helper(s) that cover it. Each helper MUST be a top-level function in the referenced file; patterns/oz-aliases.test.js enforces that. This is a naming index, not a drop-in shim: XChain contracts are single-file, import-free JS, so you paste the helpers, you do not import an OZ package.",
+  "version": "1.0.0",
+  "aliases": [
+    {
+      "oz": "Ownable",
+      "file": "access-control.js",
+      "helpers": ["onlyOwner", "isOwner"],
+      "note": "Store the owner address under state key 'owner' in initialize(); onlyOwner(xchain) throws for non-owners."
+    },
+    {
+      "oz": "Ownable2Step",
+      "file": "access-control.js",
+      "helpers": ["onlyOwner"],
+      "note": "No native two-step transfer helper; implement pending-owner in state and gate acceptance with onlyOwner on the pending key."
+    },
+    {
+      "oz": "AccessControl",
+      "file": "access-control.js",
+      "helpers": ["onlyRole"],
+      "note": "onlyRole(xchain, roleKey) gates to the address stored under roleKey (e.g. 'arbiter', 'minter'). Set roles in initialize()."
+    },
+    {
+      "oz": "Pausable",
+      "file": "pausable.js",
+      "helpers": ["whenNotPaused", "isPaused", "setPaused"],
+      "note": "Owner-controlled circuit breaker. Token-wide pause also exists natively via the SLEEP action."
+    },
+    {
+      "oz": "ReentrancyGuard",
+      "file": null,
+      "helpers": [],
+      "note": "Not needed. Emissions and emit.execute are deferred (applied after your method returns), so classic reentrancy is impossible by construction. Discipline that replaces nonReentrant: commit state BEFORE emitting (see state-machine.js + safe-transfer.js)."
+    },
+    {
+      "oz": "SafeERC20",
+      "file": "safe-transfer.js",
+      "helpers": ["heldBalance", "requireHeld", "depositedSince"],
+      "note": "Size transfers from the contract's real holdings (getBalance), never from caller-supplied amounts; emit.send moves tokens via the audited protocol handler."
+    },
+    {
+      "oz": "SafeMath",
+      "file": null,
+      "helpers": [],
+      "note": "Use the built-in xchain.math.* bignumber API (add/subtract/multiply/divide/compare/gt/...). No overflow, and floats are rejected at deploy, so a dedicated library is unnecessary."
+    },
+    {
+      "oz": "Address",
+      "file": "validation.js",
+      "helpers": ["requireAddress"],
+      "note": "requireAddress(xchain, v, name) validates a non-empty address string up front."
+    },
+    {
+      "oz": "ERC20",
+      "file": null,
+      "helpers": [],
+      "note": "Do not write a token contract. A fungible token is a first-class protocol object: ISSUE to create, SEND to transfer, balances are queryable directly."
+    },
+    {
+      "oz": "ERC721",
+      "file": null,
+      "helpers": [],
+      "note": "No NFT contract needed. ISSUE with DECIMALS=0 and LOCK_MAX_SUPPLY=1 is a native non-fungible token."
+    },
+    {
+      "oz": "ERC2981 (royalties)",
+      "file": null,
+      "helpers": [],
+      "note": "Use a controller-bound token (ISSUE v6 binding a guard contract): the royalty/transfer rule is enforced by the protocol on every transfer and cannot be bypassed by a marketplace."
+    },
+    {
+      "oz": "Enumerable / EnumerableSet",
+      "file": "validation.js",
+      "helpers": ["requireEnum"],
+      "note": "No set type; compose keys in the flat state store (e.g. state.set('member:'+addr,'1')). requireEnum validates a value against an allowed list."
+    }
+  ]
+}

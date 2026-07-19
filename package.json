@@ -21,6 +21,6 @@
     "scaffold": "node bin/xchain-contracts.js scaffold",
     "list": "node bin/xchain-contracts.js list",
     "policy": "node bin/xchain-contracts.js policy",
-    "test": "mocha --timeout 0 --exit escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js treasury/treasury.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js cardDispenser/cardDispenser.test.js urlOracle/urlOracle.test.js priceBet/priceBet.test.js priceBetTimed/priceBetTimed.test.js stableVault/stableVault.test.js lib/policy-gen.test.js"
+    "test": "mocha --timeout 0 --exit escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js treasury/treasury.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js patterns/oz-aliases.test.js cardDispenser/cardDispenser.test.js urlOracle/urlOracle.test.js priceBet/priceBet.test.js priceBetTimed/priceBetTimed.test.js stableVault/stableVault.test.js lib/policy-gen.test.js"
   }
 }
