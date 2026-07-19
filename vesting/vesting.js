@@ -181,8 +181,11 @@ module.exports = {
         var total    = xchain.state.get('total');
         // Floor the reclaimed payout onto the tick's decimal grid BEFORE it is
         // emitted (see floorToDecimals above): the indexer's half-even rounding
-        // could otherwise round it UP past custody and revert the revoke. The
-        // sub-grid fraction stays in custody for the beneficiary's final claim.
+        // could otherwise round it UP past custody and revert the revoke. Because
+        // the beneficiary's frozen cap below is also reached through a floored
+        // claim() payout, the sub-grid fraction left behind by this floor is
+        // forfeited to the contract (bounded by less than one tick unit); it is
+        // not claimable by the beneficiary or recoverable by any method here.
         var unvested = floorToDecimals(
             xchain.math.subtract(total, vested),
             tickDecimals(xchain, tick)
