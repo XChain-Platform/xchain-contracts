@@ -37,6 +37,27 @@ Reusable building blocks (access control, pausable, safe-transfer, input
 validation, state machines) live in [`patterns/`](./patterns/README.md); paste
 the helpers you need into your contract.
 
+### No code at all: the policy generator
+
+Most people who reach for a contract actually want a *token with rules*
+(royalties, transfer restrictions, a pause switch) and never want to write
+contract code. Describe the policy in a small JSON file and generate a
+deploy-ready **controller guard** contract, no code written:
+
+```bash
+# describe the policy (see lib/policy.example.json), then:
+npx xchain-contracts policy my-policy.json my-guard.js
+# → writes my-guard.js and prints the ISSUE v6 bind steps
+```
+
+The config supports `pausable`, `freeze` (denylist), `allowlist`, a `royalty`
+proceeds split, a `maxTakeBps` cap, and a `permissions` manifest, over any of the
+`transfer`/`trade`/`burn`/`mint`/`stake`/`all` action classes. A controller guard
+is a contract the indexer runs *before* a gated native action settles; a token
+binds to it with ISSUE v6 (SDK: `sdk.controller.bindToken`). The generated source
+is built to pass the deploy linter clean. See
+[`lib/policy-gen.js`](./lib/policy-gen.js).
+
 ## The templates
 
 | Template | Contract | Guide | Tests | What it teaches |

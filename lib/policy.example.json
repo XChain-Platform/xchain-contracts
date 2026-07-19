@@ -1,0 +1,14 @@
+{
+  "name": "ExampleTokenPolicy",
+  "owner": "DExampleOwnerAddressReplaceMe",
+  "gates": ["transfer", "trade"],
+  "pausable": true,
+  "freeze": [],
+  "allowlist": ["DExampleAllowedAddressReplaceMe"],
+  "royalty": [
+    { "to": "DExampleCreatorAddressReplaceMe", "bps": 250 },
+    { "to": "DExampleMarketAddressReplaceMe", "bps": 100 }
+  ],
+  "maxTakeBps": 1000,
+  "permissions": []
+}

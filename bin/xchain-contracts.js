@@ -20,10 +20,16 @@
 //   xchain-contracts scaffold <name> [outfile]   print or write a template/pattern source
 //   xchain-contracts lint [files…] [--json]       lint sources (default: all templates + patterns)
 //   xchain-contracts list                         list available templates and patterns
+//   xchain-contracts policy <config.json> [out]   generate a guard contract from a policy config
 //
 // `lint` delegates to xchain-vm's authoritative linter (the full validateSyntax,
-// incl. the isolated-vm V8 step (requires Node 22). `scaffold` / `list` are
-// pure file reads and run anywhere.
+// incl. the isolated-vm V8 step (requires Node 22). `scaffold` / `list` / `policy`
+// are pure file operations and run anywhere.
+//
+// `policy` is the Tier 0 no-code path: describe a token policy (pausable, freeze
+// / denylist, allowlist, royalty split, permissions manifest) in a small JSON
+// config and it emits a deploy-ready controller guard contract plus the ISSUE v6
+// bind steps. No contract code is written by hand. See lib/policy-gen.js.
 
 'use strict';
 
@@ -108,12 +114,58 @@ function cmdLint(args) {
     require(lintPath);
 }
 
+function cmdPolicy(args) {
+    // Separate flags from positionals.
+    const flags = args.filter((a) => a.startsWith('-'));
+    const pos = args.filter((a) => !a.startsWith('-'));
+    const configFile = pos[0];
+    const outfile = pos[1];
+    const asJson = flags.indexOf('--json') !== -1;
+
+    if (!configFile) {
+        process.stderr.write('usage: xchain-contracts policy <config.json> [outfile] [--json]\n');
+        process.exit(2);
+    }
+
+    let raw;
+    try {
+        raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    } catch (e) {
+        process.stderr.write('cannot read policy config "' + configFile + '": ' + e.message + '\n');
+        process.exit(2);
+    }
+
+    const { generatePolicy } = require('../lib/policy-gen.js');
+    let result;
+    try {
+        result = generatePolicy(raw);
+    } catch (e) {
+        process.stderr.write(e.message + '\n');
+        process.exit(2);
+    }
+
+    if (asJson) {
+        process.stdout.write(JSON.stringify({ source: result.source, bindHints: result.bindHints, gates: result.gates, features: result.features }, null, 2) + '\n');
+        return;
+    }
+
+    if (outfile) {
+        fs.writeFileSync(outfile, result.source);
+        process.stderr.write('wrote ' + outfile + ' (' + result.gates.length + ' gate(s): ' + result.gates.join(', ') + ')\n\n');
+        process.stderr.write(result.bindHints + '\n');
+    } else {
+        process.stdout.write(result.source);
+        process.stderr.write('\n' + result.bindHints + '\n');
+    }
+}
+
 function usage() {
     process.stdout.write(
         'usage: xchain-contracts <command>\n\n' +
-        '  scaffold <name> [outfile]   print a template/pattern source, or write it to outfile\n' +
-        '  lint [files…] [--json]      lint sources (default: all templates + patterns; needs Node 22)\n' +
-        '  list                        list available templates and patterns\n'
+        '  scaffold <name> [outfile]        print a template/pattern source, or write it to outfile\n' +
+        '  lint [files…] [--json]           lint sources (default: all templates + patterns; needs Node 22)\n' +
+        '  list                             list available templates and patterns\n' +
+        '  policy <config.json> [out] [--json]  generate a controller guard contract from a policy config\n'
     );
 }
 
@@ -125,6 +177,7 @@ function main() {
         case 'list':     return cmdList();
         case 'scaffold': return cmdScaffold(rest);
         case 'lint':     return cmdLint(rest);
+        case 'policy':   return cmdPolicy(rest);
         case undefined:
         case '-h':
         case '--help':   return usage();
