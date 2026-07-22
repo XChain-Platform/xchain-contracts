@@ -53,6 +53,9 @@ function passedPoll() {
             h.seedBalance(who, 'XCHAIN', '1000000');
         h.seedBalance(HOLDER, GOV, '1000');
         h.seedBalance(HOLDER, PAY, '5000');
+        // The real indexer always knows a held tick's decimals (VM_BALANCE_TOKENINFO
+        // gate); executeProposal reads them to floor the payout onto the grid.
+        h.ledger.setTokenDecimals(PAY, 8);
         await h.deploy({
             code: CODE, deployer: GUARDIAN, contractAddress: ADDR,
             params: [GUARDIAN, GOV, String(TIMELOCK), String(WINDOW), MIN_PROPOSE, mode || 'guardian']
@@ -246,6 +249,54 @@ function passedPoll() {
             readyToExecute();
             assertSuccess(await call('executeProposal', ['1'], HOLDER));
             assertReverted(await call('executeProposal', ['1'], HOLDER), 'proposal is not armed');
+        });
+    });
+
+    describe('decimal-grid flooring (finding 2699)', function () {
+        // Arm a proposal for an arbitrary amount (bypassing the fixed-'400' helper).
+        async function armAmount(amount) {
+            await deploy();
+            assertSuccess(await call('propose', [PAYEE, PAY, amount, 'grid test'], HOLDER));
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertSuccess(await pollCallback('1'));
+        }
+
+        it('an off-grid amount is floored, pays out, and records the paid figure', async function () {
+            // 9 fraction digits on an 8dp tick: unfloored, the indexer would
+            // half-even round the send UP to 100.12345679 > custody and wedge
+            // the proposal in ARMED for the whole window.
+            await armAmount('100.123456789');
+            h.deposit(HOLDER, ADDR, PAY, '100.12345678');   // exactly the floored figure
+            readyToExecute();
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: PAYEE, tick: PAY, quantity: '100.12345678' } }]);
+            assertBalance(h.ledger, PAYEE, PAY, '100.12345678');
+            const rec = JSON.parse(JSON.parse((await call('proposalInfo', ['1'], HOLDER)).returnValue));
+            assert.strictEqual(rec.status, 'EXECUTED');
+            assert.strictEqual(rec.amount, '100.123456789', 'voted figure preserved');
+            assert.strictEqual(rec.paid, '100.12345678', 'paid figure is the on-grid amount');
+        });
+
+        it('an on-grid amount passes through unchanged', async function () {
+            await armAmount('100.12345678');
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: PAYEE, tick: PAY, quantity: '100.12345678' } }]);
+        });
+
+        it('an amount that floors to zero reverts instead of a no-op send', async function () {
+            // Re-register PAY at 0 decimals: a sub-unit proposal floors to '0'.
+            await deploy();
+            h.ledger.setTokenDecimals(PAY, 0);
+            assertSuccess(await call('propose', [PAYEE, PAY, '0.9', 'dust'], HOLDER));
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertSuccess(await pollCallback('1'));
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'below one unit');
         });
     });
 

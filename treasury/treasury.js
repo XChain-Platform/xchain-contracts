@@ -68,7 +68,8 @@
 // XChain has no msg.value. Fund the treasury with plain DEPOSIT actions to the
 // contract's address: any tick, any amount, any time, no method call needed.
 // Every armed proposal names an exact (recipient, tick, amount); execution
-// sends exactly that and nothing else.
+// sends that amount, floored onto the tick's decimal grid, and nothing else
+// (the on-grid figure paid is recorded on the proposal as `paid`).
 // ---------------------------------------------------------------------------
 
 module.exports = {
@@ -254,21 +255,34 @@ module.exports = {
         xchain.require(poll !== null && poll.status === 'finalized' &&
             String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
 
+        // Floor the payout onto the tick's decimal grid before both the custody
+        // check and the emission (amm/vesting/crowdsale do the same): the indexer
+        // half-even re-normalises every emitted amount to its tick's decimals at
+        // ledger-write time, so an off-grid rec.amount could round UP past what the
+        // treasury holds, revert every retry, and wedge the poll-approved transfer
+        // in ARMED until the execution window expires. Flooring makes the ledger
+        // write a numeric no-op; the on-grid figure actually paid is recorded on
+        // the proposal (rec.paid) so the audit trail matches the ledger.
+        var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
+        xchain.require(xchain.math.gt(amount, '0'),
+            'amount is below one unit of the tick');
+
         var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
-        xchain.require(xchain.math.gte(held, rec.amount), 'insufficient treasury balance');
+        xchain.require(xchain.math.gte(held, amount), 'insufficient treasury balance');
 
         // State guard: EXECUTED is committed in the same atomic scope as the
         // send, so a second executeProposal can never double-pay.
         rec.status   = 'EXECUTED';
         rec.executed = height;
+        rec.paid     = amount;
         saveProposal(xchain, id, rec);
 
         xchain.emit.send({
             destination: rec.recipient,
             tick:        rec.tick,
-            quantity:    rec.amount
+            quantity:    amount
         });
-        return rec.amount;
+        return amount;
     },
 
     info: function (xchain) {
@@ -298,6 +312,34 @@ module.exports = {
         return JSON.stringify(rec);
     }
 };
+
+// Quantise a computed quantity DOWN onto a tick's decimal grid. Pure exact string
+// surgery on the fixed-notation decimal, deliberately not mathjs floor/mod (which
+// round to the significant-digit precision, not the decimal grid). Same helper
+// and rationale as amm.js:floorToDecimals.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of the tick being spent, read from the ledger snapshot. The treasury
+// holds the tick whenever a proposal can actually pay out (the custody check
+// follows), so its token info is present (same VM_BALANCE_TOKENINFO gate that
+// getBalance rides on).
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
+}
 
 function loadProposal(xchain, id) {
     xchain.require(id && xchain.math.gt(id, '0') &&

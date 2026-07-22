@@ -183,5 +183,37 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         it('rejects rate <= 0', async function () {
             assert.strictEqual((await bad([OWNER, PAY, SALE, '0', SOFT, HARD, '50', '8'])).success, false);
         });
+        // saleDecimals validation (finding 2705): it feeds both the permanent
+        // emit.issue grid and claim()'s floor; a malformed value must fail the
+        // deploy instead of desyncing the two.
+        it('rejects a non-numeric saleDecimals', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '50', 'eight'])).success, false);
+        });
+        it('rejects a fractional saleDecimals', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '50', '8.5'])).success, false);
+        });
+        it('rejects a negative saleDecimals', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '50', '-1'])).success, false);
+        });
+        it('rejects saleDecimals above the ISSUE maximum of 18', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '50', '19'])).success, false);
+        });
+        it('accepts the boundary values 0 and 18', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '50', '0'])).success, true);
+            const b2 = new E2EHarness(XChainVM);
+            b2.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const r = await b2.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                params: [OWNER, PAY, SALE, RATE, SOFT, HARD, '50', '18'] });
+            assert.strictEqual(r.success, true);
+        });
+        it('an omitted saleDecimals still defaults to 8', async function () {
+            const b3 = new E2EHarness(XChainVM);
+            b3.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const r = await b3.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                params: [OWNER, PAY, SALE, RATE, SOFT, HARD, '50'] });
+            assert.strictEqual(r.success, true);
+            const issue = r.result.emittedActions.find(e => e.action === 'ISSUE');
+            assert.strictEqual(issue.params.decimals, '8');
+        });
     });
 });

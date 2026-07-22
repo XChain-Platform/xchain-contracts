@@ -106,6 +106,16 @@ module.exports = {
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
         xchain.require(hardCap && xchain.math.gte(hardCap, softCap), 'hardCap must be >= softCap');
         xchain.require(duration > 0, 'durationBlocks must be a positive integer');
+        // saleDecimals defines both the sale token's permanent grid (emit.issue) and
+        // claim()'s mint quantisation; a malformed value would desync the two sinks
+        // (parseInt(NaN) makes floorToDecimals truncate to the integer part while the
+        // issue carries the raw string). Validate here so the whole deploy fails
+        // cleanly instead. ISSUE permits 0-18 decimals; the round-trip check rejects
+        // non-numeric input, fractions, negatives, and leading zeros without a RegExp
+        // (the VM's syntax validator bans RegExp in contract source).
+        var decInt = parseInt(decimals, 10);
+        xchain.require(String(decInt) === String(decimals) && decInt >= 0 && decInt <= 18,
+            'saleDecimals must be an integer 0-18');
 
         xchain.state.set('owner', owner);
         xchain.state.set('payTick', payTick);
