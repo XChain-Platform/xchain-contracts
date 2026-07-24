@@ -51,10 +51,13 @@ of truth; caller-supplied funding amounts are never trusted.
 - **Declare `maxSupply`** in the emitted ISSUE: an unset cap reads as 0 and
   the indexer rejects every subsequent MINT.
 - **Emitted amounts are normalized to the tick's decimals** at the ledger. A
-  fractional seizure (e.g. `2.75` of a 0-decimals collateral) gets rounded in
-  the actual transfer while the contract state keeps the exact figure, so the
-  vault accounting drifts from custody. Pick `liqBonusPct` and price grids
-  that keep amounts on the tick's grid, or add explicit rounding.
+  fractional amount (e.g. `2.75` of a 0-decimals collateral) gets rounded in
+  the actual transfer, so a contract that booked the exact figure would drift
+  from custody. `liquidate()`, `withdraw()`, and `borrow()` all floor the
+  caller/seize amount onto the relevant tick's grid (`floorToDecimals`) before
+  any ratio check, book write, or emission, so the indexer's normalization is a
+  numeric no-op and custody == books holds exactly. Any new amount-bearing
+  method must do the same.
 - MINT on XChain is fair-mint flavored (caps and windows, not issuer-gated):
   on a real network, others could also MINT the stable tick within
   `maxSupply`. A production deployment would gate minting (allowList) or
@@ -88,13 +91,14 @@ of truth; caller-supplied funding amounts are never trusted.
   collateral stays credited to the owner.
 - **Self-liquidation for the bonus.** `liquidate()` rejects
   `liquidator === vaultOwner`.
-- **Rounding shortfall drains other vaults.** The seizure is floored to the
-  collateral tick's decimal grid *before* the books are written
+- **Rounding shortfall drains other vaults.** Every amount-bearing method
+  (`liquidate()` seize, `withdraw()` and `borrow()` caller amounts) is floored
+  to the relevant tick's decimal grid *before* the books are written
   (`floorToDecimals`). The indexer re-rounds every emitted amount half-even
-  at ledger-write time; an off-grid seize rounded UP on the wire would debit
+  at ledger-write time; an off-grid amount rounded UP on the wire would debit
   custody more than the books, a pooled shortfall the last full-balance
   withdrawal would eat. Flooring makes the indexer's normalization a numeric
-  no-op, so custody == books holds exactly.
+  no-op, so custody == books holds exactly on all three paths.
 - **Uncapped stable supply.** The emitted ISSUE declares `maxSupply`
   (an unset cap reads as 0 and the indexer rejects every MINT). Note the
   fair-mint caveat below: on a real network others could MINT the stable

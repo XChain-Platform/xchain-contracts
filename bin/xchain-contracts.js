@@ -35,6 +35,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');   // the xchain-contracts package root
 
@@ -109,9 +110,14 @@ function cmdLint(args) {
         );
     }
 
-    // bin/lint.js reads process.argv.slice(2) and calls process.exit() itself.
-    process.argv = [process.argv[0], lintPath].concat(files);
-    require(lintPath);
+    // Run bin/lint.js as its own entry point so its `require.main === module`
+    // guard fires and main() actually runs. Requiring it in-process takes the
+    // else branch (module.exports only) and silently exits 0 on every contract,
+    // failing the deploy-parity gate open. spawnSync preserves its exit codes
+    // and output byte-for-byte; a null status (signal-killed) maps to non-zero
+    // so the gate can never silently pass.
+    const r = spawnSync(process.execPath, [lintPath].concat(files), { stdio: 'inherit' });
+    process.exit(r.status === null ? 1 : r.status);
 }
 
 function cmdPolicy(args) {

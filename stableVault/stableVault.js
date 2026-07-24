@@ -130,6 +130,14 @@ module.exports = {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Quantise onto the stable tick's grid BEFORE the ratio check, the debt
+        // book writes, and the emissions. The indexer ROUNDS emission amounts to
+        // the tick's decimals on the wire; an off-grid `amount` would book raw
+        // but round up when minted/sent, leaving a debt the borrower can never
+        // repay to exactly '0' (residual dust locks collateral via ratioOk).
+        // Same guard liquidate() applies to the collateral tick.
+        amount = floorToDecimals(amount, tickDecimals(xchain, xchain.state.get('stableTick')));
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
 
         var price   = freshPrice(xchain);
         var coll    = getVault(xchain, addr, 'coll');
@@ -183,6 +191,14 @@ module.exports = {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Quantise onto the collateral tick's grid BEFORE the ratio check, the
+        // book writes, and the emission. The indexer ROUNDS the emitted quantity
+        // to the tick's decimals; an off-grid `amount` would debit trackedColl
+        // by the raw value while custody moves the rounded-up value, opening a
+        // pooled custody-vs-books shortfall (and cascading through collDelta).
+        // Same guard liquidate() applies to its seize amount.
+        amount = floorToDecimals(amount, tickDecimals(xchain, xchain.state.get('collateralTick')));
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
 
         var coll = getVault(xchain, addr, 'coll');
         xchain.require(xchain.math.gte(coll, amount), 'insufficient collateral');
