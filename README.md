@@ -1,4 +1,18 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) 2026 Dankest, LLC -->
+
 # XChain Contract Template Library
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-245%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/coverage-unit%20%7C%20e2e%20%7C%20lint%20gate-brightgreen" alt="Coverage">
+</p>
 
 Audited, copy-pasteable smart-contract templates for the [XChain
 Platform](https://xchain.io): worked examples of the **contracts-as-orchestration**
@@ -9,6 +23,14 @@ template through the XChain VM.
 The goal is to seed the mental model: an XChain contract is a deterministic
 JavaScript program that custodies tokens and emits protocol actions. These
 templates show how to do that **safely**.
+
+## Documentation
+
+Component overview is available in the [xchain-documentation](https://github.com/XChain-Platform/xchain-documentation/tree/master/components/contracts) repository:
+
+| Document | Description |
+|---|---|
+| [README](https://github.com/XChain-Platform/xchain-documentation/blob/master/components/contracts/README.md) | Scope, license posture (MIT vs. platform AGPL), how the library relates to the VM and SDK |
 
 ## Quick start
 
