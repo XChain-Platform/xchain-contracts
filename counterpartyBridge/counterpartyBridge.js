@@ -175,10 +175,14 @@ module.exports = {
 
         // tokenscan.io has no source+asset-filtered endpoint - it returns
         // every Send that ever landed on BURN_ADDRESS, across every asset
-        // and every sender, paged. Page 1 / limit 500 covers realistic burn
-        // volume; see README "Known limitations" for what happens once
-        // global traffic to this shared address exceeds that.
-        var url = 'https://cp20.tokenscan.io/api/sends/' + BURN_ADDRESS + '/1/500';
+        // and every sender, paged. The limit here is NOT a generous
+        // headroom choice - it is bounded hard by the indexer's on-chain
+        // attestation-response payload cap (8192 bytes total ACTION data;
+        // each row of this feed runs ~200-250 bytes, so anything close to
+        // tokenscan's own page-size ceiling would never fit on-chain at
+        // all). See README "Known limitations" for what this costs once
+        // global traffic to this shared address grows.
+        var url = 'https://cp20.tokenscan.io/api/sends/' + BURN_ADDRESS + '/1/15';
 
         var requestId = xchain.attestation.request(
             'http_get',

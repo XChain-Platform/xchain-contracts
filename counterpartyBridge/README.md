@@ -45,13 +45,24 @@ source+asset-filtered endpoint):
 }
 ```
 
-`requestClaim()` calls this at `/1/500` (page 1, limit 500, most recent
+`requestClaim()` calls this at `/1/15` (page 1, limit **15**, most recent
 first) against `BURN_ADDRESS`; `onClaim` scans `data` for rows whose
 `source` is the claiming address, whose `asset` matches the deployed
 `cpAsset`, and whose `status` is `valid`, sums every one whose `tx_hash`
 has not already been credited, and mints the total in one shot.
 `quantity` is already a normalized decimal string (no separate
 raw-integer field to divide by divisibility).
+
+**Why only 15, not tokenscan's own page-size ceiling.** This is not a
+generous-headroom choice - confirmed on a real e2e run against the live
+endpoint (2026-08-08): the indexer's on-chain attestation-response payload
+cap is a hard **8192 bytes** of combined ACTION data, and each row of this
+feed runs roughly 200-250 bytes. A page of 500 rows compiled to ~20KB and
+was rejected outright by the encoder (`Combined compiled payload (20433
+bytes) exceeds maximum (8192)`) before the transaction could even be
+built. 15 rows leaves comfortable headroom under the cap; see "Known
+limitations" for what a shallow page costs once burn volume on the shared
+address grows.
 
 ```
 1. requestClaim()            -> caller asks the network to list every Send
@@ -162,20 +173,27 @@ bridge multiple assets, deploy one instance per asset.
 ## Known limitations (this is a teaching example)
 
 - **`BURN_ADDRESS` is a shared, industry-wide address, not exclusive to
-  this bridge.** `1BitcoinEaterAddressDontSendf59kuE` is a widely-used
-  Bitcoin "eater" address with no known private key - many unrelated
-  Counterparty projects burn to it too (confirmed live: dozens of
-  unrelated assets show up in its send history). That has two
-  consequences: (1) `requestClaim()`'s page 1 / limit 500 is shared
-  capacity - if global burn traffic to this address is high, an older
-  burn could fall past page 500 before a holder claims it; and (2) there
-  is no cryptographic binding between "sent to this address" and "sent
-  *for this bridge*" beyond matching `cpAsset` - which is sufficient
-  today (the asset itself identifies intent), but a production fork
-  expecting heavy shared traffic should derive a bridge-specific,
-  provably-unspendable burn address instead (e.g. hashing a fixed
-  bridge-identifying string to an off-curve point) rather than pointing
-  at the generic eater address.
+  this bridge - and the on-chain payload cap means only the most recent
+  ~15 sends to it are ever visible to `onClaim`.** `1BitcoinEaterAddressDontSendf59kuE`
+  is a widely-used Bitcoin "eater" address with no known private key -
+  many unrelated Counterparty projects burn to it too (confirmed live:
+  dozens of unrelated assets show up in its send history, at a real
+  volume that already forced the page size down from a hoped-for 500 to
+  15 - see "API used" above). That has real consequences for a
+  production fork: (1) a holder who does not `requestClaim()` promptly
+  after burning risks their burn scrolling off the visible page as *other
+  people's* unrelated burns land after it - this is not a hypothetical
+  edge case here, it is the expected steady state; and (2) there is no
+  cryptographic binding between "sent to this address" and "sent *for
+  this bridge*" beyond matching `cpAsset`, which is sufficient today (the
+  asset itself identifies intent) but does nothing to protect the paging
+  window. A production fork expecting real volume should derive a
+  bridge-specific, provably-unspendable burn address instead (e.g.
+  hashing a fixed bridge-identifying string to an off-curve point) so its
+  15-row window is scoped to its own traffic, not shared with every other
+  project using the generic eater address - and/or have `onClaim` walk
+  multiple pages across successive attestation rounds instead of trusting
+  page 1 alone.
 - **Trusts tokenscan.io's current answer.** Like any attestation-based
   oracle, this is only as good as the queried endpoint. A single
   compromised or lying tokenscan instance under `redundancy: 1` could
@@ -186,12 +204,6 @@ bridge multiple assets, deploy one instance per asset.
   redundancy configurable per deploy, and should confirm which
   Counterparty network/host tokenscan's `cp20` prefix actually serves
   before pointing real value at it.
-- **Page 1 / limit 500 only.** A production fork targeting a burn
-  address with heavy sustained volume should paginate through `total`
-  instead of assuming one page suffices (see the shared-address point
-  above for why this matters more here than it did for the old
-  balance-snapshot design, where the page was scoped to one wallet's own
-  holdings rather than a globally shared address's entire traffic).
 - **Burn is one-way and manual.** This template does not automate the
   Counterparty-side SEND; the holder must send `cpAsset` to `BURN_ADDRESS`
   themselves, on Counterparty, before calling `requestClaim()`. There is
