@@ -1,77 +1,99 @@
-# counterpartyBridge: migrate Counterparty holders to an XChain tick
+# counterpartyBridge: burn-to-mint a Counterparty asset into an XChain tick
 
-A one-time migration bridge for holders of a single [Counterparty](https://counterparty.io/)
-asset. A holder proves their Counterparty balance and mints the equivalent
-amount of a brand-new XChain tick to the same address.
+A genuinely 1:1 bridge for holders of a single [Counterparty](https://counterparty.io/)
+asset. A holder sends (burns) their Counterparty asset to a well-known,
+unspendable Counterparty address, and once that burn confirms, mints the
+same amount of a brand-new XChain tick to the same address.
 
-Counterparty rides on top of Bitcoin: its balances are computed by
-Counterparty nodes from OP_RETURN/bare-multisig data embedded in ordinary
-Bitcoin transactions. That means a Counterparty balance is **not** something
-the VM sandbox can see directly, and even if it could, no two validators
-would necessarily agree on a third-party Counterparty indexer's *current*
-interpretation of the chain. So this bridge reuses the exact off-chain
-attestation pattern documented in `urlOracle`: it asks the network to fetch
-[tokenscan.io's public REST API](https://tokenscan.io/api#balances) and
+Counterparty rides on top of Bitcoin: its state is computed by Counterparty
+nodes from OP_RETURN/bare-multisig data embedded in ordinary Bitcoin
+transactions. That means neither a Counterparty balance nor a Counterparty
+transaction is something the VM sandbox can see directly, and even if it
+could, no two validators would necessarily agree on a third-party
+Counterparty indexer's *current* interpretation of the chain. So this
+bridge reuses the exact off-chain attestation pattern documented in
+`urlOracle`: it asks the network to fetch
+[tokenscan.io's public REST API](https://tokenscan.io/api#sends) and
 anchors the agreed response on-chain before trusting it.
 
-**API used:** `GET https://cp20.tokenscan.io/api/balances/{address}/{page}/{limit}`
-returns a wallet's *entire* Counterparty holdings as an array (tokenscan has
-no single-address+single-asset endpoint):
+**Why burn-to-mint, not a balance snapshot.** An earlier version of this
+template minted against a holder's *current* Counterparty balance. That is
+not a real bridge: nothing stops a holder from claiming on XChain and then
+separately selling the original asset to someone else on Counterparty,
+walking away with both the migrated tokens and the sale proceeds - a
+genuine double-spend of value across the two systems. Gating the mint on an
+irreversible burn closes that hole: once the asset is sent to an address
+nobody holds the key to, it cannot also be sold.
+
+**API used:** `GET https://cp20.tokenscan.io/api/sends/{destination}/{page}/{limit}`
+returns every Counterparty "Send" transaction ever recorded landing on
+`{destination}`, across every asset and every sender (tokenscan has no
+source+asset-filtered endpoint):
 
 ```json
 {
-    "address": "1Donatet2LrNpuWByAnH8gc9Wh9zSzZuLC",
     "data": [
-        { "asset": "PEPECASH", "asset_longname": "", "description": "...",
-          "estimated_value": { "btc": "...", "usd": "...", "xcp": "..." },
-          "quantity": "650000.00000000" },
+        { "asset": "PEPECASH", "asset_longname": "", "block_index": 466690,
+          "destination": "1BitcoinEaterAddressDontSendf59kuE",
+          "quantity": "44000.00000000",
+          "source": "1PNkBxnz5ePW8FeK6CSs8V2fGHcN9B6HNk",
+          "status": "valid", "timestamp": 1492254524,
+          "tx_hash": "6461c15f...80fd81287", "tx_index": 922735 },
         ...
     ],
-    "total": 6
+    "total": 7809
 }
 ```
 
-`requestClaim()` calls this at `/1/500` (page 1, limit 500) and `onClaim`
-scans `data` for the row whose `asset` matches the deployed `cpAsset`;
-`quantity` is already a normalized decimal string (no separate raw-integer
-field to divide by divisibility, unlike Counterparty's own core API).
+`requestClaim()` calls this at `/1/500` (page 1, limit 500, most recent
+first) against `BURN_ADDRESS`; `onClaim` scans `data` for rows whose
+`source` is the claiming address, whose `asset` matches the deployed
+`cpAsset`, and whose `status` is `valid`, sums every one whose `tx_hash`
+has not already been credited, and mints the total in one shot.
+`quantity` is already a normalized decimal string (no separate
+raw-integer field to divide by divisibility).
 
 ```
-1. requestClaim()            -> caller asks the network to check THEIR OWN
-                                 Counterparty balance of `cpAsset`. Emits an
-                                 ATTEST http_get request, remembers its
+1. requestClaim()            -> caller asks the network to list every Send
+                                 that has ever landed on BURN_ADDRESS. Emits
+                                 an ATTEST http_get request, remembers its
                                  request_id.
-2. (off-chain)                  N attestation providers GET the balances API,
+2. (off-chain)                  N attestation providers GET the sends API,
                                  sign the body, the indexer anchors the
                                  agreed response on-chain.
-3. onClaim(request_id, address) -> the indexer calls this back. A positive
-                                 settled balance MINTS that exact amount of
-                                 `xchainTick` to `address` and marks it
-                                 claimed, permanently.
+3. onClaim(request_id, address) -> the indexer calls this back. Every
+                                 settled burn from `address` of `cpAsset`
+                                 not already credited is summed and MINTS
+                                 that total of `xchainTick` to `address`;
+                                 each burn's tx_hash is then marked
+                                 credited, permanently, individually.
 ```
 
 Because a Counterparty holder's Bitcoin address **is** their XChain address
 on that chain (XChain transactions are themselves Bitcoin/Dogecoin/Litecoin
 transactions), the claim needs no separate registration step: the address
-that asks for the check is the address the minted tokens land on. Nobody can
+that burned the asset is the address the minted tokens land on. Nobody can
 trigger a check on someone else's behalf that then mints to a third party.
 
 ## Methods
 
 | Method | Who | Effect |
 |---|---|---|
-| `requestClaim()` | anyone (self-serve) | Emits an `http_get` attestation request for the caller's own `cpAsset` balance (`redundancy: 3`, `deadlineBlocks: 20`); reverts if the caller already claimed or already has a check pending. |
-| `onClaim(request_id, address)` | indexer callback | Reads the settled response. A positive balance mints `min(balance, remaining cap)`-quantised tokens to `address` and marks it claimed. A zero balance, malformed body, or failed attestation is a no-op (pending clears, retry later) - not a revert. |
-| `claimed(address)` | anyone | Read-only: how much `address` has already claimed (`'0'` if none). |
-| `info()` | anyone | `{ cpAsset, xchainTick, decimals, maxSupply, totalClaimed }`. |
+| `requestClaim()` | anyone (self-serve) | Emits an `http_get` attestation request listing every Send on `BURN_ADDRESS` (`redundancy: 3`, `deadlineBlocks: 20`); reverts if the caller already has a check pending. Callable again later, once new burns exist. |
+| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and mints the total. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. |
+| `claimedTotal(address)` | anyone | Read-only: how much `address` has been credited in total so far (`'0'` if none). |
+| `burned(tx_hash)` | anyone | Read-only: whether a specific Counterparty burn transaction has already been credited. |
+| `info()` | anyone | `{ cpAsset, xchainTick, decimals, maxSupply, totalClaimed, burnAddress }`. |
 
 ## Usage
 
 ```
+# On Counterparty: SEND cpAsset to 1BitcoinEaterAddressDontSendf59kuE from your holding address.
+# ...wait for that Bitcoin transaction to confirm...
 EXECUTE(bridge, "requestClaim")
 # ...wait for the attestation to settle (or hit its deadline)...
 EXECUTE(bridge, "onClaim", "<request_id>", "<your_address>")   # usually relayed automatically
-EXECUTE(bridge, "claimed", "<your_address>")                   # verify
+EXECUTE(bridge, "claimedTotal", "<your_address>")               # verify
 ```
 
 ## Deploy
@@ -83,11 +105,14 @@ EXECUTE(bridge, "claimed", "<your_address>")                   # verify
   collision reverts the `DEPLOY`).
 - `maxSupply`: hard cap, in `xchainTick` units. **Set this to `cpAsset`'s
   known total supply** so the bridge can never mint more XChain-side than
-  exists Counterparty-side no matter how many addresses claim.
-- `decimals`: must match how the balances API reports
-  `quantity_normalized` for this asset (8 for a divisible Counterparty
-  asset, 0 for an indivisible one) so claimed amounts land on the tick's
-  real grid.
+  exists Counterparty-side no matter how many addresses burn-and-claim.
+- `decimals`: must match how the sends API reports `quantity` for this
+  asset (8 for a divisible Counterparty asset, 0 for an indivisible one)
+  so claimed amounts land on the tick's real grid.
+
+The burn destination (`BURN_ADDRESS`, `1BitcoinEaterAddressDontSendf59kuE`)
+is hardcoded, not a deploy param - see "Known limitations" below for the
+tradeoff this makes.
 
 One deploy bridges **one** Counterparty asset to **one** XChain tick. To
 bridge multiple assets, deploy one instance per asset.
@@ -99,20 +124,26 @@ bridge multiple assets, deploy one instance per asset.
   only door, and what comes through it is consensus-finalized (N providers
   agreed byte-for-byte on the response).
 - **Claiming on someone else's behalf to steal their tokens.** Not
-  possible: `requestClaim()` always checks `getSourceAddress()`'s own
-  balance, and `onClaim` mints to that same address. There is no
-  caller-suppliable destination.
+  possible: `requestClaim()` always scans `getSourceAddress()`'s own burns,
+  and `onClaim` mints to that same address. There is no caller-suppliable
+  destination.
 - **Stale-response replay.** `onClaim` requires `request_id ===
   state.get('pending:' + address)`, pinned per address (not the
   unpinned `urlOracle` teaching-example gap). A settled response for an
   old or different address's request cannot be replayed.
-- **Double-claim.** `requestClaim()` reverts if `claimed:<address>` is
-  already set; `onClaim` also short-circuits to a no-op if a race lets two
-  settled callbacks reach it (defense in depth - the pending-pin check
-  should already prevent this).
-- **Forged balance.** `onClaim` reads the balance from
+- **Double-crediting the same burn.** Each Counterparty `tx_hash` is
+  nullified individually (`burned:<tx_hash>`) the moment it is credited,
+  BEFORE the mint is emitted. A burn reported again in a later
+  `requestClaim()` round, or replayed via a stale settled response, is
+  silently skipped rather than minted again.
+- **Forged burn.** `onClaim` reads the burn list from
   `xchain.attestation.getResponse(request_id)`, indexer-side consensus
   state; a caller cannot supply the payload directly.
+- **Claiming and also keeping/selling the original asset ("double
+  value").** This is the reason the design is burn-to-mint rather than a
+  balance snapshot: the mint is gated on a Send to an address nobody holds
+  the key to, which is irreversible the moment it confirms on
+  Counterparty. See "Why burn-to-mint" above.
 - **Minting past the Counterparty-side supply.** `maxSupply` (set at
   deploy from `cpAsset`'s real total supply) hard-caps `emit.issue`, and
   `onClaim` also checks `totalClaimed + amount <= maxSupply` itself with a
@@ -125,50 +156,54 @@ bridge multiple assets, deploy one instance per asset.
   the cap on an otherwise-honest claim.
 - **A malformed or schema-drifted API body.** `onClaim` never throws on a
   parse failure; it treats an unparseable or field-missing body the same
-  as "no balance found" (no-op, retryable), not a crash that could strand
+  as "no burns found" (no-op, retryable), not a crash that could strand
   gas or corrupt state.
 
 ## Known limitations (this is a teaching example)
 
-- **One-time snapshot, not a live peg.** A claim reflects the balance at
-  the moment `onClaim` settles. It is not re-checked afterward; sending
-  more of `cpAsset` to the same address after claiming does not entitle it
-  to claim again (by design - this is a migration tool, not an ongoing
-  1:1 bridge). A production fork wanting a live peg would need a
-  lock/burn-and-mint scheme instead of a pure snapshot mint.
+- **`BURN_ADDRESS` is a shared, industry-wide address, not exclusive to
+  this bridge.** `1BitcoinEaterAddressDontSendf59kuE` is a widely-used
+  Bitcoin "eater" address with no known private key - many unrelated
+  Counterparty projects burn to it too (confirmed live: dozens of
+  unrelated assets show up in its send history). That has two
+  consequences: (1) `requestClaim()`'s page 1 / limit 500 is shared
+  capacity - if global burn traffic to this address is high, an older
+  burn could fall past page 500 before a holder claims it; and (2) there
+  is no cryptographic binding between "sent to this address" and "sent
+  *for this bridge*" beyond matching `cpAsset` - which is sufficient
+  today (the asset itself identifies intent), but a production fork
+  expecting heavy shared traffic should derive a bridge-specific,
+  provably-unspendable burn address instead (e.g. hashing a fixed
+  bridge-identifying string to an off-curve point) rather than pointing
+  at the generic eater address.
 - **Trusts tokenscan.io's current answer.** Like any attestation-based
   oracle, this is only as good as the queried endpoint. A single
   compromised or lying tokenscan instance under `redundancy: 1` could
-  under- or over-report a balance; this template uses `redundancy: 3` so
+  under- or over-report burns; this template uses `redundancy: 3` so
   three independent providers' GETs must byte-match before `onClaim`
   trusts the body. This template hardcodes `cp20.tokenscan.io`
   (Counterparty 2.0 mainnet); a production fork should make the host and
   redundancy configurable per deploy, and should confirm which
   Counterparty network/host tokenscan's `cp20` prefix actually serves
   before pointing real value at it.
-- **Page 1 / limit 500 only.** `requestClaim()` requests
-  `/api/balances/{address}/1/500`. A wallet holding 500+ *distinct*
-  Counterparty assets could have `cpAsset` fall past this page and the
-  claim would settle as "no balance found" even though the holder does
-  own it. Fine for realistic migration wallets; a production fork
-  targeting exotic mega-wallets should paginate through `total` instead
-  of assuming one page suffices.
-- **No burn/lock on the Counterparty side.** This mints a *new*, separate
-  XChain-side token; it does not lock, burn, or otherwise account for the
-  original Counterparty asset. A holder who claims and then sells their
-  Counterparty asset to someone else ends up with the migrated tokens
-  *and* the sale proceeds - a genuine double-spend of *value* across the
-  two systems, which no attestation-only design can prevent (the origin
-  chain isn't the one being modified). This is acceptable for a
-  once-off "snapshot migration to a new home" campaign announced in
-  advance, not for a bridge meant to stay open indefinitely as a fungible
-  peg.
-- **Body schema confirmed from tokenscan.io's published docs, not yet
-  exercised against a live GET.** `extractAssetQuantity()` matches the
-  shape documented at https://tokenscan.io/api#balances (verified
-  2026-08-06), but this template has not yet run an e2e attestation
-  against the real endpoint - a live check before migrating mainnet
-  holders is still warranted in case the documented shape has drifted.
+- **Page 1 / limit 500 only.** A production fork targeting a burn
+  address with heavy sustained volume should paginate through `total`
+  instead of assuming one page suffices (see the shared-address point
+  above for why this matters more here than it did for the old
+  balance-snapshot design, where the page was scoped to one wallet's own
+  holdings rather than a globally shared address's entire traffic).
+- **Burn is one-way and manual.** This template does not automate the
+  Counterparty-side SEND; the holder must send `cpAsset` to `BURN_ADDRESS`
+  themselves, on Counterparty, before calling `requestClaim()`. There is
+  no way to un-burn a mistaken send (that is the entire point of the
+  design), so a fork's UI should make the destination and asset very
+  explicit before a holder signs that transaction.
+- **Body schema confirmed from tokenscan.io's published docs AND a live
+  GET.** `extractBurnSends()` matches the shape documented at
+  https://tokenscan.io/api#sends and verified 2026-08-08 against a real
+  `GET /api/sends/1BitcoinEaterAddressDontSendf59kuE/1/5` response, but a
+  live e2e attestation run against the real endpoint is still warranted
+  before migrating mainnet holders, in case of future drift.
 
 ## Tests
 

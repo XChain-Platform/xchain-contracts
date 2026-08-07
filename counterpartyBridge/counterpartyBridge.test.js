@@ -29,12 +29,16 @@ try {
 
 const CODE = fs.readFileSync(path.join(__dirname, 'counterpartyBridge.js'), 'utf8');
 
-const ADDR       = 'C:BTC:1';
-const HOLDER     = '1HolderBtcAddress11111111111111111';
-const OTHER      = '1OtherBtcAddress222222222222222222';
-const CP_ASSET   = 'XCPCARD';
-const XC_TICK    = 'BRIDGEDCARD';
-const MAX_SUPPLY = '1000000';
+const ADDR         = 'C:BTC:1';
+const HOLDER       = '1HolderBtcAddress11111111111111111';
+const OTHER        = '1OtherBtcAddress222222222222222222';
+const CP_ASSET     = 'XCPCARD';
+const XC_TICK      = 'BRIDGEDCARD';
+const MAX_SUPPLY   = '1000000';
+const BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
+
+let txCounter = 0;
+function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart(62, '0'); }
 
 (XChainVM ? describe : describe.skip)('Template: counterpartyBridge', function () {
     this.timeout(0);
@@ -49,30 +53,39 @@ const MAX_SUPPLY = '1000000';
     }
 
     // Seeds a settled attestation response on the harness's MockLedger, the
-    // way the indexer would after off-chain providers agree on the balances
+    // way the indexer would after off-chain providers agree on the sends
     // API's body. h.execute() reads it via ledger.buildAttestationAccessor().
-    function seedBalanceResponse(requestId, payload, status) {
+    function seedSendsResponse(requestId, payload, status) {
         h.ledger.seedAttestation(requestId, {
             status: status || 'ok', payload: payload, providerId: 'http_get', blockIndex: 200, validatorCount: 3
         });
     }
 
-    // Shape of a real tokenscan.io GET /api/balances/{address}/{page}/{limit}
-    // response (see https://tokenscan.io/api#balances): a wallet's entire
-    // holdings as an array, `quantity` already a normalized decimal string.
-    function balancePayload(quantity, asset) {
+    // Shape of a real tokenscan.io GET /api/sends/{address}/{page}/{limit}
+    // response (see https://tokenscan.io/api#sends): every Send that ever
+    // landed on BURN_ADDRESS, across every asset and every sender.
+    function sendsPayload(rows) {
         return JSON.stringify({
-            address: HOLDER,
-            data: [
-                { asset: 'XCP', asset_longname: '', description: '', estimated_value: {}, quantity: '10.00000000' },
-                { asset: asset || CP_ASSET, asset_longname: '', description: '', estimated_value: {}, quantity: quantity }
-            ],
-            total: 2
+            data: rows.map(function (r) {
+                return {
+                    asset: r.asset || CP_ASSET,
+                    asset_longname: '',
+                    block_index: r.blockIndex || 900000,
+                    destination: BURN_ADDRESS,
+                    quantity: r.quantity,
+                    source: r.source || HOLDER,
+                    status: r.status || 'valid',
+                    timestamp: 1700000000,
+                    tx_hash: r.txHash,
+                    tx_index: r.txIndex || 1
+                };
+            }),
+            total: rows.length
         });
     }
 
     describe('happy path: claim mints the bridged equivalent', function () {
-        it('requestClaim -> onClaim with a positive balance mints to the claiming address', async function () {
+        it('requestClaim -> onClaim with a matching burn mints to the claiming address', async function () {
             await deployBridge();
 
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
@@ -83,11 +96,13 @@ const MAX_SUPPLY = '1000000';
             const requestId = JSON.parse(req.returnValue);
             assertContractState(h.ledger, ADDR, 'pending:' + HOLDER, requestId);
 
-            seedBalanceResponse(requestId, balancePayload('42.5'));
+            const txHash = nextTxHash();
+            seedSendsResponse(requestId, sendsPayload([{ txHash: txHash, quantity: '42.5' }]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: 'relayer' });
             assertSuccess(cb);
             assertEmittedActions(cb, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '42.5', destination: HOLDER } }]);
-            assertContractState(h.ledger, ADDR, 'claimed:' + HOLDER, '42.5');
+            assertContractState(h.ledger, ADDR, 'burned:' + txHash, true);
+            assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '42.5');
             assertContractState(h.ledger, ADDR, 'totalClaimed', '42.5');
             assert.ok(!('pending:' + HOLDER in h.ledger.getContractState(ADDR)), 'pending cleared after settlement');
         });
@@ -96,62 +111,89 @@ const MAX_SUPPLY = '1000000';
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
-            seedBalanceResponse(requestId, balancePayload('10'));
+            seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '10' }]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: 'stranger' });
             assertSuccess(cb, 'a stranger can relay a settled callback');
         });
 
-        it('picks the matching asset out of a wallet holding several Counterparty assets', async function () {
+        it('sums multiple burn transactions from the same address in one claim', async function () {
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
-            // balancePayload() already seeds an unrelated XCP row alongside cpAsset.
-            seedBalanceResponse(requestId, balancePayload('7.00000000'));
+            const tx1 = nextTxHash(), tx2 = nextTxHash();
+            seedSendsResponse(requestId, sendsPayload([
+                { txHash: tx1, quantity: '5' },
+                { txHash: tx2, quantity: '2.5' }
+            ]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
             assertSuccess(cb);
-            assertContractState(h.ledger, ADDR, 'claimed:' + HOLDER, '7.00000000');
+            assertEmittedActions(cb, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '7.5', destination: HOLDER } }]);
+            assertContractState(h.ledger, ADDR, 'burned:' + tx1, true);
+            assertContractState(h.ledger, ADDR, 'burned:' + tx2, true);
+        });
+
+        it('ignores burns from other sources, other assets, and other statuses in the shared burn-address feed', async function () {
+            await deployBridge();
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId = JSON.parse(req.returnValue);
+            const mine = nextTxHash();
+            seedSendsResponse(requestId, sendsPayload([
+                { txHash: nextTxHash(), quantity: '999', source: OTHER },              // someone else's burn
+                { txHash: nextTxHash(), quantity: '999', asset: 'SOMEOTHERASSET' },     // unrelated asset, same burn address
+                { txHash: nextTxHash(), quantity: '999', status: 'invalid' },           // invalid send
+                { txHash: mine, quantity: '3' }
+            ]));
+            const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+            assertSuccess(cb);
+            assertEmittedActions(cb, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '3', destination: HOLDER } }]);
+        });
+
+        it('a later requestClaim only mints the burns that were not already credited', async function () {
+            await deployBridge();
+            const req1 = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId1 = JSON.parse(req1.returnValue);
+            const tx1 = nextTxHash();
+            seedSendsResponse(requestId1, sendsPayload([{ txHash: tx1, quantity: '5' }]));
+            await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId1, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+
+            const req2 = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            assertSuccess(req2, 'requestClaim should be callable again once the previous check settled');
+            const requestId2 = JSON.parse(req2.returnValue);
+            const tx2 = nextTxHash();
+            // Feed now reports BOTH the old (already-credited) burn and a new one.
+            seedSendsResponse(requestId2, sendsPayload([
+                { txHash: tx1, quantity: '5' },
+                { txHash: tx2, quantity: '1' }
+            ]));
+            const cb2 = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId2, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+            assertSuccess(cb2);
+            assertEmittedActions(cb2, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '1', destination: HOLDER } }]);
+            assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '6');
         });
     });
 
-    describe('no balance / failure: no-op, not fatal', function () {
-        it('a zero balance is a no-op: pending clears, nothing minted, address stays unclaimed', async function () {
+    describe('no burns / failure: no-op, not fatal', function () {
+        it('no matching burns is a no-op: pending clears, nothing minted', async function () {
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
 
-            seedBalanceResponse(requestId, balancePayload('0'));
+            seedSendsResponse(requestId, sendsPayload([]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
-            assertSuccess(cb, 'zero balance is a no-op, not a revert');
+            assertSuccess(cb, 'no burns is a no-op, not a revert');
             assertEmittedActions(cb, []);
-            assert.ok(!xchainHasState(h, 'claimed:' + HOLDER), 'address not marked claimed');
 
             // Retry now succeeds because pending was cleared.
             const retry = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
-            assertSuccess(retry, 'requestClaim should be callable again after a zero-balance check cleared pending');
+            assertSuccess(retry, 'requestClaim should be callable again after a no-burns check cleared pending');
         });
 
-        it('cpAsset simply absent from the wallet\'s holdings is a no-op, not an error', async function () {
+        it('a malformed / non-JSON body is treated as no burns found, not a crash', async function () {
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
 
-            // Wallet holds XCP and some other asset, but not cpAsset.
-            seedBalanceResponse(requestId, JSON.stringify({
-                address: HOLDER,
-                data: [{ asset: 'XCP', asset_longname: '', description: '', estimated_value: {}, quantity: '10.00000000' }],
-                total: 1
-            }));
-            const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
-            assertSuccess(cb, 'asset not held is a no-op, not a revert');
-            assertEmittedActions(cb, []);
-        });
-
-        it('a malformed / non-JSON body is treated as no balance found, not a crash', async function () {
-            await deployBridge();
-            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
-            const requestId = JSON.parse(req.returnValue);
-
-            seedBalanceResponse(requestId, 'not json at all');
+            seedSendsResponse(requestId, 'not json at all');
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
             assertSuccess(cb, 'malformed body should not crash the callback');
             assertEmittedActions(cb, []);
@@ -162,7 +204,7 @@ const MAX_SUPPLY = '1000000';
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
 
-            seedBalanceResponse(requestId, '', 'failed');
+            seedSendsResponse(requestId, '', 'failed');
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
             assertSuccess(cb);
             assertEmittedActions(cb, []);
@@ -188,7 +230,7 @@ const MAX_SUPPLY = '1000000';
             await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
 
             const forged = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
-            seedBalanceResponse(forged, balancePayload('999'));
+            seedSendsResponse(forged, sendsPayload([{ txHash: nextTxHash(), quantity: '999' }]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [forged, 'http_get', 'ok', '', HOLDER], caller: 'attacker' });
             assertReverted(cb, 'not the outstanding claim request');
         });
@@ -197,7 +239,7 @@ const MAX_SUPPLY = '1000000';
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
-            seedBalanceResponse(requestId, balancePayload('999'));
+            seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '999' }]));
 
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', OTHER], caller: 'attacker' });
             assertReverted(cb, 'not the outstanding claim request');
@@ -212,40 +254,47 @@ const MAX_SUPPLY = '1000000';
             assertReverted(cb, 'no response yet');
         });
 
-        it('double-claim is impossible: a second requestClaim after a successful claim is rejected', async function () {
+        it('the same burn tx_hash can never be credited twice, even across separate requestClaim rounds', async function () {
             await deployBridge();
-            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
-            const requestId = JSON.parse(req.returnValue);
-            seedBalanceResponse(requestId, balancePayload('42.5'));
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER }));
+            const req1 = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId1 = JSON.parse(req1.returnValue);
+            const tx1 = nextTxHash();
+            seedSendsResponse(requestId1, sendsPayload([{ txHash: tx1, quantity: '42.5' }]));
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId1, 'http_get', 'ok', '', HOLDER], caller: HOLDER }));
 
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }),
-                'already claimed');
+            const req2 = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId2 = JSON.parse(req2.returnValue);
+            // Feed re-reports the SAME burn tx (e.g. a stale/duplicated page) and nothing else.
+            seedSendsResponse(requestId2, sendsPayload([{ txHash: tx1, quantity: '42.5' }]));
+            const cb2 = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId2, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+            assertSuccess(cb2, 'an already-credited burn is a harmless no-op, not a double mint');
+            assertEmittedActions(cb2, []);
+            assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '42.5');
         });
 
-        it('a late-arriving onClaim replay after a successful claim is a harmless no-op (defense in depth)', async function () {
+        it('a late-arriving onClaim replay of the same settled response is a harmless no-op (defense in depth)', async function () {
             await deployBridge();
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
-            seedBalanceResponse(requestId, balancePayload('42.5'));
+            const txHash = nextTxHash();
+            seedSendsResponse(requestId, sendsPayload([{ txHash: txHash, quantity: '42.5' }]));
             await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
 
-            // Same requestId is still "the outstanding one" would be false now (pending
-            // was cleared), so replay must hit the 'already claimed' short-circuit path
-            // instead - exercised by re-seeding a fresh pending entry to isolate it.
-            // (Direct MockLedger object mutation - there is no setContractState helper.)
+            // pending was cleared by the first callback; re-seed it (direct
+            // MockLedger mutation - there is no setContractState helper) to
+            // isolate the burned-tx_hash nullifier from the pending-pin check.
             h.ledger.contractState[ADDR]['pending:' + HOLDER] = requestId;
             const replay = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: 'attacker' });
-            assertSuccess(replay, 'settled-elsewhere (already claimed) callback should not revert');
+            assertSuccess(replay, 'replaying an already-credited burn should not revert');
             assertEmittedActions(replay, []);
-            assertContractState(h.ledger, ADDR, 'claimed:' + HOLDER, '42.5'); // unchanged, no double mint
+            assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '42.5'); // unchanged, no double mint
         });
 
         it('minting is capped at maxSupply across all claimants', async function () {
             await deployBridge('50', '8');
             const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
             const requestId = JSON.parse(req.returnValue);
-            seedBalanceResponse(requestId, balancePayload('100'));
+            seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '100' }]));
             const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
             assertReverted(cb, 'maxSupply exhausted');
         });
@@ -271,8 +320,3 @@ const MAX_SUPPLY = '1000000';
         });
     });
 });
-
-// Small helper: true if the contract's state object has the given key set.
-function xchainHasState(h, key) {
-    return key in h.ledger.getContractState(ADDR);
-}
