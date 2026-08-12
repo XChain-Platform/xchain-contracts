@@ -43,7 +43,7 @@ npx xchain-contracts scaffold escrow my-escrow.js
 
 # 2. ...edit my-escrow.js...
 
-# 3. Lint it against the exact deploy-time rules (needs Node 22 / isolated-vm)
+# 3. Lint it: a conservative preflight over the deploy-time rules (needs Node 22 / isolated-vm)
 npx xchain-contracts lint my-escrow.js
 
 # 4. Deploy via the SDK (which lints again before spending a transaction)
@@ -131,12 +131,16 @@ follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 
 ## Linting
 
-`xchain-contracts lint` runs each contract through the VM's **exact** deploy-time
+`xchain-contracts lint` runs each contract through the VM's full deploy-time
 validation (V8 syntax, the acorn metering pass, reserved identifiers, banned
 `Math.*`, banned `BigInt`/`RegExp` literals) plus the logic-level advisories
 (crossCallable integrity, unbounded loops, unchecked `state.get`, …). A clean
-result means the contract clears deployment. It delegates to `xchain-vm`'s linter,
-so it needs **Node 22** / `isolated-vm`.
+result is a conservative preflight, **not** exact deploy parity: the rule set is a
+superset of the live deploy gate (future and mainnet-gated rules are enforced
+immediately, and a malformed `crossCallable` is a linter error the chain itself
+accepts), so the linter can still refuse a contract a given chain, network and
+block would deploy. It delegates to `xchain-vm`'s linter, so it needs **Node 22**
+/ `isolated-vm`.
 
 ```bash
 npm run lint                                  # lint every template + pattern
