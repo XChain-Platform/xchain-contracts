@@ -5,7 +5,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-245%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-276%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
 </p>
@@ -97,6 +97,7 @@ is built to pass the deploy linter clean. See
 | **Escrow (delivery)** | [escrowDelivery.js](./escrowDelivery/escrowDelivery.js) | [README](./escrowDelivery/README.md) | [tests](./escrowDelivery/escrowDelivery.test.js) | Escrow that settles itself: point it at a carrier tracking URL and a marker string, and a delivery attestation pays the seller with nobody having to call `release()`. |
 | **English auction** | [englishAuction.js](./englishAuction/englishAuction.js) | [README](./englishAuction/README.md) | [tests](./englishAuction/englishAuction.test.js) | An ascending-bid auction: each new bid refunds the one it topped in the same transaction, and after the deadline anyone can settle. Custody applied to a contest rather than a single hand-off. |
 | **Dutch auction** | [dutchAuction.js](./dutchAuction/dutchAuction.js) | [README](./dutchAuction/README.md) | [tests](./dutchAuction/dutchAuction.test.js) | A descending-price auction: the price falls linearly per block to a floor, and the first buyer to pay the price in effect at their block takes the item. One purchase, no losing bids to refund. |
+| **Counterparty bridge** | [counterpartyBridge.js](./counterpartyBridge/counterpartyBridge.js) | [README](./counterpartyBridge/README.md) | [tests](./counterpartyBridge/counterpartyBridge.test.js) | A burn-to-mint bridge for a single Counterparty asset: an off-chain attestation (the same pattern as `urlOracle`) confirms an irreversible burn to a well-known unspendable address before minting, so a holder cannot claim the migrated tokens and still sell the original asset. |
 
 Start with **escrow**: it explains the custody model the others build on.
 

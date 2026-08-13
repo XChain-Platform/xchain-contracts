@@ -9,7 +9,7 @@ If you're reporting a security issue, **stop here** and read [`SECURITY.md`](./S
 ## Quick links
 
 - Project overview: [`README.md`](./README.md)
-- Full component docs: the [`xchain-documentation`](https://github.com/XChain-platform/xchain-documentation) repository (architecture, contract patterns, protocol spec)
+- Full component docs: the [`xchain-documentation`](https://github.com/XChain-Platform/xchain-documentation) repository (architecture, contract patterns, protocol spec)
 - Disclosure policy: [`SECURITY.md`](./SECURITY.md)
 - License: [`LICENSE`](./LICENSE) (MIT, intentionally permissive so you can build proprietary contracts on top)
 
@@ -24,7 +24,18 @@ xchain-contracts/
 ├── vesting/              vesting template, guide, and tests
 ├── crowdsale/            crowdsale template, guide, and tests
 ├── amm/                  AMM template, guide, and tests
+├── treasury/             treasury template, guide, and tests
+├── cardDispenser/        card dispenser template, guide, and tests
+├── priceBet/             price bet template, guide, and tests
+├── priceBetTimed/        timed price bet template, guide, and tests
+├── stableVault/          stable vault template, guide, and tests
+├── urlOracle/            URL oracle template, guide, and tests
+├── escrowDelivery/       delivery-settled escrow template, guide, and tests
+├── englishAuction/       English auction template, guide, and tests
+├── dutchAuction/         Dutch auction template, guide, and tests
+├── counterpartyBridge/   Counterparty bridge template, guide, and tests
 ├── patterns/             reusable building blocks (access control, safe-transfer, ...)
+├── lib/                  policy generator and shared library code
 ├── SECURITY.md           private vulnerability disclosure
 └── package.json          scripts + dependencies
 ```
@@ -41,7 +52,7 @@ xchain-contracts/
 ### First-time install
 
 ```bash
-git clone https://github.com/XChain-platform/xchain-contracts.git
+git clone https://github.com/XChain-Platform/xchain-contracts.git
 cd xchain-contracts
 npm install
 ```
@@ -111,7 +122,7 @@ CI is the full `npm test` + `npm run lint` gate. Before opening a PR:
 2. Make sure `git status` is clean apart from intended changes (no `node_modules/`, no editor leftovers).
 3. Open the PR with a clear title and a description of what changed and why.
 
-For non-security bugs, open an issue at <https://github.com/XChain-platform/xchain-contracts/issues/new>. For security bugs, see [`SECURITY.md`](./SECURITY.md).
+For non-security bugs, open an issue at <https://github.com/XChain-Platform/xchain-contracts/issues/new>. For security bugs, see [`SECURITY.md`](./SECURITY.md).
 
 ---
 
