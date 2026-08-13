@@ -23,6 +23,7 @@
     "mocha": "^11.7.5"
   },
   "scripts": {
+    "ci": "node bin/ci-preflight.js && npm test && npm run lint",
     "lint": "node bin/xchain-contracts.js lint",
     "scaffold": "node bin/xchain-contracts.js scaffold",
     "list": "node bin/xchain-contracts.js list",

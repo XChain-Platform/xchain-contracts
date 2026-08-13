@@ -1,0 +1,79 @@
+# CI for xchain-contracts.
+#
+# Deliberately NOT the slim shared-workflow caller every other npm repo uses.
+# The shared definition checks out one repo and runs `npm ci && npm run ci`,
+# which cannot work here for two reasons this repo does not share with the rest:
+#
+#   1. This package depends on `xchain-vm` as `file:../xchain-vm`, so it needs a
+#      SIBLING checkout laid out beside it. `npm ci` in a lone checkout still
+#      SUCCEEDS - it just leaves a dangling symlink - so the failure would not
+#      surface until a require blew up mid-suite.
+#   2. The template suites load xchain-vm's own e2e harness, which needs
+#      xchain-vm's dependencies installed too (isolated-vm is a native build).
+#
+# Both are why this repo had no CI at all before the develop/master adoption,
+# and why it gets a bespoke workflow rather than being wedged into the shared one.
+name: CI
+
+on:
+  push:
+    # develop is where all work lands; master only ever receives release PRs.
+    # Both run the gate: develop so a lane push is verified as it lands, master
+    # so the merge commit a release tag points at has its own green run.
+    branches: [master, develop]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  # Protected branches (master, develop) group per COMMIT and are never
+  # cancelled; everything else groups per ref and supersedes freely. Matches the
+  # rest of the platform: a run evicted while queued can never supply the green
+  # verdict a release freeze reads off a specific commit.
+  group: ci-${{ github.ref }}-${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop') && github.sha || 'ref' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/develop' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The sibling layout the suites expect: they resolve the harness at
+      # `<workspace>/xchain-vm`, i.e. one level ABOVE this repo's checkout.
+      - name: Check out xchain-contracts
+        uses: actions/checkout@v4
+        with:
+          path: xchain-contracts
+
+      # The canonical repo is private pre-launch, so this uses a read-only
+      # deploy key; drop the ssh-key line when the repos flip public at launch.
+      - name: Check out the xchain-vm sibling
+        uses: actions/checkout@v4
+        with:
+          repository: XChain-Platform/xchain-vm
+          ssh-key: ${{ secrets.XCHAIN_VM_DEPLOY_KEY }}
+          path: xchain-vm
+
+      # Node 22 exactly. isolated-vm 5.0.4 is V8-ABI-specific and will not build
+      # on 24, and a VM that fails to load makes these suites SKIP rather than
+      # fail (see bin/ci-preflight.js).
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install xchain-vm dependencies (native isolated-vm build)
+        working-directory: xchain-vm
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Install dependencies
+        working-directory: xchain-contracts
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      # `ci` runs the preflight first, so a missing or unloadable harness fails
+      # the job instead of quietly skipping the 235 tests that need it.
+      - name: Run test gate
+        working-directory: xchain-contracts
+        run: npm run ci
