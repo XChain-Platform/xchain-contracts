@@ -52,6 +52,11 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
         h.seedBalance(MAKER, 'XCHAIN', '1000000');
         h.seedBalance(MAKER, TICK, '100');
         h.seedBalance(TAKER, TICK, '100');
+        // Register decimals so the ledger re-rounds emissions the way the real
+        // indexer does at write time, and so getTokenInfo (which refundBoth's
+        // grid-flooring reads) resolves. A tick a contract actually holds always
+        // carries token info on a real node.
+        h.ledger.setTokenDecimals(TICK, 8);
         await h.deploy({
             code: CODE, deployer: MAKER, contractAddress: ADDR,
             params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(T), String(window || 5)]
@@ -188,6 +193,39 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             assertBalance(h.ledger, TAKER, TICK, '100');
             assertContractState(h.ledger, ADDR, 'status', 'VOID');
         });
+
+        it('half-ulp off-grid stake still voids: both refund legs land on the tick grid', async function () {
+            // A stake exactly half a base unit off the tick grid used to wedge
+            // the PUSH and VOID paths permanently. refundBoth() emitted the raw
+            // 0.000000015 to the maker and the complementary 0.000000025 to the
+            // taker; the ledger re-rounds both UP at write time (half-up), so the
+            // pair moved one base unit more than custody held, the taker's SEND
+            // threw, and every settle()/reclaim() retry reverted with it.
+            // Flooring the maker leg puts both legs on-grid, so the re-round is
+            // a numeric no-op and the sub-unit residue rides the taker leg.
+            const ODD = '0.000000015';
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '1');
+            h.seedBalance(TAKER, TICK, '1');
+            h.ledger.setTokenDecimals(TICK, 8);
+            await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, ODD, String(T), '3']
+            });
+            assertSuccess(await depositAnd(MAKER, 'fund', '0.00000002'));
+            assertSuccess(await depositAnd(TAKER, 'accept', '0.00000002'));
+            publishRounds({ 2: { ts: T - 100, price: '65000' } }); // stuck before T
+
+            h.mineBlock(); h.mineBlock(); h.mineBlock();
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: TAKER }));
+
+            // Legs sum to exactly what was held: 0.00000001 + 0.00000003.
+            assertBalance(h.ledger, MAKER, TICK, '0.99999999');
+            assertBalance(h.ledger, TAKER, TICK, '1.00000001');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+            assertContractState(h.ledger, ADDR, 'status', 'VOID');
+        });
     });
 
     describe('attacks we considered', function () {
@@ -208,6 +246,28 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
                 'settle() instead');
             assertSuccess(await settleBy(TAKER));
             assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
+        it('a scan read without round metadata fails loud instead of being skipped as a gap', async function () {
+            // Shape drift, not a gap: an accessor whose getPrice returns the
+            // full object but whose getPriceAtRound hands back a bare price
+            // string. normalize() gives that read timestamp NaN, `NaN >= T` is
+            // false, and the pre-fix scan stepped over the DECIDING round
+            // exactly like a skipped one - the cursor advanced past it and a
+            // later round would have settled the bet. latestRound() refuses
+            // that shape; the scan must refuse it identically.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+
+            // Round 2 is the deciding round (ts >= T) but arrives bare; the
+            // latest-round signal stays a well-formed object so latestRound()
+            // passes and the scan is actually entered.
+            h.ledger.seedOracle(PAIR, { price: '61000', roundNumber: 2, timestamp: T + 10 }, 0, { 2: '61000' });
+
+            assertReverted(await settleBy(STRANGER), 'lacks round metadata');
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+            assertContractBalance(h.ledger, ADDR, TICK, '200');
         });
 
         it('double-settle is impossible: the status guard blocks any second payout', async function () {
@@ -241,6 +301,42 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             assert.strictEqual(past.success, false, 'settleTime in the past should revert in initialize');
             const side = await deployWith([MAKER, PAIR, STRIKE, 'HIGHER', TICK, STAKE, String(T), '5']);
             assert.strictEqual(side.success, false, 'side=HIGHER should revert in initialize');
+        });
+
+        // Notation gate. `amount` is raw maker-supplied constructor text and
+        // math.gt(amount,'0') accepts every spelling mathjs parses, while
+        // refundBoth()'s floorToDecimals is string surgery that assumes fixed
+        // notation. Two proven failures if these reach state:
+        //   '1.5e-8'       the floor no-ops (fraction '5e-8' is 4 chars, under the
+        //                  8-decimal grid), the off-grid stake is emitted raw, the
+        //                  indexer re-rounds both legs UP past custody and the
+        //                  PUSH/VOID refund wedges permanently with funds stranded.
+        //   '1.23456789e2' the floor CORRUPTS, returning '1.23456789' for a value of
+        //                  123.456789: the maker is refunded 1% of their stake and
+        //                  the remainder silently rides the taker leg. success=true,
+        //                  no revert. Theft, not a wedge.
+        // Deploy-time rejection is the guard; the half-ulp test above covers the
+        // other half (legitimate fixed notation that is merely off the tick grid).
+        it('rejects every non-fixed-notation spelling of stake and strike', async function () {
+            const BAD = ['1.5e-8', '0.15e-7', '1.5E-8', '1e-8', '1.23456789e2',
+                         '0x10', '0b101', '0o17', '1_000', '+1.5', '.5', '5.',
+                         'Infinity', 'NaN', '1.2.3'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, v, String(T), '5'])).success, false,
+                    `stake ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, v, 'OVER', TICK, STAKE, String(T), '5'])).success, false,
+                    `strike ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('still accepts ordinary fixed-notation terms, trailing zeros included', async function () {
+            for (const v of ['100', '0.5', '60000.00', '0.000000015', '999999999999']) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, v, String(T), '5'])).success, true,
+                    `stake ${JSON.stringify(v)} must deploy`);
+            }
         });
     });
 });

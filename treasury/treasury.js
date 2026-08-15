@@ -257,8 +257,11 @@ module.exports = {
 
         // Floor the payout onto the tick's decimal grid before both the custody
         // check and the emission (amm/vesting/crowdsale do the same): the indexer
-        // half-even re-normalises every emitted amount to its tick's decimals at
-        // ledger-write time, so an off-grid rec.amount could round UP past what the
+        // HALF-UP re-normalises every emitted amount to its tick's decimals at
+        // ledger-write time (its bcmath rounds half-up, NOT half-even: the mode
+        // is stated in xchain-indexer/src/xchainPrice.js and pinned by test,
+        // because a mis-read mode at the .5 boundary is a consensus fork), so an
+        // off-grid rec.amount could round UP past what the
         // treasury holds, revert every retry, and wedge the poll-approved transfer
         // in ARMED until the execution window expires. Flooring makes the ledger
         // write a numeric no-op; the on-grid figure actually paid is recorded on

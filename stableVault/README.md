@@ -94,8 +94,9 @@ of truth; caller-supplied funding amounts are never trusted.
 - **Rounding shortfall drains other vaults.** Every amount-bearing method
   (`liquidate()` seize, `withdraw()` and `borrow()` caller amounts) is floored
   to the relevant tick's decimal grid *before* the books are written
-  (`floorToDecimals`). The indexer re-rounds every emitted amount half-even
-  at ledger-write time; an off-grid amount rounded UP on the wire would debit
+  (`floorToDecimals`). The indexer re-rounds every emitted amount HALF-UP
+  at ledger-write time (its bcmath is half-up, not banker's/half-even); an
+  off-grid amount rounded UP on the wire would debit
   custody more than the books, a pooled shortfall the last full-balance
   withdrawal would eat. Flooring makes the indexer's normalization a numeric
   no-op, so custody == books holds exactly on all three paths.

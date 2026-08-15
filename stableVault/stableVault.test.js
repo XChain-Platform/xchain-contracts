@@ -176,7 +176,7 @@ const MAXAGE = '10';        // oracle freshness window, blocks
             // 0-decimal collateral with a price that puts the raw seizure
             // (2.75) off the decimal grid. Before the floorToDecimals fix the
             // books recorded 2.75 while the indexer rounded the wire amount
-            // half-even to 3, debiting custody 0.25 more than books and
+            // HALF-UP to 3, debiting custody 0.25 more than books and
             // leaving a pooled shortfall other vaults would eat.
             const COLL0 = 'IRON';
             h = new E2EHarness(XChainVM);

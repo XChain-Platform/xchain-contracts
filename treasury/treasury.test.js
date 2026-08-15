@@ -263,7 +263,7 @@ function passedPoll() {
 
         it('an off-grid amount is floored, pays out, and records the paid figure', async function () {
             // 9 fraction digits on an 8dp tick: unfloored, the indexer would
-            // half-even round the send UP to 100.12345679 > custody and wedge
+            // HALF-UP round the send UP to 100.12345679 > custody and wedge
             // the proposal in ARMED for the whole window.
             await armAmount('100.123456789');
             h.deposit(HOLDER, ADDR, PAY, '100.12345678');   // exactly the floored figure

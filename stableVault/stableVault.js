@@ -251,7 +251,10 @@ module.exports = {
         );
         // Quantise the seizure DOWN to the collateral tick's decimal grid
         // BEFORE the state writes and the emission. The indexer re-rounds every
-        // emitted amount to the tick's decimals half-even at ledger-write time;
+        // emitted amount to the tick's decimals HALF-UP at ledger-write time
+        // (the indexer's bcmath rounds half-up, NOT half-even: the mode is
+        // stated in xchain-indexer/src/xchainPrice.js and pinned by test,
+        // because a mis-read mode at the .5 boundary is a consensus fork);
         // an off-grid seize written exactly into trackedColl/vault books but
         // rounded UP on the wire would debit custody more than books, opening a
         // pooled shortfall other vaults would eat (bad-debt DoS on the last

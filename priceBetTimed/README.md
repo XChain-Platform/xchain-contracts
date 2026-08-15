@@ -63,8 +63,9 @@ discard the cursor advance (state writes only commit on success).
 All of the sibling [priceBet](../priceBet/README.md) protections apply
 (balance-verified stakes, no self-match, terminal-status-before-emit guard,
 `reclaim()` unusable once a deciding round exists, over-deposit drains on
-refund, deferred-emission reentrancy model). The timestamp translation adds
-its own surface:
+refund, grid-floored refund legs, fixed-notation-only `amount` and `strike`
+enforced at deploy, deferred-emission reentrancy model). The timestamp
+translation adds its own surface:
 
 - **Spot-price timing discretion.** Settling on `getPrice()` would let the
   first caller pick the moment. The deciding round is *the first finalized
