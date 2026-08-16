@@ -1,0 +1,17 @@
+# Repos this suite needs checked out BESIDE it on the CI venue.
+#
+# Declaring a sibling here is what makes it actually resolve. bin/ci-preflight.js
+# requires the sibling checkout to exist WITH its dependencies installed before
+# any suite runs, and fails loud (not skip) if it cannot load, because every
+# template suite here degrades to describe.skip when it cannot require the
+# harness, and a run that skips 235 of 287 tests and exits 0 reports the same
+# green as a run that executed them.
+#
+# ci-dispatch.sh ships each of these at its origin/master (falling back to local
+# HEAD) and REFUSES the push if one is not a checkout beside this repo, so a
+# declared sibling can never be silently absent.
+
+# The e2e harness these suites load: contract endpoints, isolate execution,
+# and the assertions helper bin/ci-preflight.js proves loadable before CI runs
+# a single test.
+xchain-vm
