@@ -196,7 +196,7 @@ describe('Template: amm abi', function () {
     });
 
     describe('precision reconciliation (finding: reserves/totalShares drift)', function () {
-        // Half-even normalization to d decimals == what the indexer stores on the ledger.
+        // Half-up normalization to d decimals == what the indexer stores on the ledger.
         const norm = (v, d) => math.format(bn(v), { notation: 'fixed', precision: d });
         // Fractional-digit count; a value with <= d fraction digits sits on the tick grid,
         // so the indexer's write-time re-normalization is a numeric no-op.

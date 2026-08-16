@@ -53,7 +53,7 @@
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at ledger-
-// write time (mathjs half-even round), which can round a computed quantity UP
+// write time (mathjs half-up round), which can round a computed quantity UP
 // past what the contract actually holds. Flooring the asking price onto
 // bidTick's grid before using it as both the "required minimum" and the
 // "amount sent to the seller" keeps both checks and both emissions exact. Same

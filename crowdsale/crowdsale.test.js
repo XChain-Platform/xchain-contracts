@@ -145,10 +145,10 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         });
     });
 
-    describe('precision (indexer half-even round-up over-issuance)', function () {
+    describe('precision (indexer half-up round-up over-issuance)', function () {
         it('floors the claim mint onto the saleTick decimal grid instead of over-issuing', async function () {
             // saleTick has 0 decimals; a contribution whose paid*rate lands on .5 would
-            // half-even round UP at ledger-write (101.5 -> 102), minting more than paid*rate
+            // half-up round UP at ledger-write (101.5 -> 102), minting more than paid*rate
             // and eventually past maxMint. The contract must EMIT the floored '101'.
             h = new E2EHarness(XChainVM);
             for (const a of [OWNER, B1]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
@@ -162,7 +162,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
 
             const c = await call('claim', B1);
             assertSuccess(c);
-            // Floored DOWN to the 0dp grid -> '101', never the half-even round-up '102'
+            // Floored DOWN to the 0dp grid -> '101', never the half-up round-up '102'
             // (and never the unfloored '101.5' the indexer would re-normalise upward).
             assertEmittedActions(c, [{ action: 'MINT', params: { tick: SALE, quantity: '101', destination: B1 } }]);
         });

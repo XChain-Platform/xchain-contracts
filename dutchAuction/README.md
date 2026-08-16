@@ -86,7 +86,7 @@ await sdk.batch()
   returns).
 - **Rounding gifting free value.** The asking price is floored onto `bidTick`'s
   decimal grid (`floorToDecimals`) before it's used as both the required
-  minimum and the emitted amounts, so the indexer's own half-even
+  minimum and the emitted amounts, so the indexer's own half-up
   re-normalization can never round the seller's payout - or the required
   minimum - up past what was actually deposited.
 - **Unauthorized fund/cancel.** Both require `getSourceAddress() === seller`.

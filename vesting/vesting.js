@@ -46,7 +46,7 @@
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at
-// ledger-write time (mathjs half-even round), which can round a computed
+// ledger-write time (mathjs half-up round), which can round a computed
 // quantity UP past what the contract actually holds; on the final tranche that
 // over-send exceeds custody, the whole EXECUTE reverts, and the remainder is
 // stranded. Same helper and rationale as amm.js:floorToDecimals; pure exact
@@ -180,7 +180,7 @@ module.exports = {
         var vested   = vestedAmount(xchain);
         var total    = xchain.state.get('total');
         // Floor the reclaimed payout onto the tick's decimal grid BEFORE it is
-        // emitted (see floorToDecimals above): the indexer's half-even rounding
+        // emitted (see floorToDecimals above): the indexer's half-up rounding
         // could otherwise round it UP past custody and revert the revoke. Because
         // the beneficiary's frozen cap below is also reached through a floored
         // claim() payout, the sub-grid fraction left behind by this floor is
@@ -224,7 +224,7 @@ module.exports = {
 //     significant-digit precision. NOTE: this value is NOT on the tick's
 //     decimal grid (e.g. 2.666... on a 0-decimal tick); every payout derived
 //     from it is floored onto the grid at the emission sites (claim/revoke)
-//     so the ledger's half-even re-normalisation can never round a payout UP
+//     so the ledger's half-up re-normalisation can never round a payout UP
 //     past custody.
 // Once REVOKED, the stored `total` is the frozen vested cap, returned directly.
 function vestedAmount(xchain) {
