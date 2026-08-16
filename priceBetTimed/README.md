@@ -7,6 +7,50 @@ decided by the **first finalized oracle round whose consensus timestamp is
 at/after that instant**. Humans think in clock time, not round numbers; this
 template translates one into the other deterministically.
 
+## Deployer advisory: oracle stalls and the price freshness filter
+
+**Read this before deploying, and check it against any instance you already
+have live.** It describes a window in which the losing party can void a
+decided bet, on nodes that have not yet reached the oracle stale-round
+visibility activation height.
+
+Nodes apply a freshness filter to `getPrice()`: a finalized round whose
+consensus timestamp is older than the node's configured maximum price age (30
+minutes by default) is not served as a current price. Before the activation
+height the round is withheld **whole**, so `getPrice()` reports that no round
+exists while `getPriceAtRound()` still holds that very round. This template
+learns the newest round from `getPrice()`, so while an oracle stall outlasts
+the freshness window:
+
+- `settle()` reverts with `no oracle data yet`, even though the deciding round
+  is finalized and readable in history, and
+- `reclaim()` reads the same null as "no qualifying round ever arrived" and
+  voids the bet once `deadlineBlocks` have passed.
+
+Both stakes are returned, so nobody is robbed of principal, but the party who
+LOST the bet gets to erase the result. The guard that normally prevents this
+(`reclaim()` requires that no qualifying round exists) works exactly as
+documented whenever the oracle is live; the stall is what blinds it.
+
+At/after the activation height the node keeps the stale round with only its
+PRICE withheld (`{ price: null, roundNumber, timestamp }`). The guard then
+sees the round, refuses the void, and `settle()` decides the bet from
+immutable history, which the freshness filter never touched. **This template
+needs no change for that**: it already reads only the round number and
+timestamp from `getPrice()`.
+
+Until every node your instance depends on is past that height:
+
+- **Settle promptly.** A bet that is settled before its deadline cannot be
+  voided at all. The exposure needs all three of: the deadline passed, the
+  deciding round finalized, and the oracle tip older than the freshness
+  window.
+- **Size `deadlineBlocks` well above the freshness window.** 30 minutes is
+  roughly 3 BTC blocks; a deadline of a few blocks lets an ordinary stall
+  reach the void, while a deadline of hundreds does not.
+- **If a stall is in progress**, call `settle()` again as soon as the oracle
+  publishes a fresh round: the guard blocks `reclaim()` from that block on.
+
 ## How settlement stays deterministic
 
 There is no `getPriceAtBlock`/`getPriceAtTime` in the VM oracle API, and
@@ -106,7 +150,10 @@ translation adds its own surface:
 - **Dodging a loss via `reclaim()`.** The O(1) guard (latest round's
   timestamp < `settleTime`) means reclaim is only possible while *no*
   qualifying round exists anywhere; once one is finalized, `settle()` is the
-  only path.
+  only path. One case defeats the guard on nodes below the oracle stale-round
+  visibility activation height, because there the newest round is hidden from
+  `getPrice()` outright during a stall: see the deployer advisory at the top
+  of this file.
 
 ## Tests
 

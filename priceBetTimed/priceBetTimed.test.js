@@ -81,6 +81,22 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
         h.ledger.seedOracle(PAIR, top, 0, rounds);
     }
 
+    // Same history as publishRounds, but with what getPrice() reports about the
+    // TIP round overridden. Two shapes model the two sides of the indexer's
+    // stale-round visibility flag day, for a tip older than
+    // ORACLE_MAX_PRICE_AGE_SECONDS:
+    //   null                                  before it: the stale tip is
+    //                                         dropped from the getPrice() view
+    //                                         entirely, while getPriceAtRound()
+    //                                         keeps the very same round;
+    //   { price: null, roundNumber, timestamp,
+    //     stale: true }                       at/after it: the tip is kept with
+    //                                         its price withheld.
+    function publishRoundsWithTip(spec, tip) {
+        publishRounds(spec);
+        h.ledger.oraclePrices[PAIR].current = tip;
+    }
+
     async function settleBy(caller) {
         return h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: caller || STRANGER });
     }
@@ -246,6 +262,70 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
                 'settle() instead');
             assertSuccess(await settleBy(TAKER));
             assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
+        it('STALE ORACLE, pre-flag-day node: the loser voids a bet history already decided', async function () {
+            // Documents the exposure the ORACLE_STALE_ROUND_VISIBILITY flag day
+            // closes, and it is why an instance running against a node that has
+            // not crossed its height still needs a deadline long enough to
+            // outlast an oracle stall (see this template's README advisory).
+            // Pre-flag-day the indexer DROPS a tip round older than
+            // ORACLE_MAX_PRICE_AGE_SECONDS from the getPrice() view while
+            // getPriceAtRound() keeps it, so getPrice() denies the existence of
+            // the very round that decided the bet.
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock(); // past the deadline
+            // Round 2 decides against the OVER maker, but the tip is suppressed.
+            publishRoundsWithTip({ 2: { ts: T + 10, price: '59000' } }, null);
+
+            // The winner cannot settle: settle() needs the tip before it may
+            // walk the very history that holds the answer.
+            assertReverted(await settleBy(TAKER), 'no oracle data yet');
+            // ...and the LOSER's void is the only executable transition.
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: MAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'VOID');
+            assertBalance(h.ledger, TAKER, TICK, '100');   // the winner got their stake back, not the pot
+        });
+
+        it('STALE ORACLE, at/after the flag day: the withheld tip blocks the void and settle() pays the winner', async function () {
+            // Same stall, same decided bet, on a node at/after the activation
+            // height: the stale tip is kept with its PRICE withheld, so the
+            // round's identity and timestamp are readable while its stale value
+            // is not. That is all the O(1) void guard needs.
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock(); // past the deadline
+            publishRoundsWithTip({ 2: { ts: T + 10, price: '59000' } },
+                { price: null, roundNumber: 2, timestamp: T + 10, stale: true });
+
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: MAKER }),
+                'settle() instead');
+            // settle() reads the deciding PRICE from immutable history, which
+            // the freshness filter never touched.
+            assertSuccess(await settleBy(TAKER));
+            assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertContractState(h.ledger, ADDR, 'settledRound', '2');
+            assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
+        it('a withheld tip BEFORE settleTime still voids: the liveness hatch survives the flag day', async function () {
+            // The gate must not turn a genuine "the oracle never reached the
+            // settle time" stall into a wedged bet: the guard compares the
+            // withheld tip's TIMESTAMP, which is below settleTime here.
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock();
+            publishRoundsWithTip({ 2: { ts: T - 100, price: '65000' } },
+                { price: null, roundNumber: 2, timestamp: T - 100, stale: true });
+
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: TAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'VOID');
+            assertBalance(h.ledger, MAKER, TICK, '100');
+            assertBalance(h.ledger, TAKER, TICK, '100');
         });
 
         it('a scan read without round metadata fails loud instead of being skipped as a gap', async function () {
