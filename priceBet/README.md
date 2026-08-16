@@ -33,6 +33,17 @@ INIT --fund()--> OPEN --accept()--> MATCHED --settle()--> SETTLED | PUSH
 | `reclaim()` | maker or taker | Voids the bet if the round is still unpublished after `deadlineBlocks`; refunds both. |
 | `info()` | anyone | Read-only terms + status + winner. |
 
+### Constructor term validation
+
+`strike` and `amount` must be **plain fixed-notation decimals** (digits,
+at most one decimal point with digits on both sides). `settleRound` and
+`deadlineBlocks` must be canonical base-10 integers, in `[1, 1000000000]`
+and `[1, 1000000]` respectively. Both checks are shape checks, not value
+parses: `xchain.math` accepts exponential, hex and separator spellings of
+a number, and a radix-less `parseInt` silently re-measures `'1e2'` as `1`
+and `'0x10'` as `16`, so a maker who asked for a 100-block void window
+would have got a 1-block one and a matched bet voidable almost at once.
+
 ## Usage
 
 Fund and act atomically (there is no `msg.value` on XChain):

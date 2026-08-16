@@ -46,6 +46,16 @@ of truth; caller-supplied funding amounts are never trusted.
 | `liquidate(vaultOwner)` | anyone (BATCH after stable DEPOSIT ≥ debt) | Under-water vaults only; burns the debt, pays collateral + bonus. |
 | `vault(addr)` / `info()` | anyone | JSON views of a vault / the system. |
 
+`borrow(amount)` and `withdraw(amount)` require `amount` to be a **plain
+fixed-notation decimal** (digits, at most one decimal point with digits on
+both sides). It is a notation check, not a grid check: an on-grid value is
+not required, because both methods floor the amount onto the tick's decimal
+grid themselves. That flooring is exact string surgery which assumes fixed
+notation, and `math.gt(amount, '0')` filters nothing - fed `'1.5e-8'` the
+floor no-ops, the off-grid value reaches both the vault books and the wire,
+and the ledger's HALF-UP re-rounding moves half a base unit more than the
+books recorded, on every call.
+
 ## On-chain caveats (learned from the e2e run)
 
 - **Declare `maxSupply`** in the emitted ISSUE: an unset cap reads as 0 and

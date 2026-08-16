@@ -69,9 +69,36 @@
 // limitations" in the README for what that shared usage costs this design).
 var BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 
+// True only for a plain fixed-notation decimal: digits, with at most one decimal
+// point that has digits on both sides. Same shape check as
+// priceBet.js:requirePlainDecimal, but a PREDICATE rather than a require(), for
+// the reason spelled out at its call site in extractBurnSends.
+//
+// No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
+// this is a character walk.
+function isPlainDecimal(value) {
+    var s = String(value);
+    if (s.length === 0) return false;
+    var seenDot = false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            if (seenDot) return false;
+            if (i === 0 || i === s.length - 1) return false;
+            seenDot = true;
+        } else if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Quantise a computed amount DOWN to xchainTick's decimal grid before minting.
 // The indexer re-normalises every emitted amount to the tick's decimals at
-// ledger-write time (mathjs half-even round), which can round a computed
+// ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
+// NOT half-even, the mode is stated in xchain-indexer/src/xchainPrice.js and
+// pinned by test, because a mis-read mode at the .5 boundary is a consensus
+// fork), which can round a computed
 // quantity UP past maxSupply and revert the whole EXECUTE (see crowdsale.js
 // for the same footgun in more detail). Pure exact string surgery on the
 // fixed-notation decimal, not mathjs floor/mod (which rounds to significant
@@ -106,9 +133,28 @@ function extractBurnSends(payload, asset, source) {
     var out = [];
     for (var i = 0; i < parsed.data.length; i++) {
         var row = parsed.data[i];
+        // `quantity` is the ONE field of this third-party payload that gets used as
+        // a number, and onClaim() hands it straight to floorToDecimals, which is
+        // string surgery that PRESUPPOSES fixed notation. Every other template
+        // feeds that helper a value xchain.math computed (always fixed notation);
+        // here it is raw text an API we do not control chose the spelling of, and
+        // a JSON number serialized in exponential form is a legal spelling of the
+        // same value. Fed '1.23456789e2' the floor does not no-op, it CORRUPTS:
+        // it returns '1.23456789' for a value of 123.456789, so the claimer is
+        // credited 1% of what they burned, with no user error involved and no
+        // revert to notice.
+        //
+        // Non-fixed rows are DROPPED here rather than reverting onClaim(), because
+        // a revert would roll back the `pending:` delete too and requestClaim()
+        // refuses a second check while one is pending: one badly-spelled row from
+        // a third party would wedge that address out of the bridge permanently. A
+        // dropped row leaves its tx_hash uncredited AND unmarked, so the burn is
+        // still claimable on a later, well-formed response. Same fail-soft
+        // contract as the malformed-JSON path above.
         if (row && row.asset === asset && row.source === source && row.status === 'valid'
             && typeof row.tx_hash === 'string' && row.tx_hash.length > 0
-            && row.quantity !== undefined && row.quantity !== null) {
+            && row.quantity !== undefined && row.quantity !== null
+            && isPlainDecimal(row.quantity)) {
             out.push({ txHash: row.tx_hash, quantity: String(row.quantity) });
         }
     }

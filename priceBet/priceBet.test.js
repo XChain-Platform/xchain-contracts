@@ -340,5 +340,38 @@ const ROUND    = 7;
                     `stake ${JSON.stringify(v)} must deploy`);
             }
         });
+
+        // Integer-shape gate on settleRound and deadlineBlocks. Both are raw
+        // maker text, and a radix-less parseInt MEASURES them as something else
+        // entirely: '1e2' is 1, '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5.
+        // The old `parseInt(x) > 0` check then passes on the mis-measured value
+        // and initialize() stores it, so a maker asking for a 100-block void
+        // window via '1e2' silently gets a 1-block one and their matched bet is
+        // reclaimable almost immediately.
+        it('rejects integer params a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e2', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, v, '5'])).success, false,
+                    `settleRound ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', v])).success, false,
+                    `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects integer params outside their range and stores accepted ones verbatim', async function () {
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', '0'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '-7', '5'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '1000000001', '5'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', '1000001'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '1000000000', '1000000'])).success, true);
+
+            // '100' means 100 blocks in state, not the 1 a parseInt of '1e2' gave.
+            await deployBet('OVER', 100);
+            assertContractState(h.ledger, ADDR, 'window', '100');
+            assertContractState(h.ledger, ADDR, 'settleRound', String(ROUND));
+        });
     });
 });

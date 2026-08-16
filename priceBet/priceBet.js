@@ -50,6 +50,16 @@
 //     after the match, either party can void the bet and refund both sides.
 // ---------------------------------------------------------------------------
 
+// Upper bounds for the two integer constructor params. They are sanity ceilings,
+// not protocol limits: both values are compared against, or added to, plain JS
+// integers, so the point is to keep a fat-fingered constructor term inside the
+// exactly-representable integer range rather than to constrain real bets.
+// MAX_ROUND is ~1e9 oracle rounds (millennia at any plausible cadence);
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling patterns/validation.js uses for a block window in its example.
+var MAX_ROUND = 1000000000;
+var MAX_WINDOW_BLOCKS = 1000000;
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -96,11 +106,17 @@ module.exports = {
         // floorToDecimals silently corrupts non-fixed input. See requirePlainDecimal.
         requirePlainDecimal(xchain, amount, 'amount');
 
-        // parseInt(...) > 0 rejects NaN, zero, and negatives in one check.
-        var round = parseInt(settleRound);
-        xchain.require(round > 0, 'settleRound must be a positive integer');
-        var window = parseInt(deadlineBlocks);
-        xchain.require(window > 0, 'deadlineBlocks must be a positive integer');
+        // Shape-check the integers, do NOT parseInt-then-range-check them. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e2' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7), and both of these
+        // params are raw maker-supplied constructor text measured in the same
+        // deploy that stores them: a maker asking for a 100-block void window via
+        // '1e2' would silently get a 1-block one, and their bet would be voidable
+        // essentially immediately after it matched. See requireIntInRange.
+        requireIntInRange(xchain, settleRound, 1, MAX_ROUND, 'settleRound');
+        requireIntInRange(xchain, deadlineBlocks, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
+        var round  = parseInt(settleRound, 10);
+        var window = parseInt(deadlineBlocks, 10);
 
         xchain.state.set('maker', maker);
         xchain.state.set('coinPair', coinPair);
@@ -337,6 +353,29 @@ function requirePlainDecimal(xchain, value, label) {
                 'no exponent / sign / radix prefix (got "' + s + '")');
         }
     }
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts non-integers a range check then blesses ('1e2' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a value the
+// check never truly approved and the maker would get terms they never asked for.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk, same constraint that shaped requirePlainDecimal above.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }
 
 // Quantise a quantity DOWN onto a tick's decimal grid. Pure exact string surgery

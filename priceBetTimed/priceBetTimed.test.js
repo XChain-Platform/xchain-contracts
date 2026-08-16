@@ -338,5 +338,42 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
                     `stake ${JSON.stringify(v)} must deploy`);
             }
         });
+
+        // Integer-shape gate on settleTime and deadlineBlocks. Both are raw maker
+        // text, and a radix-less parseInt MEASURES them as something else entirely:
+        // '1e2' is 1, '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5. The old
+        // `parseInt(x) > 0` check then passes on the mis-measured value, so a maker
+        // asking for a 100-block void window via '1e2' silently got a 1-block one.
+        // A settleTime spelled that way collapsed to a 1970 timestamp, which the
+        // in-the-future check rejected with a message about the wrong problem.
+        it('rejects integer params a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e2', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, v, '5'])).success, false,
+                    `settleTime ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), v])).success, false,
+                    `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+            // Exponential settle times are caught by the SHAPE check now, not by
+            // the future check: '1.7e9' is a real 2023 timestamp spelled the way
+            // parseInt reads as 1.
+            assert.strictEqual(
+                (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '1.7e9', '5'])).success, false);
+        });
+
+        it('rejects integer params outside their range and stores accepted ones verbatim', async function () {
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), '0'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), '1000001'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '253402300800', '5'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), '1000000'])).success, true);
+
+            // '100' means 100 blocks in state, not the 1 a parseInt of '1e2' gave.
+            await deployBet('OVER', 100);
+            assertContractState(h.ledger, ADDR, 'window', '100');
+            assertContractState(h.ledger, ADDR, 'settleTime', String(T));
+        });
     });
 });

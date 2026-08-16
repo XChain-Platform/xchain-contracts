@@ -57,6 +57,18 @@
 // to priceBet; see that template's header for the full rationale.
 // ---------------------------------------------------------------------------
 
+// Upper bounds for the two integer constructor params. They are sanity ceilings,
+// not protocol limits: both values are compared against, or added to, plain JS
+// integers, so the point is to keep a fat-fingered constructor term inside the
+// exactly-representable integer range rather than to constrain real bets.
+// MAX_SETTLE_TIME is 253402300799, the last second of year 9999 in unix seconds:
+// well past any 32-bit horizon (nothing here truncates to int32) and still small
+// enough that the value is unmistakably a seconds-denominated timestamp rather
+// than milliseconds. MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute
+// blocks), the same ceiling patterns/validation.js uses in its example.
+var MAX_SETTLE_TIME = 253402300799;
+var MAX_WINDOW_BLOCKS = 1000000;
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -98,11 +110,20 @@ module.exports = {
         // floorToDecimals silently corrupts non-fixed input. See requirePlainDecimal.
         requirePlainDecimal(xchain, amount, 'amount');
 
-        var when = parseInt(settleTime);
-        xchain.require(when > 0, 'settleTime must be a positive unix timestamp');
+        // Shape-check the integers, do NOT parseInt-then-range-check them. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e2' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7), and both of these
+        // params are raw maker-supplied constructor text measured in the same
+        // deploy that stores them: a maker asking for a 100-block void window via
+        // '1e2' would silently get a 1-block one, and a settleTime spelled in
+        // exponential form would collapse to a timestamp in 1970 (which the
+        // in-the-future check below then rejects with a message about the wrong
+        // problem). See requireIntInRange.
+        requireIntInRange(xchain, settleTime, 1, MAX_SETTLE_TIME, 'settleTime');
+        requireIntInRange(xchain, deadlineBlocks, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
+        var when = parseInt(settleTime, 10);
         xchain.require(when > xchain.getBlockTimestamp(), 'settleTime must be in the future');
-        var window = parseInt(deadlineBlocks);
-        xchain.require(window > 0, 'deadlineBlocks must be a positive integer');
+        var window = parseInt(deadlineBlocks, 10);
 
         xchain.state.set('maker', maker);
         xchain.state.set('coinPair', coinPair);
@@ -400,6 +421,29 @@ function requirePlainDecimal(xchain, value, label) {
                 'no exponent / sign / radix prefix (got "' + s + '")');
         }
     }
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts non-integers a range check then blesses ('1e2' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a value the
+// check never truly approved and the maker would get terms they never asked for.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk, same constraint that shaped requirePlainDecimal above.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }
 
 // Quantise a quantity DOWN onto a tick's decimal grid. Pure exact string surgery

@@ -53,6 +53,18 @@ has not already been credited, and mints the total in one shot.
 `quantity` is already a normalized decimal string (no separate
 raw-integer field to divide by divisibility).
 
+A row whose `quantity` is not a **plain fixed-notation decimal** (digits,
+at most one decimal point with digits on both sides) is dropped rather
+than credited. The contract quantises each amount onto the tick's decimal
+grid with exact string surgery, which assumes fixed notation: fed an
+exponential spelling such as `"1.23456789e2"` that surgery would return
+`1.23456789` for a value of `123.456789` and under-credit the claimer by
+99% with no error anywhere. A dropped row leaves its `tx_hash` both
+uncredited and unmarked, so the burn is still claimable from a later,
+well-formed response; the callback itself still succeeds, because a revert
+would leave the address's `pending:` flag set and lock it out of the
+bridge permanently.
+
 **Why only 15, not tokenscan's own page-size ceiling.** This is not a
 generous-headroom choice - confirmed on a real e2e run against the live
 endpoint (2026-08-08): the indexer's on-chain attestation-response payload
@@ -163,7 +175,8 @@ bridge multiple assets, deploy one instance per asset.
 - **Rounding a mint above the cap.** Claimed amounts are floored onto
   `xchainTick`'s decimal grid before minting (same footgun and fix as
   `crowdsale.claim()`): the indexer re-normalises every emitted quantity to
-  the tick's decimals with half-even rounding, which can round UP and trip
+  the tick's decimals with half-up rounding (its bcmath is half-up, not
+  banker's/half-even), which can round UP and trip
   the cap on an otherwise-honest claim.
 - **A malformed or schema-drifted API body.** `onClaim` never throws on a
   parse failure; it treats an unparseable or field-missing body the same

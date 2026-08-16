@@ -288,6 +288,71 @@ const MAXAGE = '10';        // oracle freshness window, blocks
         });
     });
 
+    // Notation gate on the per-call amounts. Unlike liquidate()'s seizure, which
+    // xchain.math computes (and the VM always formats in fixed notation),
+    // borrow()/withdraw() take `amount` as raw caller text, and
+    // math.gt(amount, '0') accepts every spelling mathjs parses. floorToDecimals
+    // is string surgery that assumes fixed notation, so fed '1.5e-8' it NO-OPS
+    // (the fraction '5e-8' is 4 chars, under the 8-decimal grid, so the
+    // already-on-grid early return fires): the raw off-grid value reaches the
+    // vault books while the indexer re-rounds the wire amount HALF-UP to
+    // 0.00000002. Half a base unit of pooled custody-vs-books shortfall, on
+    // EVERY call rather than once at deploy.
+    describe('non-fixed-notation amounts are rejected at the call seam', function () {
+        const BAD = ['1.5e-8', '0.15e-7', '1.5E-8', '1e-8', '1.23456789e2',
+                     '0x10', '0b101', '0o17', '1_000', '+1.5', '.5', '5.',
+                     'Infinity', 'NaN', '1.2.3'];
+
+        it('borrow rejects every non-fixed-notation spelling of amount', async function () {
+            await deployVault();
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            for (const v of BAD) {
+                const r = await borrow(ALICE, v);
+                assert.strictEqual(r.success, false, `borrow(${JSON.stringify(v)}) must not succeed`);
+                assert.strictEqual(r.emittedActions.length, 0,
+                    `borrow(${JSON.stringify(v)}) must emit nothing`);
+            }
+            // Nothing was booked by any of them.
+            assertContractState(h.ledger, ADDR, 'totalDebt', '0');
+            assertBalance(h.ledger, ALICE, STABLE, '0');
+            // And the plain-decimal gate, not some incidental mathjs throw, is what
+            // stopped the one spelling that used to slip all the way through.
+            assertReverted(await borrow(ALICE, '1.5e-8'), 'plain decimal');
+        });
+
+        it('withdraw rejects every non-fixed-notation spelling of amount', async function () {
+            await deployVault();
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            for (const v of BAD) {
+                const r = await withdraw(ALICE, v);
+                assert.strictEqual(r.success, false, `withdraw(${JSON.stringify(v)}) must not succeed`);
+                assert.strictEqual(r.emittedActions.length, 0,
+                    `withdraw(${JSON.stringify(v)}) must emit nothing`);
+            }
+            assertContractState(h.ledger, ADDR, 'trackedColl', '3');
+            assertContractState(h.ledger, ADDR, 'v:' + ALICE + ':coll', '3');
+            assertReverted(await withdraw(ALICE, '1.5e-8'), 'plain decimal');
+        });
+
+        // The gate is notation only. A legitimately-spelled amount that is merely
+        // off the tick's decimal grid must still go through and be FLOORED, or
+        // the fix would have replaced a silent shortfall with a lockout.
+        it('still accepts ordinary fixed notation, off-grid values included', async function () {
+            await deployVault();
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            for (const v of ['1', '0.5', '100.00', '0.000000015']) {
+                assertSuccess(await borrow(ALICE, v), `borrow(${JSON.stringify(v)}) must succeed`);
+            }
+            // 1 + 0.5 + 100 + floor(0.000000015) = 101.50000001, all on the grid.
+            assertContractState(h.ledger, ADDR, 'totalDebt', '101.50000001');
+            assertBalance(h.ledger, ALICE, STABLE, '101.50000001');
+            assertContractBalance(h.ledger, ADDR, STABLE, '0');
+        });
+    });
+
     describe('deploy-time validation', function () {
         async function deployWith(params) {
             const bad = new E2EHarness(XChainVM);

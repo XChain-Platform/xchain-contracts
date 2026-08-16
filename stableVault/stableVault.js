@@ -130,6 +130,12 @@ module.exports = {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Notation gate, and it must come BEFORE the floor below. `amount` is raw
+        // per-call caller text, so unlike liquidate()'s mathjs-computed seizure it
+        // is not guaranteed fixed-notation, and math.gt() is no filter at all (see
+        // requirePlainDecimal). Fed '1.5e-8' the floor silently NO-OPS and the
+        // off-grid debt reaches the books and the wire anyway.
+        requirePlainDecimal(xchain, amount, 'amount');
         // Quantise onto the stable tick's grid BEFORE the ratio check, the debt
         // book writes, and the emissions. The indexer ROUNDS emission amounts to
         // the tick's decimals on the wire; an off-grid `amount` would book raw
@@ -191,6 +197,11 @@ module.exports = {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Notation gate before the floor, same reason as borrow(): raw caller text
+        // spelled '1.5e-8' walks straight through math.gt AND through the floor
+        // (its fraction is 4 chars, under the grid), so trackedColl would be
+        // debited the raw value while custody moves the HALF-UP rounded one.
+        requirePlainDecimal(xchain, amount, 'amount');
         // Quantise onto the collateral tick's grid BEFORE the ratio check, the
         // book writes, and the emission. The indexer ROUNDS the emitted quantity
         // to the tick's decimals; an off-grid `amount` would debit trackedColl
@@ -349,6 +360,50 @@ function freshPrice(xchain) {
     price = String(price);
     xchain.require(xchain.math.gt(price, '0'), 'oracle price must be positive');
     return price;
+}
+
+// Reject any spelling of a numeric term that is not a plain fixed-notation
+// decimal: digits, with at most one decimal point that has digits on both sides.
+// Same helper and rationale as priceBet.js:requirePlainDecimal.
+//
+// floorToDecimals below is string surgery that PRESUPPOSES fixed notation. Every
+// value liquidate() feeds it was computed by xchain.math, and the VM formats every
+// math result in fixed notation (xchain-vm/src/math.js toFixed), so the
+// precondition is free there. borrow()/withdraw() are different: their `amount` is
+// raw per-call caller text, and `xchain.math.gt(x, '0')` accepts every spelling
+// mathjs parses -- exponential ('1.5e-8'), radix prefixes ('0x10'), numeric
+// separators ('1_000'), a leading '+', a bare leading dot, 'Infinity'. Fed
+// '1.5e-8' the floor no-ops (the fraction '5e-8' is 4 chars, under an 8-decimal
+// grid, so the already-on-grid early return fires), the raw off-grid value is
+// written to the vault books and emitted, and the indexer re-rounds the wire
+// amount HALF-UP to 0.00000002 while the books say 0.000000015: half a base unit
+// of pooled custody-versus-books shortfall, on EVERY call, which is exactly the
+// drift the liquidate() comment above warns about.
+//
+// This is NOT a grid check and does not replace the floor: '0.000000015' is
+// legitimately spelled and still off an 8-decimal grid. Notation is checked here;
+// the grid is checked there.
+//
+// No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
+// this is a character walk. The loop is gas-metered per iteration, so an oversized
+// param exhausts the caller's own gas rather than costing anyone else.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
 }
 
 // Truncate a fixed-notation decimal string DOWN to `decimals` fraction digits.

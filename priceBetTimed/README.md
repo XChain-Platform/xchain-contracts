@@ -49,6 +49,19 @@ discard the cursor advance (state writes only commit on success).
 | `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match (O(1) guard: latest round's timestamp < `settleTime`). |
 | `info()` | anyone | Terms + status + `settledRound` + winner. |
 
+### Constructor term validation
+
+`strike` and `amount` must be **plain fixed-notation decimals** (digits,
+at most one decimal point with digits on both sides). `settleTime` and
+`deadlineBlocks` must be canonical base-10 integers, in
+`[1, 253402300799]` (unix seconds, through year 9999) and `[1, 1000000]`
+respectively. Both checks are shape checks, not value parses:
+`xchain.math` accepts exponential, hex and separator spellings of a
+number, and a radix-less `parseInt` silently re-measures `'1e2'` as `1`
+and `'0x10'` as `16`, so a maker who asked for a 100-block void window
+would have got a 1-block one, and a settle time spelled `'1.7e9'` would
+have collapsed to a 1970 timestamp.
+
 ## Requirements / notes
 
 - **Needs the modern oracle accessor**: `getPrice`/`getPriceAtRound` must
