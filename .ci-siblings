@@ -14,4 +14,9 @@
 # The e2e harness these suites load: contract endpoints, isolate execution,
 # and the assertions helper bin/ci-preflight.js proves loadable before CI runs
 # a single test.
-xchain-vm
+# +scripts: xchain-vm ships isolated-vm, a NATIVE addon, and this suite EXECUTES
+# it rather than reading its source. The venue installs adjacent siblings with
+# --ignore-scripts, which leaves no compiled binding and fails at load with
+# "Cannot find module ./out/isolated_vm"; the marker gets it a scripts-running
+# install, matching the explicit vm-dependency install step in ci.yml (XC-1520).
+xchain-vm+scripts
