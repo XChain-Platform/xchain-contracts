@@ -329,7 +329,7 @@ module.exports = {
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation
 // decimal: digits, with at most one decimal point that has digits on both sides.
-// Same helper and rationale as priceBet.js:requirePlainDecimal.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
 //
 // floorToDecimals below is string surgery that PRESUPPOSES fixed notation, which is
 // free for a value xchain.math computed (the VM formats every math result in fixed

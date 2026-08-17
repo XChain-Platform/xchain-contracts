@@ -364,7 +364,7 @@ function freshPrice(xchain) {
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation
 // decimal: digits, with at most one decimal point that has digits on both sides.
-// Same helper and rationale as priceBet.js:requirePlainDecimal.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
 //
 // floorToDecimals below is string surgery that PRESUPPOSES fixed notation. Every
 // value liquidate() feeds it was computed by xchain.math, and the VM formats every

@@ -167,3 +167,56 @@ module.exports = {
         assert.strictEqual((await deployWith('2000000')).success, false); // above max 1000000
     });
 });
+
+// A tiny contract whose initialize validates one amount param via the REAL
+// requirePlainDecimal helper. Same proof as above for the notation gate: the
+// regex-free character walk loads and runs inside the VM, and it rejects exactly
+// the spellings that requirePositive blesses and floorToDecimals then corrupts.
+// requirePositive runs FIRST here, deliberately: the point of the pair is that
+// the positivity test alone lets '1.5e-8' and '1.23456789e2' straight through.
+const DECIMALVALIDATOR = HELPERS + '\n' + `
+module.exports = {
+    initialize: function (xchain) {
+        var amount = xchain.getInputParam(0);
+        requirePositive(xchain, amount, 'amount');
+        requirePlainDecimal(xchain, amount, 'amount');
+        xchain.state.set('amount', amount);
+    }
+};`;
+
+(XChainVM ? describe : describe.skip)('Patterns: requirePlainDecimal (notation validation)', function () {
+    this.timeout(0);
+    let n = 0;
+    async function deployWith(param) {
+        const b = new E2EHarness(XChainVM);
+        b.seedBalance(OWNER, 'XCHAIN', '1000000');
+        return b.deploy({ code: DECIMALVALIDATOR, deployer: OWNER, contractAddress: 'C:BTC:' + (100 + n++), params: [param] });
+    }
+
+    it('accepts plain fixed-notation decimals', async function () {
+        for (const good of ['1', '100', '0.5', '0.00000001', '123456789.123456789']) {
+            assert.strictEqual((await deployWith(good)).success, true, 'should accept ' + JSON.stringify(good));
+        }
+    });
+
+    it('rejects the spellings requirePositive blesses and floorToDecimals corrupts', async function () {
+        // Every one of these is > 0 to mathjs, so requirePositive alone passes them.
+        for (const bad of ['1.5e-8', '1.23456789e2', '0x10', 'Infinity', '+1', '.5']) {
+            assert.strictEqual((await deployWith(bad)).success, false, 'should reject ' + JSON.stringify(bad));
+        }
+    });
+
+    it('rejects malformed decimals outright', async function () {
+        for (const bad of ['5.', '1.2.3', 'abc', '1 ']) {
+            assert.strictEqual((await deployWith(bad)).success, false, 'should reject ' + JSON.stringify(bad));
+        }
+    });
+
+    it('is a NOTATION gate, not a grid check: a legitimately spelled off-grid value passes', async function () {
+        // '0.000000015' is plainly spelled and still off an 8-decimal grid. The
+        // helper must let it through; the consumer's floorToDecimals is what
+        // quantises it. Anything else would make the two checks one, and the
+        // grid is unknowable at deploy time.
+        assert.strictEqual((await deployWith('0.000000015')).success, true);
+    });
+});

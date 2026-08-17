@@ -379,6 +379,7 @@ function refundBoth(xchain) {
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation
 // decimal: digits, with at most one decimal point that has digits on both sides.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
 //
 // Every OTHER template feeds floorToDecimals a value mathjs computed, and the VM's
 // math API formats every result in fixed notation (xchain-vm/src/math.js toFixed),

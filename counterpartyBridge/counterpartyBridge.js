@@ -71,8 +71,8 @@ var BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 
 // True only for a plain fixed-notation decimal: digits, with at most one decimal
 // point that has digits on both sides. Same shape check as
-// priceBet.js:requirePlainDecimal, but a PREDICATE rather than a require(), for
-// the reason spelled out at its call site in extractBurnSends.
+// patterns/validation.js:requirePlainDecimal, but a PREDICATE rather than a
+// require(), for the reason spelled out at its call site in extractBurnSends.
 //
 // No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
 // this is a character walk.

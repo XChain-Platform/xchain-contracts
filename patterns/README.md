@@ -50,7 +50,7 @@ code ceiling.
 | [access-control.js](./access-control.js) | `onlyOwner` · `isOwner` · `onlyRole` | gate methods to the owner or a named role |
 | [pausable.js](./pausable.js) | `whenNotPaused` · `isPaused` · `setPaused` | an owner-controlled circuit breaker |
 | [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` | size transfers from real holdings, never caller input |
-| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `requireEnum` · `requireIntInRange` | validate method inputs up front |
+| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front |
 | [state-machine.js](./state-machine.js) | `requireStatus` · `requireStatusIn` · `setStatus` | an explicit `status` lifecycle with guarded transitions |
 
 Every helper here passes `xchain-lint` clean (no banned APIs, no float math, ES2020).

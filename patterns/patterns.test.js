@@ -79,3 +79,91 @@ const PATTERN_FILES = fs.readdirSync(DIR).filter(f => f.endsWith('.js') && !f.en
     });
 
 });
+
+// --- Library-versus-template parity -----------------------------------------
+//
+// XChain contracts are one self-contained blob with no imports, so a template
+// that uses a pattern helper PASTES it rather than requiring it. That is the
+// authoring model, but it means a fix to the library reaches the templates only
+// if someone re-pastes it, and the failure is silent: a template keeps running
+// the stale copy and its own tests keep passing.
+//
+// So pin it. Every template copy of a library helper must be byte-identical to
+// the library's. Header comments are deliberately NOT compared: each template
+// documents the hazard in its own terms and points back here. Only the executable
+// body is consensus-relevant, and it is the part that must never drift.
+//
+// This block does not need the linter, so it runs on any Node.
+describe('pattern helpers pasted into templates match the library source', function () {
+
+    const ROOT = path.join(DIR, '..');
+
+    // Source text of a top-level `function NAME(...) { ... }`, signature through
+    // the closing brace in column 0. Plain string scanning, no parser: the helpers
+    // are hand-written top-level declarations and every nested brace inside them
+    // is indented, which is exactly the shape the linter already enforces.
+    function helperSource(file, name) {
+        const src = fs.readFileSync(file, 'utf8');
+        const start = src.indexOf('\nfunction ' + name + '(');
+        assert.notStrictEqual(start, -1, name + ' not found in ' + path.relative(ROOT, file));
+        const end = src.indexOf('\n}\n', start);
+        assert.notStrictEqual(end, -1, name + ' has no column-0 closing brace in ' + path.relative(ROOT, file));
+        return src.slice(start + 1, end + 3);
+    }
+
+    // helper -> templates that paste it. Add a row when a template adopts one.
+    const PASTED = {
+        requirePlainDecimal: [
+            'priceBet/priceBet.js',
+            'priceBetTimed/priceBetTimed.js',
+            'stableVault/stableVault.js',
+            'treasury/treasury.js'
+        ],
+        requireIntInRange: [
+            'priceBet/priceBet.js',
+            'priceBetTimed/priceBetTimed.js'
+        ]
+    };
+
+    for (const name of Object.keys(PASTED)) {
+        describe(name, function () {
+            const canonical = helperSource(path.join(DIR, 'validation.js'), name);
+
+            it('is exported by the pattern library', function () {
+                assert.ok(canonical.length > 0);
+            });
+
+            for (const rel of PASTED[name]) {
+                it(rel + ' pastes the library body verbatim', function () {
+                    assert.strictEqual(helperSource(path.join(ROOT, rel), name), canonical,
+                        rel + ' has drifted from patterns/validation.js:' + name +
+                        ' - re-paste the library body (comments above it may differ)');
+                });
+            }
+        });
+    }
+
+    // The bridge deliberately carries a PREDICATE variant (it filters rows rather
+    // than reverting), so it cannot be body-identical. What it must not do is
+    // disagree about which strings are plain decimals.
+    it('counterpartyBridge isPlainDecimal accepts exactly what requirePlainDecimal accepts', function () {
+        const lib = helperSource(path.join(DIR, 'validation.js'), 'requirePlainDecimal');
+        const bridge = helperSource(path.join(ROOT, 'counterpartyBridge/counterpartyBridge.js'), 'isPlainDecimal');
+        const requirePlainDecimal = new Function('return (' + lib + ')')();
+        const isPlainDecimal = new Function('return (' + bridge + ')')();
+        const xchain = { require: (ok, msg) => { if (!ok) throw new Error(msg); } };
+        const CASES = [
+            '1', '0', '10.5', '0.00000001', '123456789.123456789',
+            '', '.5', '5.', '1.5e-8', '0x10', '1_000', '+1', '-1', 'Infinity',
+            'abc', '1.2.3', ' 1', '1 ', 'NaN', '1e2'
+        ];
+        for (const c of CASES) {
+            let requireAccepts = true;
+            try { requirePlainDecimal(xchain, c, 'v'); } catch (e) { requireAccepts = false; }
+            assert.strictEqual(isPlainDecimal(c), requireAccepts,
+                'disagreement on ' + JSON.stringify(c) +
+                ': isPlainDecimal=' + isPlainDecimal(c) + ' requirePlainDecimal accepts=' + requireAccepts);
+        }
+    });
+
+});
