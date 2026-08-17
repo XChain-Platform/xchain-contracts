@@ -196,7 +196,9 @@ describe('Template: amm abi', function () {
     });
 
     describe('precision reconciliation (finding: reserves/totalShares drift)', function () {
-        // Half-up normalization to d decimals == what the indexer stores on the ledger.
+        // Half-up normalization to d decimals == what the indexer stores on the ledger
+        // (mathjs.format fixed-notation, the same call util.bcadd makes; half-up, not
+        // banker's/half-even, pinned by xchain-indexer/test/unit/xchainPrice.test.js).
         const norm = (v, d) => math.format(bn(v), { notation: 'fixed', precision: d });
         // Fractional-digit count; a value with <= d fraction digits sits on the tick grid,
         // so the indexer's write-time re-normalization is a numeric no-op.

@@ -46,7 +46,10 @@
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at
-// ledger-write time (mathjs half-up round), which can round a computed
+// ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
+// NOT half-even, the mode is stated in xchain-indexer/src/xchainPrice.js and
+// pinned by test, because a mis-read mode at the .5 boundary is a consensus
+// fork), which can round a computed
 // quantity UP past what the contract actually holds; on the final tranche that
 // over-send exceeds custody, the whole EXECUTE reverts, and the remainder is
 // stranded. Same helper and rationale as amm.js:floorToDecimals; pure exact

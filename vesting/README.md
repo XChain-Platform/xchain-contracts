@@ -67,7 +67,8 @@ claimable, and is released with a later claim (fully, once the grant vests).
 - **Rounding.** `xchain.math` bignumber throughout; no float literals
   (SDK-validated). Computed payouts can land off the tick's decimal grid
   (e.g. 2.666... on a 0-decimal tick), and the indexer re-normalises every
-  emitted amount to the tick's decimals with half-up rounding - which can
+  emitted amount to the tick's decimals with half-up rounding (its bcmath is
+  half-up, not banker's/half-even) - which can
   round UP past custody and revert the final tranche. Both `claim()` and
   `revoke()` therefore floor their payout onto the grid before emitting
   (same `floorToDecimals` treatment as the amm and crowdsale templates), and
