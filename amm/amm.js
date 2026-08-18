@@ -69,7 +69,10 @@ var LP_DECIMALS = 8;
 //
 // xchain.math computes at 64 significant digits, but the indexer normalises every
 // emitted amount to its tick's decimals at ledger-write time (util.bcadd -> mathjs
-// half-even round). So a computed share/payout written to state at full precision is
+// HALF-UP round: the indexer's bcmath rounds half-up, NOT half-even, the mode is stated
+// in xchain-indexer/src/xchainPrice.js and pinned by test, because a mis-read mode at
+// the .5 boundary is a consensus fork).
+// So a computed share/payout written to state at full precision is
 // MORE precise than the LP or tokens the ledger actually mints/moves: state drifts
 // above real custody, totalShares inflates, and the last LP can never drain the pool.
 //

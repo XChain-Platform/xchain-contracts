@@ -51,6 +51,11 @@ const ROUND    = 7;
         h.seedBalance(MAKER, 'XCHAIN', '1000000');
         h.seedBalance(MAKER, TICK, '100');
         h.seedBalance(TAKER, TICK, '100');
+        // Register decimals so the ledger re-rounds emissions the way the real
+        // indexer does at write time, and so getTokenInfo (which refundBoth's
+        // grid-flooring reads) resolves. A tick a contract actually holds always
+        // carries token info on a real node.
+        h.ledger.setTokenDecimals(TICK, 8);
         await h.deploy({
             code: CODE, deployer: MAKER, contractAddress: ADDR,
             params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(ROUND), String(window || 5)]
@@ -126,6 +131,38 @@ const ROUND    = 7;
             assertContractState(h.ledger, ADDR, 'status', 'PUSH');
         });
 
+        it('half-ulp off-grid stake still pushes: both refund legs land on the tick grid', async function () {
+            // A stake exactly half a base unit off the tick grid used to wedge
+            // the PUSH and VOID paths permanently. refundBoth() emitted the raw
+            // 0.000000015 to the maker and the complementary 0.000000025 to the
+            // taker; the ledger re-rounds both UP at write time (half-up), so the
+            // pair moved one base unit more than custody held, the taker's SEND
+            // threw, and every settle()/reclaim() retry reverted with it.
+            // Flooring the maker leg puts both legs on-grid, so the re-round is
+            // a numeric no-op and the sub-unit residue rides the taker leg.
+            const ODD = '0.000000015';
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '1');
+            h.seedBalance(TAKER, TICK, '1');
+            h.ledger.setTokenDecimals(TICK, 8);
+            await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, ODD, String(ROUND), '5']
+            });
+            assertSuccess(await depositAnd(MAKER, 'fund', '0.00000002'));
+            assertSuccess(await depositAnd(TAKER, 'accept', '0.00000002'));
+
+            publishRound(STRIKE);
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: STRANGER }));
+
+            // Legs sum to exactly what was held: 0.00000001 + 0.00000003.
+            assertBalance(h.ledger, MAKER, TICK, '0.99999999');
+            assertBalance(h.ledger, TAKER, TICK, '1.00000001');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+            assertContractState(h.ledger, ADDR, 'status', 'PUSH');
+        });
+
         it('maker cancels an unmatched bet and recovers their stake', async function () {
             await deployBet('OVER');
             await depositAnd(MAKER, 'fund');
@@ -175,6 +212,27 @@ const ROUND    = 7;
             // the honest path still works
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: TAKER }));
             assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
+        it('an OPEN bet cannot be sniped once the settle round is published', async function () {
+            // The mirror image of the reclaim case above: settlement is a pure
+            // function of consensus history, so the moment the settle round
+            // finalizes the outcome is PUBLIC. Without the accept() guard a
+            // taker reads the round, matches the winning side of a still-OPEN
+            // bet and settles in the same breath - the maker's stake is free
+            // money. accept() must close the window, and the maker's cancel()
+            // escape must survive it.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+
+            publishRound('59000'); // below the strike: the OVER maker has lost
+            assertReverted(await depositAnd(TAKER, 'accept'), 'settle round already published');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+
+            // The maker is not stranded: cancel() is OPEN-only and still open.
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: MAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
         });
 
         it('underfunded fund() and accept() revert (no trust in caller-supplied amounts)', async function () {
@@ -245,6 +303,75 @@ const ROUND    = 7;
         it('rejects a non-positive stake and a non-positive round', async function () {
             assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, '0', '7', '5'])).success, false);
             assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '0', '5'])).success, false);
+        });
+
+        // Notation gate. `amount` is raw maker-supplied constructor text and
+        // math.gt(amount,'0') accepts every spelling mathjs parses, while
+        // refundBoth()'s floorToDecimals is string surgery that assumes fixed
+        // notation. Two proven failures if these reach state:
+        //   '1.5e-8'       the floor no-ops (fraction '5e-8' is 4 chars, under the
+        //                  8-decimal grid), the off-grid stake is emitted raw, the
+        //                  indexer re-rounds both legs UP past custody and the
+        //                  PUSH/VOID refund wedges permanently with funds stranded.
+        //   '1.23456789e2' the floor CORRUPTS, returning '1.23456789' for a value of
+        //                  123.456789: the maker is refunded 1% of their stake and
+        //                  the remainder silently rides the taker leg. success=true,
+        //                  no revert. Theft, not a wedge.
+        // Deploy-time rejection is the guard; the half-ulp test above covers the
+        // other half (legitimate fixed notation that is merely off the tick grid).
+        it('rejects every non-fixed-notation spelling of stake and strike', async function () {
+            const BAD = ['1.5e-8', '0.15e-7', '1.5E-8', '1e-8', '1.23456789e2',
+                         '0x10', '0b101', '0o17', '1_000', '+1.5', '.5', '5.',
+                         'Infinity', 'NaN', '1.2.3'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, v, '7', '5'])).success, false,
+                    `stake ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, v, 'OVER', TICK, STAKE, '7', '5'])).success, false,
+                    `strike ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('still accepts ordinary fixed-notation terms, trailing zeros included', async function () {
+            for (const v of ['100', '0.5', '60000.00', '0.000000015', '999999999999']) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, v, '7', '5'])).success, true,
+                    `stake ${JSON.stringify(v)} must deploy`);
+            }
+        });
+
+        // Integer-shape gate on settleRound and deadlineBlocks. Both are raw
+        // maker text, and a radix-less parseInt MEASURES them as something else
+        // entirely: '1e2' is 1, '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5.
+        // The old `parseInt(x) > 0` check then passes on the mis-measured value
+        // and initialize() stores it, so a maker asking for a 100-block void
+        // window via '1e2' silently gets a 1-block one and their matched bet is
+        // reclaimable almost immediately.
+        it('rejects integer params a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e2', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, v, '5'])).success, false,
+                    `settleRound ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', v])).success, false,
+                    `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects integer params outside their range and stores accepted ones verbatim', async function () {
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', '0'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '-7', '5'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '1000000001', '5'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '7', '1000001'])).success, false);
+            assert.strictEqual((await deployWith([MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, '1000000000', '1000000'])).success, true);
+
+            // '100' means 100 blocks in state, not the 1 a parseInt of '1e2' gave.
+            await deployBet('OVER', 100);
+            assertContractState(h.ledger, ADDR, 'window', '100');
+            assertContractState(h.ledger, ADDR, 'settleRound', String(ROUND));
         });
     });
 });

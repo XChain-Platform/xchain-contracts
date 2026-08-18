@@ -14,6 +14,15 @@
 //
 // This script performs the SAME requires the suites perform, so it cannot pass
 // while they skip, and exits non-zero with the reason if any of them fails.
+//
+// It guards `npm run ci` only, and `npm test` is the command people actually
+// type: run bare, it reported 52 passing / 243 pending / exit 0 on macOS while
+// 82 percent of the suite skipped. test/preflight.test.js is the same proof
+// living INSIDE the mocha run (wired first in the `test` script, locked there
+// by test/gate-wiring.test.js), so no choice of command reaches a false green.
+// Keep the two in step: both must prove an isolate actually executes, because
+// requiring xchain-vm's harness helper succeeds even where isolated-vm cannot
+// dlopen.
 
 'use strict';
 

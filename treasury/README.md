@@ -63,6 +63,16 @@ withdraw path outside an executed proposal.
 | `info()` | anyone (read-only) | Config and proposal count. |
 | `proposalInfo(proposalId)` | anyone (read-only) | One proposal record; reports `EXPIRED` for an armed proposal whose window passed. |
 
+`propose(...)` requires `amount` to be a **plain fixed-notation decimal**
+(digits, at most one decimal point with digits on both sides). It is a
+notation check, not a grid check: `executeProposal` floors the payout onto
+the tick's decimal grid, and that flooring is exact string surgery which
+assumes fixed notation. Fed `'1.23456789e2'` it returns `1.23456789` for a
+value of `123.456789`, so a poll-approved transfer would pay 1% of its
+mandate while `rec.paid` recorded the underpayment, leaving the audit trail
+agreeing with the wrong number. The check sits at `propose` rather than at
+execute so a rejected term can never strand an armed proposal.
+
 Funding needs no method call: `DEPOSIT` any tick to the contract address at any
 time.
 

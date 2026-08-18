@@ -50,6 +50,16 @@
 //     after the match, either party can void the bet and refund both sides.
 // ---------------------------------------------------------------------------
 
+// Upper bounds for the two integer constructor params. They are sanity ceilings,
+// not protocol limits: both values are compared against, or added to, plain JS
+// integers, so the point is to keep a fat-fingered constructor term inside the
+// exactly-representable integer range rather than to constrain real bets.
+// MAX_ROUND is ~1e9 oracle rounds (millennia at any plausible cadence);
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling patterns/validation.js uses for a block window in its example.
+var MAX_ROUND = 1000000000;
+var MAX_WINDOW_BLOCKS = 1000000;
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -87,15 +97,26 @@ module.exports = {
         xchain.require(maker, 'maker required');
         xchain.require(coinPair, 'coinPair required');
         xchain.require(strike && xchain.math.gt(strike, '0'), 'strike must be positive');
+        requirePlainDecimal(xchain, strike, 'strike');
         xchain.require(side === 'OVER' || side === 'UNDER', 'side must be OVER or UNDER');
         xchain.require(tick, 'tick required');
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Notation gate, NOT a grid check (the tick's decimals are unreadable at
+        // deploy). The positivity test above is no filter at all, and refundBoth()'s
+        // floorToDecimals silently corrupts non-fixed input. See requirePlainDecimal.
+        requirePlainDecimal(xchain, amount, 'amount');
 
-        // parseInt(...) > 0 rejects NaN, zero, and negatives in one check.
-        var round = parseInt(settleRound);
-        xchain.require(round > 0, 'settleRound must be a positive integer');
-        var window = parseInt(deadlineBlocks);
-        xchain.require(window > 0, 'deadlineBlocks must be a positive integer');
+        // Shape-check the integers, do NOT parseInt-then-range-check them. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e2' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7), and both of these
+        // params are raw maker-supplied constructor text measured in the same
+        // deploy that stores them: a maker asking for a 100-block void window via
+        // '1e2' would silently get a 1-block one, and their bet would be voidable
+        // essentially immediately after it matched. See requireIntInRange.
+        requireIntInRange(xchain, settleRound, 1, MAX_ROUND, 'settleRound');
+        requireIntInRange(xchain, deadlineBlocks, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
+        var round  = parseInt(settleRound, 10);
+        var window = parseInt(deadlineBlocks, 10);
 
         xchain.state.set('maker', maker);
         xchain.state.set('coinPair', coinPair);
@@ -124,11 +145,21 @@ module.exports = {
 
     // accept(): taker matches the stake and takes the opposite side. BATCHed
     // after a DEPOSIT. Requires the pot to hold BOTH stakes (2 x amount).
+    //
+    // The betting window closes the instant the settle round is published. The
+    // whole design core (a settlement that is a pure function of consensus
+    // history) means the outcome is PUBLIC once that round finalizes, so a
+    // taker matching afterwards is not taking a bet, they are exercising a free
+    // option on the maker's stake: match the winning side, settle immediately,
+    // collect. The sibling priceBetTimed closes the same window on block time
+    // (`settleTime`); here the round's own existence is the clock. The maker's
+    // escape stays cancel(), which is OPEN-only and unaffected.
     accept: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'bet not open');
 
         var taker = xchain.getSourceAddress();
         xchain.require(taker !== xchain.state.get('maker'), 'maker cannot take their own bet');
+        xchain.require(roundPrice(xchain) === null, 'settle round already published');
 
         var needed = xchain.math.multiply(xchain.state.get('amount'), '2');
         xchain.require(xchain.math.gte(heldBalance(xchain), needed), 'insufficient deposit');
@@ -251,13 +282,24 @@ function heldBalance(xchain) {
     return xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0';
 }
 
-// Return each party's stake. The maker gets exactly `amount`; the taker gets
-// everything else, so any accidental over-deposit drains with the refund
-// instead of stranding in the contract. Callers set the terminal status
-// BEFORE invoking this (state guard pattern).
+// Return each party's stake. The maker gets their stake floored onto the tick's
+// decimal grid; the taker gets everything else, so any accidental over-deposit
+// (and any sub-unit floor residue) drains with the refund instead of stranding
+// in the contract. Callers set the terminal status BEFORE invoking this (state
+// guard pattern).
+//
+// The maker leg is floored because `amount` is a caller-supplied term that
+// initialize() cannot grid-check (getTokenInfo is unreadable at deploy: the
+// contract holds nothing yet, so the VM ledger snapshot carries no entry for
+// the tick). `held` is always on-grid, so flooring the maker leg makes `rest`
+// on-grid too and the indexer's write-time re-round becomes a numeric no-op.
+// Left raw, an `amount` sitting exactly half a base unit off the grid rounds
+// BOTH legs UP (the indexer's bcmath is half-up), the pair exceeds custody by
+// one unit, the taker's SEND fails its balance check and the throw reverts
+// settle()'s PUSH path and reclaim() forever.
 function refundBoth(xchain) {
     var tick   = xchain.state.get('tick');
-    var amount = xchain.state.get('amount');
+    var amount = floorToDecimals(xchain.state.get('amount'), tickDecimals(xchain, tick));
     var held   = heldBalance(xchain);
     var rest   = xchain.math.subtract(held, amount);
 
@@ -265,4 +307,104 @@ function refundBoth(xchain) {
     if (xchain.math.gt(rest, '0')) {
         xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
     }
+}
+
+// Reject any spelling of a numeric term that is not a plain fixed-notation
+// decimal: digits, with at most one decimal point that has digits on both sides.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
+//
+// Every OTHER template feeds floorToDecimals a value mathjs computed, and the VM's
+// math API formats every result in fixed notation (xchain-vm/src/math.js toFixed),
+// so fixed input is free there. Here `amount` and `strike` are raw maker-supplied
+// constructor text (deploy.js pipe-splits CONSTRUCTOR_PARAMS with no numeric
+// validation), and `xchain.math.gt(x, '0')` is no filter: mathjs accepts
+// exponential ('1.5e-8'), radix prefixes ('0x10'), numeric separators ('1_000'),
+// a leading '+', a bare leading dot, and 'Infinity'. Fed those, floorToDecimals
+// does not merely no-op, it CORRUPTS:
+//   '1.5e-8'       -> fraction '5e-8' is 4 chars, under an 8-decimal grid, so the
+//                     already-on-grid early-return fires and the off-grid stake is
+//                     emitted raw, wedging the PUSH/VOID refund permanently.
+//   '1.23456789e2' -> returns '1.23456789' for a value of 123.456789, so the maker
+//                     is refunded 1% of their stake and the rest silently follows
+//                     the taker leg. No revert, no error: pure theft.
+// Gate the notation once, at the only door untrusted text comes through, rather
+// than at each consumer. This is NOT a grid check and does not replace the floor:
+// '0.000000015' is legitimately spelled and still off an 8-decimal grid, and the
+// tick's decimals are unreadable at deploy (the contract holds no balance yet), so
+// refundBoth() still floors. Notation is checked here; the grid is checked there.
+//
+// No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
+// this is a character walk (same constraint that shaped crowdsale.js's round-trip
+// integer check). The loop is gas-metered per iteration, so an oversized param
+// exhausts the deployer's own gas rather than costing anyone else.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts non-integers a range check then blesses ('1e2' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a value the
+// check never truly approved and the maker would get terms they never asked for.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk, same constraint that shaped requirePlainDecimal above.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
+}
+
+// Quantise a quantity DOWN onto a tick's decimal grid. Pure exact string surgery
+// on the fixed-notation decimal, deliberately not mathjs floor/mod (which round
+// to the significant-digit precision, not the decimal grid). Same helper and
+// rationale as treasury.js/amm.js:floorToDecimals. Its fixed-notation precondition
+// is what requirePlainDecimal enforces at initialize(); do not relax that check
+// without normalising here instead.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of the bet tick, read from the ledger snapshot. refundBoth() only
+// runs from PUSH/VOID, where both stakes are in custody, so the contract holds
+// the tick and its token info is present (same VM_BALANCE_TOKENINFO gate that
+// heldBalance's getBalance already rides). Mirrors treasury.js:tickDecimals.
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
 }

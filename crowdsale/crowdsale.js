@@ -51,8 +51,11 @@
 
 // Quantise a computed amount DOWN to its tick's decimal grid before emitting it.
 // xchain.math computes at 64 significant digits, but the indexer normalises every
-// emitted amount to its tick's decimals at ledger-write time (mathjs half-even
-// round), which can round a computed quantity UP. For claim() that means minting
+// emitted amount to its tick's decimals at ledger-write time (mathjs HALF-UP
+// round: the indexer's bcmath rounds half-up, NOT half-even, the mode is stated in
+// xchain-indexer/src/xchainPrice.js and pinned by test, because a mis-read mode at
+// the .5 boundary is a consensus fork),
+// which can round a computed quantity UP. For claim() that means minting
 // MORE saleTick than paid*rate and, cumulatively across buyers, past the maxMint
 // supply cap so a later honest claim reverts and (because the whole EXECUTE rolls
 // back) that buyer's contribution record survives and is permanently unclaimable.
@@ -186,7 +189,7 @@ module.exports = {
         var paid   = xchain.state.get('c:' + caller) || '0';
         xchain.require(xchain.math.gt(paid, '0'), 'nothing to claim');
 
-        // Floor the mint onto saleTick's decimal grid so the indexer's half-even
+        // Floor the mint onto saleTick's decimal grid so the indexer's half-up
         // re-normalisation cannot round it UP (over-issuing past the rate and, across
         // buyers, past maxMint - which would revert a later claim and, on the rollback,
         // permanently strand that buyer's contribution). Legacy pre-fix deploys have no

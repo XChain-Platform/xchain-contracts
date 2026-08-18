@@ -53,7 +53,10 @@
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at ledger-
-// write time (mathjs half-even round), which can round a computed quantity UP
+// write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up, NOT
+// half-even, the mode is stated in xchain-indexer/src/xchainPrice.js and pinned
+// by test, because a mis-read mode at the .5 boundary is a consensus fork),
+// which can round a computed quantity UP
 // past what the contract actually holds. Flooring the asking price onto
 // bidTick's grid before using it as both the "required minimum" and the
 // "amount sent to the seller" keeps both checks and both emissions exact. Same

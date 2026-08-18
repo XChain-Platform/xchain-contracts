@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
   "overrides": {
-    "brace-expansion": "^5.0.8",
+    "brace-expansion": "^5.0.9",
     "minimatch": "^10.2.5",
     "serialize-javascript": "^7.0.5",
-    "js-yaml": "^4.3.0"
+    "js-yaml": "^4.3.1"
   },
   "engines": {
     "comment": "Bounded to Node 22: the tests load xchain-vm, whose isolated-vm binding is V8-ABI-specific (Node 24 cannot build it). See .nvmrc.",
@@ -24,10 +24,12 @@
   },
   "scripts": {
     "ci": "node bin/ci-preflight.js && npm test && npm run lint",
+    "ci:full": "bash bin/ci-full.sh",
     "lint": "node bin/xchain-contracts.js lint",
     "scaffold": "node bin/xchain-contracts.js scaffold",
     "list": "node bin/xchain-contracts.js list",
     "policy": "node bin/xchain-contracts.js policy",
-    "test": "mocha --timeout 0 --exit escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js treasury/treasury.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js patterns/oz-aliases.test.js cardDispenser/cardDispenser.test.js urlOracle/urlOracle.test.js priceBet/priceBet.test.js priceBetTimed/priceBetTimed.test.js stableVault/stableVault.test.js escrowDelivery/escrowDelivery.test.js englishAuction/englishAuction.test.js dutchAuction/dutchAuction.test.js counterpartyBridge/counterpartyBridge.test.js lib/policy-gen.test.js lib/dependency-advisories.test.js"
+    "testComment": "test/preflight.test.js runs FIRST and has no try/catch: without it a machine that cannot load isolated-vm reports 52 passing / 243 pending / exit 0 while 82% of the suite silently skips. test/gate-wiring.test.js locks that wiring in. See bin/ci-preflight.js for the same proof ahead of `npm run ci`.",
+    "test": "mocha --timeout 0 --exit test/preflight.test.js test/gate-wiring.test.js escrow/escrow.test.js vesting/vesting.test.js crowdsale/crowdsale.test.js amm/amm.test.js treasury/treasury.test.js patterns/patterns.test.js patterns/patterns.e2e.test.js patterns/oz-aliases.test.js cardDispenser/cardDispenser.test.js urlOracle/urlOracle.test.js priceBet/priceBet.test.js priceBetTimed/priceBetTimed.test.js stableVault/stableVault.test.js escrowDelivery/escrowDelivery.test.js englishAuction/englishAuction.test.js dutchAuction/dutchAuction.test.js counterpartyBridge/counterpartyBridge.test.js lib/policy-gen.test.js lib/dependency-advisories.test.js"
   }
 }

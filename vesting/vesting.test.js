@@ -173,7 +173,7 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
 
     // Regression: payouts must be floored onto the tick's decimal grid before
     // emission. total=8 over duration=3 on a 0-decimal tick makes every tranche
-    // off-grid (2.666...): unfloored, the ledger's half-even normalisation
+    // off-grid (2.666...): unfloored, the ledger's half-up normalisation
     // rounded each SEND up to 3, over-drew custody, and the final claim
     // reverted with 2 tokens permanently stranded.
     describe('off-grid schedules (payout flooring)', function () {

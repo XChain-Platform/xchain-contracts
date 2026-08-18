@@ -132,6 +132,14 @@ module.exports = {
         xchain.require(recipient, 'recipient required');
         xchain.require(tick, 'tick required');
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Notation gate at the door untrusted text comes through. `amount` is raw
+        // proposer text that is stored verbatim and only met by executeProposal()'s
+        // floorToDecimals BLOCKS LATER, after a poll has approved it; the floor is
+        // string surgery that presupposes fixed notation and math.gt() is no filter
+        // (see requirePlainDecimal). Rejecting here, rather than at execute time,
+        // is deliberate: a proposal that fails the check at execute would be stuck
+        // ARMED with a poll mandate behind it until its window expired.
+        requirePlainDecimal(xchain, amount, 'amount');
 
         var held = xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0';
         xchain.require(xchain.math.gte(held, xchain.state.get('min_propose')),
@@ -257,12 +265,18 @@ module.exports = {
 
         // Floor the payout onto the tick's decimal grid before both the custody
         // check and the emission (amm/vesting/crowdsale do the same): the indexer
-        // half-even re-normalises every emitted amount to its tick's decimals at
-        // ledger-write time, so an off-grid rec.amount could round UP past what the
+        // HALF-UP re-normalises every emitted amount to its tick's decimals at
+        // ledger-write time (its bcmath rounds half-up, NOT half-even: the mode
+        // is stated in xchain-indexer/src/xchainPrice.js and pinned by test,
+        // because a mis-read mode at the .5 boundary is a consensus fork), so an
+        // off-grid rec.amount could round UP past what the
         // treasury holds, revert every retry, and wedge the poll-approved transfer
         // in ARMED until the execution window expires. Flooring makes the ledger
         // write a numeric no-op; the on-grid figure actually paid is recorded on
         // the proposal (rec.paid) so the audit trail matches the ledger.
+        // rec.amount's fixed-notation precondition is what propose()'s
+        // requirePlainDecimal enforces; do not relax that check without
+        // normalising here instead.
         var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
         xchain.require(xchain.math.gt(amount, '0'),
             'amount is below one unit of the tick');
@@ -312,6 +326,49 @@ module.exports = {
         return JSON.stringify(rec);
     }
 };
+
+// Reject any spelling of a numeric term that is not a plain fixed-notation
+// decimal: digits, with at most one decimal point that has digits on both sides.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
+//
+// floorToDecimals below is string surgery that PRESUPPOSES fixed notation, which is
+// free for a value xchain.math computed (the VM formats every math result in fixed
+// notation, xchain-vm/src/math.js toFixed) but NOT for propose()'s `amount`, which
+// is raw proposer text. `xchain.math.gt(x, '0')` accepts every spelling mathjs
+// parses -- exponential ('1.5e-8'), radix prefixes ('0x10'), numeric separators
+// ('1_000'), a leading '+', a bare leading dot, 'Infinity'. Fed '1.23456789e2' the
+// floor does not no-op, it CORRUPTS: it returns '1.23456789' for a value of
+// 123.456789, so a governance-approved transfer silently pays out 1% of the
+// mandate and rec.paid records the underpayment, leaving the audit trail in
+// agreement with the wrong number. Fed '1.5e-8' it no-ops and an off-grid amount
+// reaches the wire.
+//
+// This is NOT a grid check and does not replace the floor: '0.000000015' is
+// legitimately spelled and still off an 8-decimal grid, and the tick's decimals
+// are not necessarily readable at propose() time (the treasury need not hold the
+// tick yet). Notation is checked here; the grid is checked at execute.
+//
+// No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
+// this is a character walk. The loop is gas-metered per iteration, so an oversized
+// param exhausts the proposer's own gas rather than costing anyone else.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
 
 // Quantise a computed quantity DOWN onto a tick's decimal grid. Pure exact string
 // surgery on the fixed-notation decimal, deliberately not mathjs floor/mod (which

@@ -18,9 +18,11 @@ const fs = require('fs');
 const path = require('path');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
-let XChainVM;
-try { XChainVM = require(path.join(VM_DIR, 'src', 'index.js')); }
-catch (e) { console.log('Skipping urlOracle tests: isolated-vm not available (need Node 22):', e.message); }
+let XChainVM, E2EHarness;
+try {
+    XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
+    ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
+} catch (e) { XChainVM = null; console.log('Skipping urlOracle tests: isolated-vm not available (need Node 22):', e.message); }
 
 const CODE = fs.readFileSync(path.join(__dirname, 'urlOracle.js'), 'utf8');
 
@@ -81,6 +83,38 @@ const URL = 'https://api.example.com/btc/price';
 
     let vm;
     before(function () { vm = createVM(); });
+
+    // Deploy-parity gate. The rest of this suite drives vm.execute() directly,
+    // which compiles the source but does NOT run the deploy linter: exec-time
+    // re-linting is gated on isExecLintActive(network, ...) and baseExecOpts
+    // carries no `network`, so the banned-async / banned-generator / Math-subset
+    // rules are never evaluated against urlOracle.js on that path. Every sibling
+    // template test deploys through E2EHarness.deploy(), which calls
+    // vm.validateSyntax(code) - the real deploy gate. Without these two cases an
+    // edit that introduced a banned surface into urlOracle.js would keep this
+    // suite green while a real deploy rejected it.
+    describe('deploy gate (parity with the sibling template suites)', function () {
+
+        it('the real urlOracle.js source passes E2EHarness.deploy()', async function () {
+            const h = new E2EHarness(XChainVM);
+            const d = await h.deploy({ code: CODE, deployer: 'addr1', contractAddress: 'C:BTC:1' });
+            // urlOracle exports no initialize, so deploy() succeeds via the
+            // unknown-method path once validateSyntax has passed.
+            assert.strictEqual(d.success, true, 'deploy should pass the linter: ' + d.error);
+        });
+
+        // Negative control. Without it the case above is satisfied by a gate that
+        // never ran, which is exactly the failure this block exists to catch.
+        it('the gate is live: an async-surface edit to the same source is rejected', async function () {
+            const banned = CODE.replace('requestPrice: function (xchain) {',
+                                        'requestPrice: async function (xchain) {');
+            assert.notStrictEqual(banned, CODE, 'the mutation must actually apply');
+            const h = new E2EHarness(XChainVM);
+            const d = await h.deploy({ code: banned, deployer: 'addr1', contractAddress: 'C:BTC:2' });
+            assert.strictEqual(d.success, false, 'the deploy linter must reject an async surface');
+            assert.match(String(d.error), /banned async surface/);
+        });
+    });
 
     describe('requestPrice()', function () {
 

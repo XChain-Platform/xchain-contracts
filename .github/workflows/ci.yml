@@ -53,6 +53,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: XChain-Platform/xchain-vm
+          ref: ${{ github.ref == 'refs/heads/master' && 'master' || 'develop' }}
           ssh-key: ${{ secrets.XCHAIN_VM_DEPLOY_KEY }}
           path: xchain-vm
 
