@@ -29,21 +29,30 @@ This template is the safe-by-default counter-design. It stacks four defenses:
 ## Why the guardian exists (read before choosing `open` mode)
 
 The `VOTE` finalization callback tells a contract *that* a poll passed, but the
-protocol does not tell it *which token voted*: neither the callback arguments
-nor `xchain.getPollResult` carry the poll's `TICK`. So a contract cannot verify
-on-chain that "the community" voted rather than a worthless token the attacker
-minted and fully controls, pointed at this treasury via `CALLBACK_CONTRACT`.
+protocol now also tells it *which token voted*: the poll's `TICK` arrives as a
+callback argument and on the `xchain.getPollResult` snapshot. `arm()` and
+`executeProposal()` both pin it to `govTick`, so a worthless token the attacker
+minted and fully controls, pointed at this treasury via `CALLBACK_CONTRACT`,
+cannot arm anything in either mode.
+
+What no protocol surface reports is whether the poll's *gates* were real, and
+that is what is left for a human to check.
+
+`QUORUM` and `MIN_VOTERS` read as met when they were never configured, and
+nothing on-chain says which option index the poll's own text called "approve",
+so a poll over the *governance* token can still be shaped to pass on almost no
+turnout.
 
 - **`guardian` mode (recommended):** a poll can only arm the proposal it was
   bound to via `approvePoll()`, and only the guardian can bind. The guardian
-  verifies the poll off-chain before binding: right electorate token, real
-  `QUORUM` and `MIN_VOTERS`, option 0 is the approval option. Fail-closed:
-  an unbound poll is inert no matter how it voted.
-- **`open` mode:** any passing poll that names a live proposal arms it. The
-  timelock plus veto window is the only barrier between a hostile poll and the
-  funds. Choose this only with an actively watching guardian and holders who
-  will see the pending transfer in time. "Watch and react" is exactly what
-  failed at BonkDAO; prefer `guardian` mode.
+  verifies the poll off-chain before binding: real `QUORUM` and `MIN_VOTERS`,
+  option 0 is the approval option, the question says what it claims to say.
+  Fail-closed: an unbound poll is inert no matter how it voted.
+- **`open` mode:** any passing governance-token poll that names a live proposal
+  arms it. The timelock plus veto window is the only barrier between a
+  low-turnout poll and the funds. Choose this only with an actively watching
+  guardian and holders who will see the pending transfer in time. "Watch and
+  react" is exactly what failed at BonkDAO; prefer `guardian` mode.
 
 The guardian should be a multi-party address in production. It can censor
 proposals (refuse to bind, veto) but can never move funds itself: there is no
@@ -73,6 +82,14 @@ mandate while `rec.paid` recorded the underpayment, leaving the audit trail
 agreeing with the wrong number. The check sits at `propose` rather than at
 execute so a rejected term can never strand an armed proposal.
 
+`initialize(...)` requires `timelockBlocks` and `executeWindowBlocks` to be
+canonical base-10 integers in `[1, 1000000]` blocks. That is a shape check,
+not a value parse: a radix-less `parseInt` silently re-measures `'1e3'` as
+`1` and `'0x10'` as `16`, so a deployer who asked for a 1000-block timelock
+would have armed a 1-block one, defense #3 would collapse, and the pending
+transfer every holder is meant to see coming would be executable almost
+immediately.
+
 Funding needs no method call: `DEPOSIT` any tick to the contract address at any
 time.
 
@@ -81,8 +98,8 @@ time.
 The proposer (or anyone) creates a binding `VOTE` v0 poll that follows these
 conventions, then (guardian mode) asks the guardian to bind it:
 
-- `TICK` = the governance token (the guardian verifies this; the contract
-  cannot).
+- `TICK` = the governance token, spelled exactly as `govTick` was at deploy.
+  `arm()` compares the two as strings and reverts on any other electorate.
 - `OPTIONS`: the approval option **first**. `arm()` rejects any winner other
   than option 0, so multi-option and "reject" polls cannot move funds.
 - Set `QUORUM` and `MIN_VOTERS`. The protocol reports both gates as met when
@@ -93,9 +110,10 @@ conventions, then (guardian mode) asks the guardian to bind it:
   so tokens bought the day of the vote count for little; this directly defeats
   the buy-then-vote pattern.
 - `CALLBACK_CONTRACT` = this contract's deploy action index,
-  `CALLBACK_METHOD` = `"arm"`, `CALLBACK_PARAMS` = `[proposalId]`,
-  `CALLBACK_ON` = `"pass"` (the default), and a `GAS_ESCROW` that covers
-  `arm()`'s execution.
+  `CALLBACK_METHOD` = `"arm"`, `CALLBACK_PARAMS` = `[proposalId]` and nothing
+  else, `CALLBACK_ON` = `"pass"` (the default), and a `GAS_ESCROW` that covers
+  `arm()`'s execution. `arm()` pins the callback's argument count, so a spare
+  param reverts rather than shifting the id it reads.
 
 ## Attacks we considered
 
@@ -104,9 +122,10 @@ conventions, then (guardian mode) asks the guardian to bind it:
   public state for `timelockBlocks` while the guardian (or a holder alerting
   the guardian) vetoes. The poll conventions above (real quorum,
   `time_weighted`) raise the cost of even getting that far.
-- **Spoofed poll on a junk token.** The protocol cannot tell the contract which
-  token voted; see "Why the guardian exists". Guardian mode makes this inert;
-  open mode leans on the timelock + veto.
+- **Spoofed poll on a junk token.** `arm()` pins the poll's `TICK` to `govTick`
+  and `executeProposal()` re-checks it against the on-chain poll snapshot, so a
+  poll over any other token is inert in both modes. Guardian mode adds the
+  binding step on top.
 - **Calling `arm()` directly.** The injected callback's `SOURCE` is the
   contract's own address, which no user action and no other contract's
   `emit.execute` can present (an emitted sub-action's source is the *emitting*
@@ -133,11 +152,13 @@ conventions, then (guardian mode) asks the guardian to bind it:
 
 ## Known limitations (by design, for a teaching baseline)
 
-- **The electorate is not verifiable on-chain.** Repeated because it is the
-  big one: the protocol does not expose a poll's `TICK` to contracts, so
-  `guardian` mode exists. If a future protocol change delivers the poll's tick
-  to the callback or through `getPollResult`, `arm()` could pin
-  `poll.tick === govTick` and open mode would become materially safer.
+- **The poll's gates are not verifiable on-chain.** Repeated because it is the
+  big one: `QUORUM` and `MIN_VOTERS` report as met when they were never set,
+  and the option labels are not on-chain text this contract can read, so a
+  poll can satisfy every check `arm()` can make and still be a low-turnout
+  raid. Verifying that is the guardian's job, which is why `guardian` is the
+  recommended mode. (The *electorate* half of this limitation is now closed:
+  the protocol delivers the poll's `TICK`, and `arm()` pins it to `govTick`.)
 - **One transfer per proposal.** No batching, no streaming; deploy the vesting
   template from a proposal's recipient address if you need scheduled release.
 - **The guardian can censor.** It cannot steal, but it can refuse to bind or

@@ -39,9 +39,11 @@ const TIMELOCK = 10, WINDOW = 20, MIN_PROPOSE = '100';
 const POLL = '501';               // a poll's VOTE v0 action_index
 
 // A finalized poll result as the indexer exposes it to xchain.getPollResult.
+// The `tick` key is the poll's electorate, present on every snapshot at or
+// after the VOTE_POLL_TICK_VISIBLE flag-day (xchain-indexer db.getPollResultsForVM).
 function passedPoll() {
     return { status: 'finalized', winning_option: 0, total_weight: '4000', total_voters: 12,
-             decided_early: false, options: [{ index: 0, weight: '4000', voters: 12 }] };
+             decided_early: false, tick: GOV, options: [{ index: 0, weight: '4000', voters: 12 }] };
 }
 
 (XChainVM ? describe : describe.skip)('Template: treasury', function () {
@@ -69,14 +71,21 @@ function passedPoll() {
         return call('propose', [PAYEE, PAY, '400', 'grants round 1'], who || HOLDER);
     }
     // Simulate the VOTE finalization callback: a system-injected EXECUTE whose
-    // SOURCE is the callback contract itself (VOTE spec, Binding polls).
+    // SOURCE is the callback contract itself (VOTE spec, Binding polls). The
+    // argument order is the post-VOTE_POLL_TICK_VISIBLE one the indexer builds
+    // in xchain-indexer/src/actions/vote.js: the electorate tick is inserted
+    // after min_voters_met, ahead of the developer CALLBACK_PARAMS.
     function pollCallback(proposalId, overrides) {
         const o = overrides || {};
-        return call('arm', [
+        const args = [
             o.poll || POLL, o.status || 'finalized', o.winning != null ? o.winning : '0',
             o.weight || '4000', o.voters || '12', o.quorum || '1', o.minVoters || '1',
+            o.tick != null ? o.tick : GOV,
             proposalId
-        ], o.caller || ADDR);
+        ];
+        if (o.dropTick) args.splice(7, 1);          // the pre-flag-day 8-arg layout
+        if (o.extraParam != null) args.push(o.extraParam);
+        return call('arm', args, o.caller || ADDR);
     }
     async function proposeAndArm(mode) {
         await deploy(mode);
@@ -192,6 +201,61 @@ function passedPoll() {
             assertReverted(await pollCallback('1'), 'not awaiting a poll');
         });
 
+        // The callback signature moved when VOTE_POLL_TICK_VISIBLE activated: the
+        // electorate tick was inserted ahead of CALLBACK_PARAMS, pushing the bound
+        // proposal id from slot 7 to slot 8. A contract that keeps reading slot 7
+        // gets the ticker string, loadProposal throws inside math.gt, the injected
+        // EXECUTE rolls back to its savepoint, and the proposal is stuck PROPOSED
+        // with the treasury's custody unspendable. These pin the live layout.
+        it('a callback with the pre-flag-day 8-argument layout cannot arm', async function () {
+            await deploy();
+            assertSuccess(await propose());
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertReverted(await pollCallback('1', { dropTick: true }), 'unexpected callback signature');
+            assert.strictEqual(await proposalStatus(), 'PROPOSED');
+        });
+
+        it('a callback carrying a spare CALLBACK_PARAM cannot arm', async function () {
+            await deploy();
+            assertSuccess(await propose());
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertReverted(await pollCallback('1', { extraParam: 'x' }), 'unexpected callback signature');
+        });
+
+        it('the proposal id is read from the slot after the tick, not the tick slot', async function () {
+            await deploy();
+            assertSuccess(await propose());                       // id 1
+            assertSuccess(await propose());                       // id 2
+            assertSuccess(await call('approvePoll', ['2', POLL], GUARDIAN));
+            assertSuccess(await pollCallback('2'));
+            assert.strictEqual(await proposalStatus('2'), 'ARMED');
+            assert.strictEqual(await proposalStatus('1'), 'PROPOSED');
+        });
+
+        // The electorate pin: the protocol now says WHICH token voted, so a poll
+        // over a token the attacker minted and controls is inert in open mode too,
+        // not just behind the guardian's binding step.
+        it('open mode: a poll over a look-alike token cannot arm', async function () {
+            await deploy('open');
+            assertSuccess(await propose());
+            assertReverted(await pollCallback('1', { tick: 'JUNK' }), 'poll electorate is not the governance token');
+            assert.strictEqual(await proposalStatus(), 'PROPOSED');
+        });
+
+        it('guardian mode: a bound poll over the wrong token still cannot arm', async function () {
+            await deploy();
+            assertSuccess(await propose());
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertReverted(await pollCallback('1', { tick: 'JUNK' }), 'poll electorate is not the governance token');
+        });
+
+        it('a poll bound to no token at all cannot arm', async function () {
+            await deploy('open');
+            assertSuccess(await propose());
+            // The indexer sends an empty string when the poll has no tick_id.
+            assertReverted(await pollCallback('1', { tick: '' }), 'poll electorate is not the governance token');
+        });
+
         it('open mode: a passing poll arms without guardian approval', async function () {
             await proposeAndArm('open');
             assert.strictEqual(await proposalStatus(), 'ARMED');
@@ -235,6 +299,15 @@ function passedPoll() {
             readyToExecute();
             h.ledger.seedPollResult(POLL, { ...passedPoll(), winning_option: 1 });
             assertReverted(await call('executeProposal', ['1'], HOLDER), 'poll result not verifiable');
+        });
+
+        it('execution re-verifies the electorate: a rewritten poll tick cannot pay out', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), tick: 'JUNK' });
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'poll electorate is not the governance token');
+            assert.strictEqual(await proposalStatus(), 'ARMED');
         });
 
         it('an underfunded treasury reverts instead of part-paying', async function () {
@@ -399,6 +472,39 @@ function passedPoll() {
         });
         it('rejects a missing guardian', async function () {
             assert.strictEqual((await badDeploy(['', GOV, '10', '20', MIN_PROPOSE, 'guardian'])).success, false);
+        });
+
+        // Integer-shape gate on timelockBlocks and executeWindowBlocks. Both are
+        // raw deployer text, and a radix-less parseInt MEASURES them as something
+        // else entirely: '1e3' is 1, '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99'
+        // is 5. The old `parseInt(x) > 0` check then passed on the mis-measured
+        // value, so a deployer asking for a 1000-block timelock via '1e3' silently
+        // armed a 1-block one and defense #3 collapsed.
+        it('rejects integer params a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await badDeploy([GUARDIAN, GOV, v, '20', MIN_PROPOSE, 'guardian'])).success, false,
+                    `timelockBlocks ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await badDeploy([GUARDIAN, GOV, '10', v, MIN_PROPOSE, 'guardian'])).success, false,
+                    `executeWindowBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects integer params outside their range and stores accepted ones verbatim', async function () {
+            assert.strictEqual((await badDeploy([GUARDIAN, GOV, '10', '0', MIN_PROPOSE, 'guardian'])).success, false);
+            assert.strictEqual((await badDeploy([GUARDIAN, GOV, '-10', '20', MIN_PROPOSE, 'guardian'])).success, false);
+            assert.strictEqual((await badDeploy([GUARDIAN, GOV, '1000001', '20', MIN_PROPOSE, 'guardian'])).success, false);
+            assert.strictEqual((await badDeploy([GUARDIAN, GOV, '10', '1000001', MIN_PROPOSE, 'guardian'])).success, false);
+            assert.strictEqual((await badDeploy([GUARDIAN, GOV, '1000000', '1000000', MIN_PROPOSE, 'guardian'])).success, true);
+
+            // '10'/'20' mean 10 and 20 blocks in state, not the 1 and 2 a
+            // parseInt of '1e1'/'2e1' gave.
+            await deploy();
+            assertContractState(h.ledger, ADDR, 'timelock', String(TIMELOCK));
+            assertContractState(h.ledger, ADDR, 'exec_window', String(WINDOW));
         });
     });
 
