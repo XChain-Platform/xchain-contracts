@@ -29,9 +29,11 @@
 // transfer executed the moment the vote closed). Four stacked defenses:
 //
 //   1. Proposal gate - only holders of the governance token can propose.
-//   2. Poll binding  - in 'guardian' mode (the recommended posture) each poll
-//                      must be bound to its proposal by the guardian BEFORE it
-//                      finalizes; a hostile look-alike poll can never arm.
+//   2. Poll binding  - arm() pins the poll's electorate to the governance
+//                      token, and in 'guardian' mode (the recommended posture)
+//                      each poll must also be bound to its proposal by the
+//                      guardian BEFORE it finalizes; a hostile look-alike poll
+//                      can never arm.
 //   3. Timelock      - an armed proposal waits `timelockBlocks` before it can
 //                      execute; the pending transfer is public contract state.
 //   4. Guardian veto - the guardian can kill a proposal any time before it
@@ -39,27 +41,37 @@
 //
 // WHY THE GUARDIAN EXISTS (read before choosing 'open' mode)
 //
-// The VOTE finalization callback tells this contract THAT a poll passed, but
-// the protocol does not tell the contract WHICH token voted: neither the
-// callback arguments nor xchain.getPollResult carry the poll's TICK. Anyone
-// can create a poll over a worthless token they fully control, point its
-// CALLBACK_CONTRACT at this treasury, and "pass" it unanimously. In 'guardian'
-// mode that poll is inert, because only a poll the guardian has verified
-// off-chain (right electorate token, real QUORUM / MIN_VOTERS, option 0 =
-// approve) and bound via approvePoll() can arm its proposal. In 'open' mode
-// any passing poll that names a live proposal arms it, and the timelock plus
-// veto window is the ONLY barrier left. Choose 'open' only with an actively
-// watching guardian and holders who will see the pending transfer in time.
+// The VOTE finalization callback now tells this contract WHICH token voted:
+// the poll's electorate TICK rides in the callback arguments, and the
+// xchain.getPollResult snapshot carries it too. arm() and executeProposal()
+// both pin that tick to govTick, so the classic swap - create a poll over a
+// worthless token you fully control, point its CALLBACK_CONTRACT at this
+// treasury, "pass" it unanimously - is inert in BOTH modes.
+//
+// What no protocol surface reports is whether the poll's gates were REAL.
+// QUORUM and MIN_VOTERS read as met when they were never configured (see POLL
+// CONVENTIONS below), and nothing on-chain says which option index the poll's
+// own text called "approve", so a poll over the governance token itself can
+// still be shaped to pass on almost no turnout. Verifying that off-chain
+// before binding the poll via approvePoll() is what the guardian is for, and
+// it is why 'guardian' stays the recommended posture. In 'open' mode any
+// passing governance-token poll that names a live proposal arms it, and the
+// timelock plus veto window is the ONLY barrier left. Choose 'open' only with
+// an actively watching guardian and holders who will see the pending transfer
+// in time.
 //
 // POLL CONVENTIONS (the poll creator must follow these)
 //
+//   - The poll's TICK must be the governance token this treasury was deployed
+//     with, spelled identically; arm() compares the two as exact strings.
 //   - options[0] is the approval option ("approve"); arm() rejects any other
 //     winner, so "reject" polls and multi-option polls cannot move funds.
 //   - Set QUORUM and MIN_VOTERS on the poll. The protocol reports both gates
 //     as met when they were never configured, so arm()'s gate check cannot
 //     tell "met" from "absent"; the guardian verifies them before binding.
 //   - CALLBACK_CONTRACT = this contract's deploy action index,
-//     CALLBACK_METHOD = "arm", CALLBACK_PARAMS = [proposalId],
+//     CALLBACK_METHOD = "arm", CALLBACK_PARAMS = [proposalId] and nothing
+//     else (arm() pins the argument count, so a spare param reverts),
 //     CALLBACK_ON = "pass" (the default), and a GAS_ESCROW that covers
 //     arm()'s execution.
 //
@@ -71,6 +83,14 @@
 // sends that amount, floored onto the tick's decimal grid, and nothing else
 // (the on-grid figure paid is recorded on the proposal as `paid`).
 // ---------------------------------------------------------------------------
+
+// Upper bound for the two integer constructor params. A sanity ceiling, not a
+// protocol limit: both values are added to a plain JS block height, so the point
+// is to keep a fat-fingered constructor term inside the exactly-representable
+// integer range rather than to constrain a real treasury.
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling priceBet.js and patterns/validation.js use for a block window.
+var MAX_WINDOW_BLOCKS = 1000000;
 
 module.exports = {
 
@@ -93,17 +113,28 @@ module.exports = {
     // `mode` is 'guardian' (polls must be bound via approvePoll before they can
     // arm) or 'open' (any passing poll naming a live proposal arms it).
     initialize: function (xchain) {
-        var guardian = xchain.getInputParam(0);
-        var govTick  = xchain.getInputParam(1);
-        var timelock = parseInt(xchain.getInputParam(2));
-        var window   = parseInt(xchain.getInputParam(3));
-        var minProp  = xchain.getInputParam(4);
-        var mode     = xchain.getInputParam(5);
+        var guardian    = xchain.getInputParam(0);
+        var govTick     = xchain.getInputParam(1);
+        var timelockRaw = xchain.getInputParam(2);
+        var windowRaw   = xchain.getInputParam(3);
+        var minProp     = xchain.getInputParam(4);
+        var mode        = xchain.getInputParam(5);
 
         xchain.require(guardian, 'guardian required');
         xchain.require(govTick, 'govTick required');
-        xchain.require(timelock > 0, 'timelockBlocks must be a positive integer');
-        xchain.require(window > 0, 'executeWindowBlocks must be a positive integer');
+        // Shape-check the integers, do NOT parseInt-then-range-check them. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and both
+        // params are raw deployer text measured in the same deploy that stores them.
+        // The timelock is defense #3 above: a deployer asking for a 1000-block
+        // timelock via '1e3' would silently arm a 1-block one, so an armed proposal
+        // becomes executable almost immediately and the pending transfer every
+        // holder is supposed to see coming collapses. Same for the execution
+        // window. See requireIntInRange.
+        requireIntInRange(xchain, timelockRaw, 1, MAX_WINDOW_BLOCKS, 'timelockBlocks');
+        requireIntInRange(xchain, windowRaw, 1, MAX_WINDOW_BLOCKS, 'executeWindowBlocks');
+        var timelock = parseInt(timelockRaw, 10);
+        var window   = parseInt(windowRaw, 10);
         xchain.require(minProp && xchain.math.gt(minProp, '0'),
             'minProposeBalance must be positive');
         xchain.require(mode === 'guardian' || mode === 'open',
@@ -182,13 +213,23 @@ module.exports = {
     },
 
     // arm(pollIndex, status, winningOption, totalWeight, totalVoters, quorumMet,
-    //     minVotersMet, proposalId): the VOTE finalization callback (Section 14
-    //     of the VOTE spec). The injected EXECUTE's SOURCE is this contract's own
-    //     address, which no user action and no other contract's emit.execute can
-    //     present, so the caller check pins this method to poll finalizations.
+    //     minVotersMet, tick, proposalId): the VOTE finalization callback
+    //     (Section 14 of the VOTE spec). The injected EXECUTE's SOURCE is this
+    //     contract's own address, which no user action and no other contract's
+    //     emit.execute can present, so the caller check pins this method to poll
+    //     finalizations.
+    //
+    // The electorate TICK rides at slot 7, after minVotersMet and before the
+    // developer CALLBACK_PARAMS, so the bound proposal id is slot 8. The arity
+    // is pinned rather than probed: a treasury that guesses which slot carries
+    // the id arms the WRONG proposal, so an unrecognised signature must revert.
     arm: function (xchain) {
         xchain.require(xchain.getSourceAddress() === xchain.getContractAddress(),
             'arm is only callable by a poll finalization callback');
+
+        xchain.require(xchain.getInputParamCount() === 9,
+            'unexpected callback signature: expected pollIndex, status, winner, ' +
+            'weight, voters, quorumMet, minVotersMet, tick, proposalId');
 
         var pollIndex = xchain.getInputParam(0);
         var status    = xchain.getInputParam(1);
@@ -197,11 +238,19 @@ module.exports = {
         var voters    = xchain.getInputParam(4);
         var quorumMet = xchain.getInputParam(5);
         var minVoters = xchain.getInputParam(6);
-        var id        = xchain.getInputParam(7);
+        var tick      = xchain.getInputParam(7);
+        var id        = xchain.getInputParam(8);
 
         xchain.require(status === 'finalized', 'poll did not finalize with a result');
         xchain.require(winning === '0', 'poll winner is not the approval option');
         xchain.require(quorumMet === '1' && minVoters === '1', 'poll gates not met');
+        // The electorate pin: exact equality against the configured governance
+        // tick, which also rejects the empty string the protocol sends for a
+        // poll bound to no token. Case sensitivity is already load-bearing here,
+        // because propose() reads the caller's balance in this same stored
+        // string, so the pin adds no new spelling hazard.
+        xchain.require(tick === xchain.state.get('gov_tick'),
+            'poll electorate is not the governance token');
 
         var rec = loadProposal(xchain, id);
         xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
@@ -262,6 +311,12 @@ module.exports = {
         var poll = xchain.getPollResult(rec.poll);
         xchain.require(poll !== null && poll.status === 'finalized' &&
             String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
+        // The electorate is re-checked here for the same reason the winner is:
+        // the poll snapshot, not the armed state, is what the payout answers to.
+        // The snapshot carries `tick` on every block that can reach this line,
+        // because arm() only accepts the callback signature that ships with it.
+        xchain.require(poll.tick === xchain.state.get('gov_tick'),
+            'poll electorate is not the governance token');
 
         // Floor the payout onto the tick's decimal grid before both the custody
         // check and the emission (amm/vesting/crowdsale do the same): the indexer
@@ -368,6 +423,29 @@ function requirePlainDecimal(xchain, value, label) {
                 'no exponent / sign / radix prefix (got "' + s + '")');
         }
     }
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e2' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a window the
+// check never truly approved and the treasury would run on terms nobody chose.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk, the same constraint that shaped requirePlainDecimal.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }
 
 // Quantise a computed quantity DOWN onto a tick's decimal grid. Pure exact string

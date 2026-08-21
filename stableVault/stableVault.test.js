@@ -366,5 +366,33 @@ const MAXAGE = '10';        // oracle freshness window, blocks
             const same = await deployWith([COLL, COLL, PAIR, RATIO, BONUS, MAXAGE]);
             assert.strictEqual(same.success, false, 'collateral == stable should revert in initialize');
         });
+
+        // Integer-shape gate on maxSnapshotAge. It is raw deployer text, and a
+        // radix-less parseInt MEASURES it as something else entirely: '1e3' is 1,
+        // '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5. The old
+        // `parseInt(x) > 0` check then passed on the mis-measured value and
+        // initialize() stored it, so a deployer asking for a 1000-block staleness
+        // window via '1e3' silently got a 1-block one and freshPrice() reverted
+        // borrow/withdraw/liquidate on every call.
+        it('rejects a maxSnapshotAge a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, v])).success, false,
+                    `maxSnapshotAge ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects a maxSnapshotAge outside its range and stores an accepted one verbatim', async function () {
+            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '0'])).success, false);
+            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '-10'])).success, false);
+            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '1000001'])).success, false);
+            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '1000000'])).success, true);
+
+            // '10' means 10 blocks in state, not the 1 a parseInt of '1e1' gave.
+            await deployVault();
+            assertContractState(h.ledger, ADDR, 'maxSnapshotAge', MAXAGE);
+        });
     });
 });

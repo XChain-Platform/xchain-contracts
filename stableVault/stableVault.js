@@ -63,6 +63,14 @@
 
 'use strict';
 
+// Upper bound for the one integer constructor param. A sanity ceiling, not a
+// protocol limit: maxSnapshotAge is compared against a plain JS block count, so
+// the point is to keep a fat-fingered constructor term inside the
+// exactly-representable integer range rather than to constrain a real vault.
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling priceBet.js and patterns/validation.js use for a block window.
+var MAX_WINDOW_BLOCKS = 1000000;
+
 module.exports = {
 
     // initialize(collateralTick, stableTick, coinPair, minRatioPct,
@@ -91,8 +99,16 @@ module.exports = {
             'minRatioPct must exceed 100');
         xchain.require(liqBonusPct && xchain.math.gte(liqBonusPct, '0'),
             'liqBonusPct must be >= 0');
-        var maxAge = parseInt(maxSnapshotAge);
-        xchain.require(maxAge > 0, 'maxSnapshotAge must be a positive integer');
+        // Shape-check the integer, do NOT parseInt-then-range-check it. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and this
+        // param is raw deployer text measured in the same deploy that stores it:
+        // a deployer asking for a 1000-block staleness window via '1e3' would
+        // silently get a 1-block one, and freshPrice() would then revert borrow(),
+        // withdraw() and liquidate() on every call whenever the oracle cadence is
+        // slower than one block. See requireIntInRange.
+        requireIntInRange(xchain, maxSnapshotAge, 1, MAX_WINDOW_BLOCKS, 'maxSnapshotAge');
+        var maxAge = parseInt(maxSnapshotAge, 10);
 
         xchain.state.set('collateralTick', collateralTick);
         xchain.state.set('stableTick', stableTick);
@@ -404,6 +420,29 @@ function requirePlainDecimal(xchain, value, label) {
                 'no exponent / sign / radix prefix (got "' + s + '")');
         }
     }
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e2' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a value the
+// check never truly approved and the deployer would get terms they never asked for.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk, the same constraint that shaped requirePlainDecimal.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }
 
 // Truncate a fixed-notation decimal string DOWN to `decimals` fraction digits.

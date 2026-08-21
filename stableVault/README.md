@@ -56,6 +56,14 @@ floor no-ops, the off-grid value reaches both the vault books and the wire,
 and the ledger's HALF-UP re-rounding moves half a base unit more than the
 books recorded, on every call.
 
+`initialize(...)` requires `maxSnapshotAge` to be a canonical base-10 integer
+in `[1, 1000000]` blocks. That is a shape check, not a value parse: a
+radix-less `parseInt` silently re-measures `'1e3'` as `1` and `'0x10'` as
+`16`, so a deployer who asked for a 1000-block staleness window would have
+got a 1-block one, and `freshPrice` would then revert `borrow`, `withdraw`
+and `liquidate` on every call whenever the oracle publishes less often than
+once per block.
+
 ## On-chain caveats (learned from the e2e run)
 
 - **Declare `maxSupply`** in the emitted ISSUE: an unset cap reads as 0 and

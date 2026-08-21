@@ -121,7 +121,9 @@ describe('pattern helpers pasted into templates match the library source', funct
         ],
         requireIntInRange: [
             'priceBet/priceBet.js',
-            'priceBetTimed/priceBetTimed.js'
+            'priceBetTimed/priceBetTimed.js',
+            'stableVault/stableVault.js',
+            'treasury/treasury.js'
         ]
     };
 
