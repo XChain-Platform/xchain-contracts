@@ -1,6 +1,6 @@
 {
   "name": "xchain-contracts",
-  "version": "0.1.0",
+  "version": "0.10.0",
   "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
   "overrides": {
     "brace-expansion": "^5.0.9",
