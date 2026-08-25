@@ -74,7 +74,7 @@ var MAX_WINDOW_BLOCKS = 1000000;
 module.exports = {
 
     // initialize(collateralTick, stableTick, coinPair, minRatioPct,
-    //            liqBonusPct, maxSnapshotAge)
+    //            liqBonusPct, maxSnapshotAge, stableDecimals)
     //
     //   collateralTick  token accepted as collateral (e.g. 'XCHAIN')
     //   stableTick      token this contract mints as debt (e.g. 'DUSD')
@@ -82,6 +82,8 @@ module.exports = {
     //   minRatioPct     minimum collateralization, percent (e.g. '150')
     //   liqBonusPct     liquidator's bonus over the debt, percent (e.g. '10')
     //   maxSnapshotAge  max oracle age (blocks) for price-sensitive ops
+    //   stableDecimals  decimal grid of the stable this contract issues,
+    //                   0-18, default '8'
     initialize: function (xchain) {
         var collateralTick = xchain.getInputParam(0);
         var stableTick     = xchain.getInputParam(1);
@@ -89,6 +91,7 @@ module.exports = {
         var minRatioPct    = xchain.getInputParam(3);
         var liqBonusPct    = xchain.getInputParam(4);
         var maxSnapshotAge = xchain.getInputParam(5);
+        var stableDecs     = xchain.getInputParam(6) || '8';
 
         xchain.require(collateralTick, 'collateralTick required');
         xchain.require(stableTick, 'stableTick required');
@@ -109,6 +112,14 @@ module.exports = {
         // slower than one block. See requireIntInRange.
         requireIntInRange(xchain, maxSnapshotAge, 1, MAX_WINDOW_BLOCKS, 'maxSnapshotAge');
         var maxAge = parseInt(maxSnapshotAge, 10);
+        // The stable's grid is deployer text with TWO permanent sinks: the
+        // emit.issue below (decimals lock once supply exists) and the state key
+        // borrow() floors against. Shape-check it for the same reason
+        // maxSnapshotAge is shape-checked, then store the canonical spelling in
+        // both places so the two can never disagree ('08' issued, 8 floored).
+        // ISSUE permits 0-18.
+        requireIntInRange(xchain, stableDecs, 0, 18, 'stableDecimals');
+        var stableGrid = String(parseInt(stableDecs, 10));
 
         xchain.state.set('collateralTick', collateralTick);
         xchain.state.set('stableTick', stableTick);
@@ -116,6 +127,9 @@ module.exports = {
         xchain.state.set('minRatioPct', minRatioPct);
         xchain.state.set('liqBonusPct', liqBonusPct);
         xchain.state.set('maxSnapshotAge', String(maxAge));
+        // borrow()'s decimal grid. Persisted because the ledger cannot serve it:
+        // see the note above tickDecimals().
+        xchain.state.set('stableDecimals', stableGrid);
         xchain.state.set('trackedColl', '0');
         xchain.state.set('trackedStable', '0');
         xchain.state.set('totalDebt', '0');
@@ -124,8 +138,15 @@ module.exports = {
         // unit in existence is minted here against collateral and burned on
         // repay/liquidation -- the contract IS the monetary policy. maxSupply
         // must be declared: the indexer rejects any MINT on a token whose cap
-        // is unset (it reads as 0).
-        xchain.emit.issue({ tick: stableTick, maxSupply: '1000000000' });
+        // is unset (it reads as 0), and decimals must be declared here too: ISSUE
+        // defaults them to 0 and locks them once supply exists, so an undeclared
+        // grid would make every borrow() mint a whole-unit token while the debt
+        // books carry fractions.
+        xchain.emit.issue({
+            tick: stableTick,
+            maxSupply: '1000000000',
+            decimals: stableGrid
+        });
     },
 
     // deposit(): credit the caller's vault with the collateral that arrived
@@ -157,8 +178,11 @@ module.exports = {
         // the tick's decimals on the wire; an off-grid `amount` would book raw
         // but round up when minted/sent, leaving a debt the borrower can never
         // repay to exactly '0' (residual dust locks collateral via ratioOk).
-        // Same guard liquidate() applies to the collateral tick.
-        amount = floorToDecimals(amount, tickDecimals(xchain, xchain.state.get('stableTick')));
+        // Same guard liquidate() applies to the collateral tick, but the grid
+        // comes from state, not from the ledger: the vault never custodies the
+        // stable and borrow() is the only source of it in existence, so
+        // getTokenInfo(stableTick) is structurally empty here (see tickDecimals).
+        amount = floorToDecimals(amount, stableGridOf(xchain));
         xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
 
         var price   = freshPrice(xchain);
@@ -463,14 +487,34 @@ function floorToDecimals(value, decimals) {
     return neg ? '-' + out : out;
 }
 
-// Decimals of a tick the vault custodies, read from the ledger snapshot. The
-// contract always holds the collateral it seizes, so its token info is present
-// whenever balances are (same gate getBalance rides on).
+// Decimals of a tick the vault CUSTODIES, read from the ledger snapshot.
+//
+// Custody is the precondition, not a convenience: getTokenInfo is a lookup into
+// a snapshot the indexer builds only from the pre-action balance rows of SOURCE
+// and the contract address, so a tick neither side holds has no entry and this
+// helper fails closed. The contract always holds the collateral it seizes, so
+// withdraw() and liquidate() are safe callers.
+//
+// The STABLE tick is not: initialize() issues it with no MINT_SUPPLY and
+// borrow() is the only source of it in existence, so at the first borrow neither
+// the contract nor the borrower holds a row and the snapshot cannot contain it.
+// Its grid is declared at deploy time and read from state instead
+// (stableGridOf), the same way crowdsale.js carries saleDecimals. Do not route
+// borrow() back through here.
 function tickDecimals(xchain, tick) {
     var info = xchain.getTokenInfo(tick);
     xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
         'token decimals unavailable: ' + tick);
     return info.DECIMALS;
+}
+
+// The stable's decimal grid, as declared at deploy time and locked onto the
+// token by initialize()'s emit.issue. Fails closed on an unreadable value rather
+// than letting parseInt(NaN) turn floorToDecimals into a truncate-to-integer.
+function stableGridOf(xchain) {
+    var d = parseInt(xchain.state.get('stableDecimals'), 10);
+    xchain.require(d >= 0 && d <= 18, 'stableDecimals unavailable');
+    return d;
 }
 
 // Collateralization check without division:

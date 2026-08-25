@@ -44,6 +44,14 @@
 // tick, is not recoverable by this template.
 // ---------------------------------------------------------------------------
 
+// Upper bound for the two schedule constructor params. A sanity ceiling, not a
+// protocol limit: both are compared against a plain JS block height in
+// vestedAmount(), so the point is to keep a fat-fingered constructor term inside
+// the exactly-representable integer range rather than to constrain a real grant.
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling treasury.js, priceBet.js and patterns/validation.js use.
+var MAX_WINDOW_BLOCKS = 1000000;
+
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at
 // ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
@@ -101,16 +109,27 @@ module.exports = {
         var beneficiary = xchain.getInputParam(1);
         var tick        = xchain.getInputParam(2);
         var total       = xchain.getInputParam(3);
-        var cliff       = parseInt(xchain.getInputParam(4));
-        var duration    = parseInt(xchain.getInputParam(5));
+        var cliffRaw    = xchain.getInputParam(4);
+        var durationRaw = xchain.getInputParam(5);
         var revocable   = xchain.getInputParam(6);
 
         xchain.require(grantor && beneficiary, 'grantor, beneficiary required');
         xchain.require(tick, 'tick required');
         xchain.require(total && xchain.math.gt(total, '0'), 'total must be positive');
-        xchain.require(duration > 0, 'durationBlocks must be a positive integer');
+        // Shape-check the schedule terms, do NOT parseInt-then-range-check them. A
+        // radix-less parseInt blesses spellings that mean something else entirely
+        // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and both
+        // params are raw deployer text measured in the same deploy that stores them.
+        // A grant the deployer asked to vest over 1000 blocks via '1e3' would
+        // silently install a 1-block duration, so vestedAmount() returns the whole
+        // grant at the next block and the beneficiary can drain it immediately,
+        // while the DEPLOY params on chain still read '1e3'. See requireIntInRange.
+        requireIntInRange(xchain, cliffRaw, 0, MAX_WINDOW_BLOCKS, 'cliffBlocks');
+        requireIntInRange(xchain, durationRaw, 1, MAX_WINDOW_BLOCKS, 'durationBlocks');
+        var cliff    = parseInt(cliffRaw, 10);
+        var duration = parseInt(durationRaw, 10);
         // cliff of 0 is allowed; a cliff longer than the whole schedule is not.
-        xchain.require(cliff >= 0 && cliff <= duration, 'cliffBlocks must be in [0, durationBlocks]');
+        xchain.require(cliff <= duration, 'cliffBlocks must be in [0, durationBlocks]');
         xchain.require(revocable === 'true' || revocable === 'false', 'revocable must be "true" or "false"');
 
         xchain.state.set('grantor', grantor);
@@ -243,4 +262,29 @@ function vestedAmount(xchain) {
     if (elapsed < cliff) return '0';
     if (elapsed >= duration) return total;
     return xchain.math.divide(xchain.math.multiply(total, String(elapsed)), String(duration));
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e3' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a schedule
+// the check never truly approved and the grant would vest on terms nobody chose.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported: contract sources load
+// as a single file into the isolated VM, which is why every adopting sibling
+// (treasury.js, stableVault.js, priceBet.js) carries its own copy.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }

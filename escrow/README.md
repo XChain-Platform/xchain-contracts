@@ -81,6 +81,13 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
   hand the seller a shrunken (or already-expired) protection window, letting the
   buyer `timeout()`-reclaim a just-funded escrow and bypass the seller/arbiter
   settlement path. Same clock-starts-at-funding pattern as the vesting template.
+- **A deadline that is not the one the deployer wrote.** `initialize(...)`
+  requires `deadlineBlocks` to be a canonical base-10 integer string in
+  `[1, 1000000]` blocks. That is a shape check, not a value parse: a radix-less
+  `parseInt` silently re-measures `'1e9'` as `1` and `'0x10'` as `16`, so a
+  seller reading a ~19,000-year protection window off the DEPLOY action would
+  have got a 1-block one, letting the buyer `fund()`, take delivery, and reclaim
+  the whole balance via `timeout()` at the next block.
 - **Reentrancy.** Emissions are deferred and processed by the indexer after the
   method returns, inside one atomic scope - there is no mid-method callback into
   this contract, and the terminal status is already written.

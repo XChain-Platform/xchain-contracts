@@ -4,10 +4,11 @@
 // patterns.e2e.test.js: proves the pattern HELPERS actually run in the VM
 // (patterns.test.js only lint/compile-checks them).
 //
-// Builds a small "vault" contract by concatenating the REAL pattern source
-// files (no copies, so they can't drift) and exercises onlyOwner / whenNotPaused /
-// requireStatus+setStatus / requireAddress / requirePositive / heldBalance
-// through the xchain-vm E2E harness (isolated-vm / Node 22).
+// Builds a small "vault" contract by concatenating EVERY REAL pattern source
+// file (discovered, not listed, so a new pattern cannot ship without compiling
+// in the isolate) and exercises onlyOwner / whenNotPaused / requireStatus+setStatus
+// / requireAddress / requirePositive / heldBalance through the xchain-vm E2E
+// harness (isolated-vm / Node 22).
 //
 //   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/patterns/patterns.e2e.test.js
 
@@ -29,8 +30,21 @@ try {
 } catch (e) { XChainVM = null; console.log('Skipping pattern e2e: xchain-vm harness not available (need adjacent xchain-vm install on Node 22)'); }
 
 // Concatenate the actual pattern helpers, then a contract that uses them.
-const HELPERS = ['access-control', 'pausable', 'safe-transfer', 'validation', 'state-machine']
-    .map(n => fs.readFileSync(path.join(__dirname, n + '.js'), 'utf8'))
+// Discovered by the SAME predicate patterns.test.js and bin/xchain-contracts.js
+// listAvailable() use, never enumerated: a literal roster here would let a sixth
+// patterns/*.js be listed, scaffolded and linted while never once compiling
+// inside the isolate, with every gate green. Sorted for a deterministic blob;
+// the pattern files are all top-level function declarations, so concatenation
+// order does not affect resolution. test/gate-wiring.test.js asserts, VM-free,
+// that those names stay unique and that every file is actually exercised below.
+const PATTERN_FILES = fs.readdirSync(__dirname)
+    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
+    .sort();
+assert.ok(PATTERN_FILES.length > 0,
+    'no pattern sources discovered in patterns/; the vault would be composed from an ' +
+    'empty helper blob and every assertion below would prove nothing');
+const HELPERS = PATTERN_FILES
+    .map(f => fs.readFileSync(path.join(__dirname, f), 'utf8'))
     .join('\n');
 
 const VAULT = HELPERS + '\n' + `

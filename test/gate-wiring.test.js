@@ -161,4 +161,51 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'these template suites never deploy through the E2E harness, so the template is ' +
             'lint-only however green the run looks: ' + offenders.join(', '));
     });
+
+    // Patterns are shipped source too, but they are NOT <name>/<name>.js, so the two
+    // checks above skip them by construction and the same false green reopens one
+    // directory over: patterns/patterns.e2e.test.js is the only suite that runs pattern
+    // source through the VM, and it degrades to describe.skip wherever isolated-vm will
+    // not load. String matching only, for that exact reason (see the note above).
+    it('every pattern source contributes a helper the VM-deployed vault calls', function () {
+        const dir   = path.join(REPO_DIR, 'patterns');
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.js') && !f.endsWith('.test.js')).sort();
+        assert.ok(files.length > 0,
+            'pattern discovery found nothing; the predicate has drifted from ' +
+            'bin/xchain-contracts.js listAvailable() and this guard is now inert');
+
+        // Same extraction oz-aliases.test.js uses for the paste-in helper set.
+        const fnsOf = (f) => {
+            const re = /^function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/gm;
+            const src = fs.readFileSync(path.join(dir, f), 'utf8');
+            const out = [];
+            let m;
+            while ((m = re.exec(src)) !== null) out.push(m[1]);
+            return out;
+        };
+
+        // patterns.e2e.test.js concatenates every file into one script, so a repeated
+        // top-level name silently shadows the earlier definition, last file wins.
+        const seen    = new Map();
+        const clashes = [];
+        for (const f of files) {
+            for (const fn of fnsOf(f)) {
+                if (seen.has(fn)) clashes.push(fn + ' (' + seen.get(fn) + ' vs ' + f + ')');
+                else seen.set(fn, f);
+            }
+        }
+        assert.deepStrictEqual(clashes, [],
+            'these helper names are declared in more than one pattern file, so the composed ' +
+            'e2e vault silently runs whichever came last: ' + clashes.join(', '));
+
+        const e2e = fs.readFileSync(path.join(dir, 'patterns.e2e.test.js'), 'utf8');
+        const offenders = files.filter(f => {
+            const fns = fnsOf(f);
+            return fns.length === 0 || !fns.some(fn => new RegExp('\\b' + fn + '\\s*\\(').test(e2e));
+        });
+        assert.deepStrictEqual(offenders, [],
+            'these pattern sources are listed, scaffolded and linted but no helper of theirs is ' +
+            'ever called in the vault patterns.e2e.test.js deploys, so their VM coverage is ' +
+            'imaginary: ' + offenders.join(', '));
+    });
 });

@@ -51,6 +51,14 @@
 // only ever returns the ITEM, not stray bidTick - see Known limitations).
 // ---------------------------------------------------------------------------
 
+// Upper bound for the duration constructor param. A sanity ceiling, not a
+// protocol limit: fund() adds this window to a plain JS block height, so the
+// point is to keep a fat-fingered constructor term inside the exactly-
+// representable integer range rather than to constrain a real auction.
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling escrow.js, treasury.js and patterns/validation.js use.
+var MAX_WINDOW_BLOCKS = 1000000;
+
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at ledger-
 // write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up, NOT
@@ -108,7 +116,7 @@ module.exports = {
         var bidTick    = xchain.getInputParam(3);
         var startPrice = xchain.getInputParam(4);
         var endPrice   = xchain.getInputParam(5);
-        var duration   = parseInt(xchain.getInputParam(6));
+        var durationRaw = xchain.getInputParam(6);
 
         xchain.require(seller, 'seller required');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
@@ -116,7 +124,15 @@ module.exports = {
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
         xchain.require(endPrice && xchain.math.gt(endPrice, '0'), 'endPrice must be positive');
         xchain.require(startPrice && xchain.math.gt(startPrice, endPrice), 'startPrice must exceed endPrice');
-        xchain.require(duration > 0, 'durationBlocks must be a positive integer');
+        // Shape-check the duration, do NOT parseInt-then-range-check it. A radix-less
+        // parseInt blesses spellings that mean something else entirely ('1e3' -> 1,
+        // '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and durationBlocks is
+        // raw deployer text measured in the same deploy that stores it. A seller
+        // reading '1e3' off the DEPLOY action believes they armed a 1000-block decay
+        // while initialize() armed a 1-block one, so the price collapses to endPrice
+        // one block after fund() and the item sells at the floor. See requireIntInRange.
+        requireIntInRange(xchain, durationRaw, 1, MAX_WINDOW_BLOCKS, 'durationBlocks');
+        var duration = parseInt(durationRaw, 10);
 
         xchain.state.set('seller', seller);
         xchain.state.set('itemTick', itemTick);
@@ -212,4 +228,29 @@ function currentPrice(xchain) {
     var drop = xchain.math.subtract(startPrice, endPrice);
     var decayed = xchain.math.divide(xchain.math.multiply(drop, String(elapsed)), String(duration));
     return xchain.math.subtract(startPrice, decayed);
+}
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e3' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a duration the
+// check never truly approved and the price curve would run on terms nobody chose.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported: contract sources load
+// as a single file into the isolated VM, which is why every adopting sibling
+// (escrow.js, treasury.js, stableVault.js, priceBet.js) carries its own copy.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
 }

@@ -211,5 +211,35 @@ const ADDR   = 'C:BTC:1';
             });
             assert.strictEqual(r.success, false, 'deploy with durationBlocks=0 should revert');
         });
+
+        // durationBlocks is raw deployer text. A radix-less parseInt would measure
+        // '1e3' as 1 and arm a 1-block decay the seller never asked for, so the
+        // constructor shape-checks it (requireIntInRange) instead.
+        it('rejects a durationBlocks that is not a canonical integer', async function () {
+            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99',
+                         '1_000', '+7', '', 'abc', '-', 'Infinity', 'NaN',
+                         '-5', '1000001'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:9',
+                    params: [SELLER, ITEM, '10', BID, '1000', '100', BAD[i]]
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with durationBlocks ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+        });
+
+        it('accepts a canonical durationBlocks and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:5',
+                params: [SELLER, ITEM, '10', BID, '1000', '100', '1000']
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:5', 'duration', '1000');
+        });
     });
 });

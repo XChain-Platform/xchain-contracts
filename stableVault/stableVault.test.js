@@ -395,4 +395,79 @@ const MAXAGE = '10';        // oracle freshness window, blocks
             assertContractState(h.ledger, ADDR, 'maxSnapshotAge', MAXAGE);
         });
     });
+
+    // The stable's decimal grid, under PRODUCTION reachability.
+    //
+    // xchain.getTokenInfo is a lookup into a snapshot the indexer builds only
+    // from the pre-action balance rows of SOURCE and the contract address
+    // (xchain-indexer/src/db.js, buildVmBalancesAndTokenInfo). borrow() is the
+    // only source of the stable in existence, and initialize() issues it with no
+    // MINT_SUPPLY, so on a fresh deployment neither side holds it and
+    // getTokenInfo(stableTick) is null. Every deploy above hides that by seeding
+    // the harness's balance-INDEPENDENT decimals registry, which a real node has
+    // no equivalent of. These deploys seed only the collateral, which the
+    // contract really does custody, so borrow() is exercised the way a node
+    // reaches it: the stable's grid must come from state, declared on the same
+    // emit.issue that creates the token.
+    describe('the stable grid survives an empty tokenInfo snapshot', function () {
+        async function deployNoStableInfo(params) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(ALICE, 'XCHAIN', '1000000');
+            h.seedBalance(ALICE, COLL, '100');
+            h.ledger.setTokenDecimals(COLL, 8);
+            return h.deploy({
+                code: CODE, deployer: ALICE, contractAddress: ADDR,
+                params: params || [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE]
+            });
+        }
+
+        it('borrows with no stable entry in the snapshot, flooring on the declared grid', async function () {
+            assertSuccess(await deployNoStableInfo());
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, '0.000000015'),
+                'borrow must not depend on getTokenInfo(stableTick)');
+            assertContractState(h.ledger, ADDR, 'totalDebt', '0.00000001');
+            assertBalance(h.ledger, ALICE, STABLE, '0.00000001');
+        });
+
+        it('declares the grid on the issuance and floors borrow onto it', async function () {
+            const r = await deployNoStableInfo([COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, '2']);
+            assertSuccess(r);
+            assertContractState(h.ledger, ADDR, 'stableDecimals', '2');
+            const issue = r.result.emittedActions.find(e => e.action === 'ISSUE');
+            assert.strictEqual(issue.params.decimals, '2',
+                'the ISSUE must carry the grid borrow() floors against');
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, '1.239'));
+            assertContractState(h.ledger, ADDR, 'totalDebt', '1.23');
+            assertBalance(h.ledger, ALICE, STABLE, '1.23');
+        });
+
+        it('an omitted stableDecimals defaults to 8 and is declared as such', async function () {
+            const r = await deployNoStableInfo();
+            assertSuccess(r);
+            assertContractState(h.ledger, ADDR, 'stableDecimals', '8');
+            const issue = r.result.emittedActions.find(e => e.action === 'ISSUE');
+            assert.strictEqual(issue.params.decimals, '8');
+        });
+
+        // Same integer-shape gate maxSnapshotAge gets, and for the same reason:
+        // the value is raw deployer text that lands both in state and on a
+        // permanent, supply-locked ISSUE, so a parseInt-blessed spelling would
+        // desync the two sinks.
+        it('rejects a stableDecimals a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e1', '0x10', '7abc', ' 7', '8.5', '1_000', '+8', '-1', '19', 'abc', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployNoStableInfo([COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, v])).success,
+                    false, `stableDecimals ${JSON.stringify(v)} must not deploy`);
+            }
+            assert.strictEqual(
+                (await deployNoStableInfo([COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, '0'])).success, true);
+            assert.strictEqual(
+                (await deployNoStableInfo([COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, '18'])).success, true);
+        });
+    });
 });

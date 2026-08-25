@@ -64,6 +64,14 @@ claimable, and is released with a later claim (fully, once the grant vests).
   once fully vested. It freezes the cap at the amount vested *at revoke time*, so
   the beneficiary keeps exactly what they had earned and nothing further accrues -
   while the grantor recovers only the genuinely-unvested remainder.
+- **A schedule that is not the one the deployer wrote.** `initialize(...)`
+  requires `cliffBlocks` to be a canonical base-10 integer string in
+  `[0, 1000000]` and `durationBlocks` in `[1, 1000000]`. That is a shape check,
+  not a value parse: a radix-less `parseInt` silently re-measures `'1e3'` as `1`
+  and `'0x10'` as `16`, so a grant the deployer asked to vest over 1000 blocks
+  would have installed a 1-block duration and the beneficiary could drain the
+  whole grant at the next block, while the DEPLOY params on chain still read
+  `'1e3'` to anyone auditing them.
 - **Rounding.** `xchain.math` bignumber throughout; no float literals
   (SDK-validated). Computed payouts can land off the tick's decimal grid
   (e.g. 2.666... on a 0-decimal tick), and the indexer re-normalises every

@@ -89,6 +89,15 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   into this contract.
 - **Rounding / float drift.** All amount comparisons use `xchain.math`
   bignumber ops; the SDK's syntax validator rejects float literals outright.
+- **A rejected bid's DEPOSIT is not rolled back.** BATCH sub-actions are not
+  all-or-nothing, so when `bid()` reverts - auction not `ACTIVE`, past the
+  deadline, below `minBid`, not exceeding the current high bid, or a self-raise
+  by the current leader - the DEPOSIT batched ahead of it has already settled
+  and stays in the contract's `bidTick` custody. It is **not recoverable by its
+  sender**: the delta-accounting folds it into the *next* successful bidder's
+  credited bid, and from there it reaches the seller at `settle()`. Same footgun
+  the `cardDispenser` and `dutchAuction` templates document. Read `info()` and
+  be sure the bid will clear before batching the DEPOSIT behind it.
 
 ## Known limitations (by design, for a teaching baseline)
 
@@ -98,7 +107,11 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   bidder, so a self-raise would refund-then-replace the leader's existing
   stake with just the marginal top-up, silently shrinking their real bid. If
   you need self-raises, track a per-bidder cumulative stake in state instead
-  of relying on the shared-balance delta.
+  of relying on the shared-balance delta. **The cost of that choice:** a leader
+  who tries anyway loses the top-up, because the self-raise reverts while its
+  batched DEPOSIT does not (see "A rejected bid's DEPOSIT is not rolled back"
+  above). Raise from a fresh address, or fork this template with per-bidder
+  stakes before running an auction where that mistake is likely.
 - **Single item tick, single bid tick.** Only the configured `itemTick` and
   `bidTick` are handled; tokens of any other tick sent to the contract address
   are not recoverable by this template.

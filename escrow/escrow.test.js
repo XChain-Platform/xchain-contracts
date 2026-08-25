@@ -195,14 +195,44 @@ const TICK    = 'TEST';
     });
 
     describe('deploy-time validation', function () {
-        it('rejects a non-positive amount', async function () {
+        async function deployWith(params) {
             const bad = new E2EHarness(XChainVM);
             bad.seedBalance(BUYER, 'XCHAIN', '1000000');
-            const r = await bad.deploy({
-                code: CODE, deployer: BUYER, contractAddress: 'C:BTC:2',
-                params: [BUYER, SELLER, ARBITER, TICK, '0', '3']
-            });
+            return bad.deploy({ code: CODE, deployer: BUYER, contractAddress: 'C:BTC:2', params: params });
+        }
+
+        it('rejects a non-positive amount', async function () {
+            const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '0', '3']);
             assert.strictEqual(r.success, false, 'deploy with amount=0 should revert in initialize');
+        });
+
+        // Integer-shape gate on deadlineBlocks. It is raw deployer text, and a
+        // radix-less parseInt MEASURES it as something else entirely: '1e9' is 1,
+        // '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5. The old
+        // `parseInt(x) > 0` check then passed on the mis-measured value and
+        // initialize() stored it, so a seller reading '1e9' off the DEPLOY action
+        // as a ~19,000-year protection window actually got a 1-block one: the
+        // buyer could fund(), take delivery, and reclaim the whole balance via
+        // timeout() one block later, bypassing the settlement path entirely.
+        it('rejects a deadlineBlocks a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e9', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([BUYER, SELLER, ARBITER, TICK, '200', v])).success, false,
+                    `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects a deadlineBlocks outside its range and stores an accepted one verbatim', async function () {
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '0'])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '-10'])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000001'])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000000'])).success, true);
+
+            // '10' means 10 blocks in state, not the 1 a parseInt of '1e1' gave.
+            await deployEscrow(10);
+            assertContractState(h.ledger, ADDR, 'window', '10');
         });
     });
 });

@@ -76,6 +76,38 @@ function floorToDecimals(value, decimals) {
     return neg ? '-' + out : out;
 }
 
+// Upper bound for the sale window. A sanity ceiling, not a protocol limit:
+// initialize() adds this window to a plain JS block height, so the point is to
+// keep a fat-fingered constructor term inside the exactly-representable integer
+// range rather than to constrain a real sale. MAX_WINDOW_BLOCKS is 1e6 blocks
+// (~19 years at 10-minute blocks), the same ceiling treasury.js, stableVault.js
+// and patterns/validation.js use for a block window.
+var MAX_WINDOW_BLOCKS = 1000000;
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e3' -> 1, '0x10' -> 16,
+// '5abc' -> 5, ' 5' -> 5, '5.99' -> 5), so initialize() would store a deadline the
+// check never truly approved and the sale would run on a window nobody chose.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported: contract sources load as
+// a single file into the isolated VM.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
+}
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -100,7 +132,7 @@ module.exports = {
         var rate     = xchain.getInputParam(3);
         var softCap  = xchain.getInputParam(4);
         var hardCap  = xchain.getInputParam(5);
-        var duration = parseInt(xchain.getInputParam(6));
+        var durationRaw = xchain.getInputParam(6);
         var decimals = xchain.getInputParam(7) || '8';
 
         xchain.require(owner && payTick && saleTick, 'owner, payTick, saleTick required');
@@ -108,7 +140,17 @@ module.exports = {
         xchain.require(rate && xchain.math.gt(rate, '0'), 'rate must be positive');
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
         xchain.require(hardCap && xchain.math.gte(hardCap, softCap), 'hardCap must be >= softCap');
-        xchain.require(duration > 0, 'durationBlocks must be a positive integer');
+        // Shape-check the window, do NOT parseInt-then-range-check it. This is the
+        // same discipline saleDecimals gets nine lines below, and for the same
+        // reason: durationBlocks is raw deployer text measured in the same deploy
+        // that burns it into the permanent `deadline` key, and a radix-less
+        // parseInt blesses spellings that mean something else entirely ('1e3' -> 1,
+        // '0x10' -> 16, '5.99' -> 5, ' 5' -> 5, '+5' -> 5, '5abc' -> 5). A sale the
+        // DEPLOY action advertises as 1000 blocks would open for one: buy() rejects
+        // every later contribution and finalize() then latches FAILED for want of
+        // the soft cap. See requireIntInRange.
+        requireIntInRange(xchain, durationRaw, 1, MAX_WINDOW_BLOCKS, 'durationBlocks');
+        var duration = parseInt(durationRaw, 10);
         // saleDecimals defines both the sale token's permanent grid (emit.issue) and
         // claim()'s mint quantisation; a malformed value would desync the two sinks
         // (parseInt(NaN) makes floorToDecimals truncate to the integer part while the
