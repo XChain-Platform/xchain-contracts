@@ -97,6 +97,21 @@ const UNIT  = '1';
             assertContractBalance(h.ledger, ADDR, PAY, '0');
         });
 
+        // Regression: the sweep moves payTick OUT of custody, so the acctPay
+        // watermark draw() measures against has to follow it down. Leaving the
+        // watermark at the pre-sweep total makes every later draw() compute a
+        // negative delta and revert 'underpaid' forever.
+        it('a draw still works after the owner sweeps the proceeds', async function () {
+            await deployDispenser();
+            await draw();
+            await draw();
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER }));
+            assertContractBalance(h.ledger, ADDR, PAY, '0');
+            assertContractState(h.ledger, ADDR, 'acctPay', '0');
+            assertSuccess(await draw());
+            assertContractState(h.ledger, ADDR, 'nonce', '3');
+        });
+
         it('info() reports remaining stock', async function () {
             await deployDispenser();
             const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: STRANGER });
@@ -156,6 +171,25 @@ const UNIT  = '1';
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
             assertBalance(h.ledger, BUYER, A, '1');     // kept the one card it drew
             assertBalance(h.ledger, BUYER, PAY, '999'); // 1000 - 2 deposits + 1 refund
+        });
+
+        // Regression: the refund leaves custody too, so the watermark must land
+        // on the POST-refund balance. Advancing it to the pre-refund balance
+        // over-counts by exactly the refund and bricks the restocked dispenser.
+        it('a draw still works after a sold-out refund and a restock', async function () {
+            await deployDispenser({ [A]: 1 });
+            const first = await draw();
+            assertSuccess(first);
+            assert.strictEqual(first.emittedActions[0].params.tick, A);
+
+            assertSuccess(await draw());                       // sold out -> refund
+            assertContractBalance(h.ledger, ADDR, PAY, '1');
+            assertContractState(h.ledger, ADDR, 'acctPay', '1');
+
+            h.ledger.creditContractBalance(ADDR, B, '1');      // operator restocks
+            const third = await draw();
+            assertSuccess(third);
+            assert.strictEqual(third.emittedActions[0].params.tick, B);
         });
 
         it('only the owner can withdraw', async function () {

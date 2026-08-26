@@ -215,5 +215,36 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             const issue = r.result.emittedActions.find(e => e.action === 'ISSUE');
             assert.strictEqual(issue.params.decimals, '8');
         });
+
+        // durationBlocks gets the same integer-SHAPE gate saleDecimals gets, and
+        // for the same reason: it is raw deployer text burned into the permanent
+        // `deadline` key, and a radix-less parseInt re-measures it ('1e3' -> 1,
+        // '0x10' -> 16, '5.99' -> 5, ' 5' -> 5, '+5' -> 5, '5abc' -> 5). A sale
+        // the DEPLOY action advertises as 1000 blocks would open for one: buy()
+        // rejects every later contribution and finalize() latches FAILED for want
+        // of the soft cap.
+        it('rejects a durationBlocks a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e3', '0x10', '5.99', ' 5', '+5', '5abc', '1_000',
+                         '', 'abc', 'Infinity', 'NaN', '0', '-1'];
+            for (const v of BAD) {
+                assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, v, '8'])).success,
+                    false, `durationBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('accepts the durationBlocks window bounds and stores the value verbatim', async function () {
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '1', '8'])).success, true);
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '1000000', '8'])).success, true);
+            assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '1000001', '8'])).success, false);
+
+            // '1000' means 1000 blocks in the deadline, not the 1 a parseInt of
+            // '1e3' gave. The harness deploys at height 1.
+            const b4 = new E2EHarness(XChainVM);
+            b4.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const r = await b4.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                params: [OWNER, PAY, SALE, RATE, SOFT, HARD, '1000', '8'] });
+            assert.strictEqual(r.success, true);
+            assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'), '1001');
+        });
     });
 });

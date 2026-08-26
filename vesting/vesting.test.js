@@ -169,6 +169,35 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
         it('rejects a non-boolean revocable flag', async function () {
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '10', '100', 'maybe'])).success, false);
         });
+
+        // Integer-shape gate on the two schedule terms. Both are raw deployer
+        // text, and a radix-less parseInt MEASURES them as something else
+        // entirely: '1e3' is 1, '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5.
+        // The old post-parse magnitude checks then passed on the mis-measured
+        // number and initialize() stored it, so a grant the deployer asked to
+        // vest over 1000 blocks via '1e3' installed a 1-block duration and the
+        // beneficiary could drain the entire grant at the next block, while the
+        // DEPLOY params on chain still read '1e3' to anyone auditing them.
+        it('rejects schedule terms a radix-less parseInt would silently re-measure', async function () {
+            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await badDeploy([GRANTOR, BENE, TICK, '1000', v, '100', 'false'])).success, false,
+                    `cliffBlocks ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await badDeploy([GRANTOR, BENE, TICK, '1000', '10', v, 'false'])).success, false,
+                    `durationBlocks ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+
+        it('rejects schedule terms outside their range and still accepts the canonical bounds', async function () {
+            assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '10', '0', 'false'])).success, false);
+            assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '-1', '100', 'false'])).success, false);
+            assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '10', '1000001', 'false'])).success, false);
+            // A zero cliff is legal; the whole ceiling is legal.
+            assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '0', '1000000', 'false'])).success, true);
+        });
     });
 
     // Regression: payouts must be floored onto the tick's decimal grid before

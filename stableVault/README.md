@@ -38,7 +38,7 @@ of truth; caller-supplied funding amounts are never trusted.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(collateralTick, stableTick, coinPair, minRatioPct, liqBonusPct, maxSnapshotAge)` | deployer | Immutable terms; `emit.issue`s the stable with the contract as issuer. |
+| `initialize(collateralTick, stableTick, coinPair, minRatioPct, liqBonusPct, maxSnapshotAge, stableDecimals)` | deployer | Immutable terms; `emit.issue`s the stable with the contract as issuer, on the declared decimal grid. |
 | `deposit()` | anyone (BATCH after collateral DEPOSIT) | Credits the caller's vault with the custody delta. |
 | `borrow(amount)` | vault owner | Ratio check at the fresh price, then `emit.mint` + `emit.send`. |
 | `repay()` | vault owner (BATCH after stable DEPOSIT) | Burns up to the debt, refunds any excess. |
@@ -63,6 +63,19 @@ radix-less `parseInt` silently re-measures `'1e3'` as `1` and `'0x10'` as
 got a 1-block one, and `freshPrice` would then revert `borrow`, `withdraw`
 and `liquidate` on every call whenever the oracle publishes less often than
 once per block.
+
+`stableDecimals` (optional, default `8`) is the decimal grid of the stable this
+contract issues, and gets the same integer-shape check in `[0, 18]`. It is a
+deploy-time parameter rather than a ledger read on purpose. `getTokenInfo` is a
+lookup into a snapshot the indexer builds only from the pre-action balances of
+the caller and the contract, and the vault never custodies its own stable
+(`initialize` issues it with no `MINT_SUPPLY`, and `borrow` is the only source
+of it in existence), so the stable's metadata is structurally absent there and a
+ledger-derived grid would revert every borrow. `initialize` therefore declares
+the grid on the `emit.issue` (ISSUE defaults decimals to `0` and locks them once
+supply exists) and stores the same value for `borrow` to floor against. The
+collateral tick keeps its ledger-derived decimals: the contract really does hold
+that one.
 
 ## On-chain caveats (learned from the e2e run)
 

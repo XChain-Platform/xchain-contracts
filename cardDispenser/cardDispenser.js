@@ -116,7 +116,10 @@ module.exports = {
         // --- Sold out: refund instead of reverting (see header) ---
         if (xchain.math.isZero(total)) {
             xchain.emit.send({ destination: buyer, tick: payTick, quantity: paid });
-            xchain.state.set('acctPay', curPay);
+            // The refund takes `paid` back OUT of custody, so the watermark lands on
+            // the post-refund balance. Advancing it to curPay would over-count by
+            // exactly the refund and under-measure every later payment.
+            xchain.state.set('acctPay', xchain.math.subtract(curPay, paid));
             return 'sold_out';
         }
 
@@ -146,6 +149,9 @@ module.exports = {
         var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
         xchain.require(xchain.math.gt(held, '0'), 'nothing to withdraw');
         xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
+        // A sweep of payTick empties it, so draw()'s watermark has to follow custody
+        // down to 0 or the next draw measures a negative delta and reverts forever.
+        if (tick === xchain.state.get('payTick')) xchain.state.set('acctPay', '0');
     },
 
     // info(): read-only snapshot of remaining stock per card.

@@ -47,6 +47,14 @@
 // delta-accounting idiom the crowdsale template uses for buy().
 // ---------------------------------------------------------------------------
 
+// Upper bound for the deadline constructor param. A sanity ceiling, not a
+// protocol limit: fund() adds this window to a plain JS block height, so the
+// point is to keep a fat-fingered constructor term inside the exactly-
+// representable integer range rather than to constrain a real auction.
+// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
+// ceiling escrow.js, treasury.js and patterns/validation.js use.
+var MAX_WINDOW_BLOCKS = 1000000;
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -78,8 +86,16 @@ module.exports = {
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
         xchain.require(minBid && xchain.math.gt(minBid, '0'), 'minBid must be positive');
 
-        var window = parseInt(deadline);
-        xchain.require(window > 0, 'deadlineBlocks must be a positive integer');
+        // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
+        // parseInt blesses spellings that mean something else entirely ('1e3' -> 1,
+        // '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and deadlineBlocks is
+        // raw deployer text measured in the same deploy that stores it. A seller
+        // reading '1e3' off the DEPLOY action believes they armed a 1000-block
+        // auction while initialize() armed a 1-block one, so bidding closes before
+        // anyone can bid - and every bid that then reverts on the deadline guard
+        // strands its batched DEPOSIT. See requireIntInRange.
+        requireIntInRange(xchain, deadline, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
+        var window = parseInt(deadline, 10);
 
         xchain.state.set('seller', seller);
         xchain.state.set('itemTick', itemTick);
@@ -183,3 +199,28 @@ module.exports = {
         });
     }
 };
+
+// Throw unless `v` is a canonical base-10 integer string within [min, max]
+// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
+//
+// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
+// accepts spellings a magnitude check then blesses ('1e3' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a window the
+// check never truly approved and the auction would run on terms nobody chose.
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported: contract sources load
+// as a single file into the isolated VM, which is why every adopting sibling
+// (escrow.js, treasury.js, stableVault.js, priceBet.js) carries its own copy.
+function requireIntInRange(xchain, v, min, max, name) {
+    var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
+    var s = (typeof v === 'string') ? v : '';
+    var i = (s.charAt(0) === '-') ? 1 : 0;
+    var ok = s.length > i; // at least one digit after an optional sign
+    for (; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch < '0' || ch > '9') { ok = false; break; }
+    }
+    xchain.require(ok, msg);
+    var n = parseInt(s, 10);
+    xchain.require(n >= min && n <= max, msg);
+}

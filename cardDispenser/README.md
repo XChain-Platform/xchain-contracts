@@ -51,7 +51,12 @@ de-correlate same-block draws.
   immediately batched `draw()` sits in the delta and is claimed by the next
   caller of `draw()` (same footgun as the crowdsale template). Always
   `BATCH(DEPOSIT, draw)`. Overpayment inside a batch is kept as a tip by
-  design; `acctPay` advances to the full balance each draw.
+  design, so on a *dispensing* draw `acctPay` advances to the full balance.
+  Where `payTick` LEAVES custody the watermark follows it down instead: the
+  sold-out refund advances it only to the post-refund balance, and
+  `withdraw(payTick)` resets it to `0`. Any outflow path a fork adds must do
+  the same, or `draw()` measures a delta the contract no longer holds and
+  reverts `'underpaid'` for good.
 - **Same-block draw correlation.** The block hash is identical for every tx in
   a block, so a naive seed would give every same-block buyer the same card.
   `pick()` mixes in the buyer address and a per-contract draw counter (nonce)

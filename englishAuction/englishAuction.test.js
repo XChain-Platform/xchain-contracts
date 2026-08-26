@@ -177,6 +177,26 @@ const ADDR   = 'C:BTC:1';
             assertReverted(await bid('alice', '100'), 'already the high bidder');
         });
 
+        // Pins the documented COST of the no-self-raise rule (README, "A rejected
+        // bid's DEPOSIT is not rolled back"). BATCH is not all-or-nothing, so the
+        // top-up behind a reverting bid() settles anyway and the delta accounting
+        // hands it to the NEXT bidder. A future change that refunds or credits it
+        // instead must rewrite this test together with that README entry, not
+        // delete it.
+        it('a rejected bid strands its batched DEPOSIT, and the next bidder inherits it', async function () {
+            await deployAuction();
+            await depositAndFund();
+            await bid('alice', '50');
+            assertReverted(await bid('alice', '100'), 'already the high bidder');
+            assertContractBalance(h.ledger, ADDR, BID, '150');   // alice's 100 settled anyway
+
+            // bob deposits 10 and is credited 110: alice's stranded top-up plus his own.
+            assertSuccess(await bid('bob', '10'));
+            assertContractState(h.ledger, ADDR, 'highBidder', 'bob');
+            assertContractState(h.ledger, ADDR, 'highBid', '110');
+            assertBalance(h.ledger, 'alice', BID, '50');         // her 50 stake back, never the 100
+        });
+
         it('bidding after the deadline is rejected; settle() is the only path', async function () {
             await deployAuction(2);
             await depositAndFund();
@@ -235,6 +255,36 @@ const ADDR   = 'C:BTC:1';
                 params: [SELLER, ITEM, '10', BID, '0', '5']
             });
             assert.strictEqual(r.success, false, 'deploy with minBid=0 should revert');
+        });
+
+        // deadlineBlocks is raw deployer text. A radix-less parseInt would measure
+        // '1e3' as 1 and arm a 1-block auction the seller never asked for, so the
+        // constructor shape-checks it (requireIntInRange) instead.
+        it('rejects a deadlineBlocks that is not a canonical integer', async function () {
+            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99',
+                         '1_000', '+7', '', 'abc', '-', 'Infinity', 'NaN', '0',
+                         '-5', '1000001'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:9',
+                    params: [SELLER, ITEM, '10', BID, '50', BAD[i]]
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with deadlineBlocks ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+        });
+
+        it('accepts a canonical deadlineBlocks and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:4',
+                params: [SELLER, ITEM, '10', BID, '50', '1000']
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:4', 'window', '1000');
         });
     });
 });
