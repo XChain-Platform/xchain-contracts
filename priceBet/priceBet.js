@@ -48,6 +48,18 @@
 //   - cancel(): the maker reclaims their stake while no taker has matched.
 //   - reclaim(): if the oracle round is still unpublished `deadlineBlocks`
 //     after the match, either party can void the bet and refund both sides.
+//
+// THE ORACLE WINDOW
+//
+// A node preloads a bounded window of oracle history for the VM, so a round old
+// enough to have scrolled out of it is simply unreadable from inside a contract.
+// The accessor says so (an "outside the window" answer, distinct from the null
+// that means the round never existed), and this contract acts on the difference:
+// a bet whose settle round is already outside the window is refused at deploy and
+// at accept(), and reclaim() will not void a bet whose round it cannot see. That
+// last one is the theft this closes - void-on-unreadable let the loser of a bet
+// the oracle had already decided sit on it until the round scrolled out and then
+// take their stake back.
 // ---------------------------------------------------------------------------
 
 // Upper bounds for the two integer constructor params. They are sanity ceilings,
@@ -118,6 +130,17 @@ module.exports = {
         var round  = parseInt(settleRound, 10);
         var window = parseInt(deadlineBlocks, 10);
 
+        // The node preloads a BOUNDED window of oracle history for the VM, and a
+        // round older than that window is unreadable here forever: it can never be
+        // settled, and reclaim() will not void it either (it cannot tell an evicted
+        // round from one that never happened). A bet on such a round is a pot with no
+        // exit, so it is refused at birth rather than accepted and stranded. Future
+        // rounds are unaffected: they read as absent, not as evicted.
+        xchain.require(
+            !roundOutsideWindow(xchain, coinPair, round),
+            'settleRound is older than the retrievable oracle window'
+        );
+
         xchain.state.set('maker', maker);
         xchain.state.set('coinPair', coinPair);
         xchain.state.set('strike', strike);
@@ -160,6 +183,12 @@ module.exports = {
         var taker = xchain.getSourceAddress();
         xchain.require(taker !== xchain.state.get('maker'), 'maker cannot take their own bet');
         xchain.require(roundPrice(xchain) === null, 'settle round already published');
+        // "No price" is not the same as "not decided yet". A round that has fallen
+        // out of the preload window reads as priceless here while the oracle may
+        // well have published it, which would make this a free option on the maker's
+        // stake rather than a bet - and the pot would then be unsettleable anyway.
+        xchain.require(!settleRoundOutsideWindow(xchain),
+            'settle round is older than the retrievable oracle window');
 
         var needed = xchain.math.multiply(xchain.state.get('amount'), '2');
         xchain.require(xchain.math.gte(heldBalance(xchain), needed), 'insufficient deposit');
@@ -242,6 +271,15 @@ module.exports = {
         );
 
         xchain.require(roundPrice(xchain) === null, 'round published: settle() instead');
+        // Void only what can be shown to be unpublished. Once the round is outside
+        // the node's preload window this contract cannot see whether the oracle
+        // published it, and voiding on a guess is precisely how the loser of a
+        // decided bet takes their stake back: refuse to settle, wait for the round to
+        // scroll out, then reclaim. Refusing keeps the pot where consensus history
+        // put it; the reachable-window check in initialize() and accept() is what
+        // stops a bet from ever getting here.
+        xchain.require(!settleRoundOutsideWindow(xchain),
+            'settle round is outside the retrievable oracle window: cannot void it');
 
         xchain.state.set('status', 'VOID');
         refundBoth(xchain);
@@ -267,13 +305,34 @@ module.exports = {
 // xchain-vm/src/readonly-accessors.js); older/mocked accessors may return the
 // bare price string. Accept both.
 function roundPrice(xchain) {
-    var r = xchain.oracle.getPriceAtRound(
-        xchain.state.get('coinPair'),
-        parseInt(xchain.state.get('settleRound'))
-    );
+    var r = readRound(xchain, xchain.state.get('coinPair'),
+                      parseInt(xchain.state.get('settleRound')));
     if (r === null || r === undefined) return null;
     if (typeof r === 'object') return (r.price === null || r.price === undefined) ? null : String(r.price);
     return String(r);
+}
+
+// True when the round is OLDER than the history the node preloaded for the VM, so
+// nothing here can tell whether the oracle published it. That distinction is the
+// difference between an honest void and a theft: this contract's liveness hatch
+// voids the bet when the round reads as absent, and an evicted round is otherwise
+// indistinguishable from a round that never existed, which would let the LOSER of
+// a bet the oracle had already decided refuse to settle, wait for the round to
+// scroll out of the window, and reclaim their stake. Hosts that preload all of
+// history (a young chain) and older hosts that do not report a window both answer
+// false here.
+function roundOutsideWindow(xchain, coinPair, round) {
+    var r = readRound(xchain, coinPair, round);
+    return (r !== null && typeof r === 'object' && r.outsideWindow === true);
+}
+
+function settleRoundOutsideWindow(xchain) {
+    return roundOutsideWindow(xchain, xchain.state.get('coinPair'),
+                              parseInt(xchain.state.get('settleRound')));
+}
+
+function readRound(xchain, coinPair, round) {
+    return xchain.oracle.getPriceAtRound(coinPair, round);
 }
 
 // Contract's own balance of the bet tick. The single source of truth for
