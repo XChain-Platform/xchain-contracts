@@ -80,6 +80,21 @@ binds to it with ISSUE v6 (SDK: `sdk.controller.bindToken`). The generated sourc
 is built to pass the deploy linter clean. See
 [`lib/policy-gen.js`](./lib/policy-gen.js).
 
+**`allowlist` direction.** `allowlistDirection` picks which end of a move the
+allowlist is checked on: `"from"` (the default, and what every guard generated
+before this key enforced), `"to"`, or `"both"`. The default is the compatible
+setting, not the safe one: under `"from"` an allowlisted holder can move the
+token to any address, and because the guard then blocks that address as a
+*sender*, the balance is stranded there. A holder-restricted (security-token
+shaped) policy wants `"both"`. The resolved direction is emitted into the
+generated header, the `policy` descriptor and the generator's `features`, so a
+reader can see which one is in force.
+
+No setting is a complete holder restriction. Actions that carry no recipient
+(burns, and the escrow-creating order/swap/dispenser/airdrop/dividend actions)
+pass an empty `to` and are exempt, and matched trade settlement invokes no guard
+at all, so a matched buyer can still end up holding the token.
+
 ## The templates
 
 | Template | Contract | Guide | Tests | What it teaches |

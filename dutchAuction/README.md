@@ -42,6 +42,13 @@ see Known limitations).
 | `cancel()` | seller, only before any purchase | Returns the item to the seller; status → `CANCELLED`. |
 | `info()` | anyone (read-only) | `{ status, currentPrice, startPrice, endPrice }`. |
 
+**Price spelling:** `startPrice` and `endPrice` must be plain fixed-notation
+decimals (digits, at most one decimal point with digits on both sides; no
+exponent, sign or radix prefix). `initialize()` rejects anything else at deploy,
+because `buy()` floors `endPrice` onto the bid tick's decimal grid with string
+surgery that presupposes fixed notation. Off-grid is still fine: `100.123456789`
+deploys and is floored at sale time.
+
 **Price curve:** `startPrice` at elapsed = 0, falling linearly to `endPrice` at
 `durationBlocks` elapsed, then pinned at `endPrice` forever after. Time is
 measured in blocks via `getBlockHeight()` (no wall-clock), same as `vesting`.

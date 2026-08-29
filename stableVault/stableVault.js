@@ -73,6 +73,19 @@ var MAX_WINDOW_BLOCKS = 1000000;
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        deposit:   { summary: 'Credit the caller\'s vault with the collateral custody delta (BATCH after a collateral DEPOSIT)', params: [] },
+        borrow:    { summary: 'Mint and send stable against the vault, refused below the minimum ratio at the fresh oracle price', params: [ { name: 'amount', type: 'amount' } ] },
+        repay:     { summary: 'Burn up to the vault\'s debt and refund any excess (BATCH after a stable DEPOSIT)', params: [] },
+        withdraw:  { summary: 'Return collateral to the vault owner, refused below the minimum ratio; oracle-free when the debt is 0', params: [ { name: 'amount', type: 'amount' } ] },
+        liquidate: { summary: 'Burn an under-water vault\'s debt and take its collateral plus the bonus (BATCH after a stable DEPOSIT covering the debt)', params: [ { name: 'vaultOwner', type: 'address' } ] },
+        vault:     { summary: 'Read one address\'s collateral, debt and ratio', params: [ { name: 'addr', type: 'address' } ], view: true },
+        info:      { summary: 'Read the vault system configuration and totals', params: [], view: true }
+    } },
+
     // initialize(collateralTick, stableTick, coinPair, minRatioPct,
     //            liqBonusPct, maxSnapshotAge, stableDecimals)
     //
