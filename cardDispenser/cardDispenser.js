@@ -51,6 +51,15 @@
 
 module.exports = {
 
+    // Self-declared display metadata for wallets/explorers (spec:
+    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // read by the VM or indexer, and not verified against the code.
+    abi: { version: 1, methods: {
+        draw:     { summary: 'Buy one draw: sends a random in-stock card weighted by copies held, refunding if sold out (BATCH after a DEPOSIT of price)', params: [] },
+        withdraw: { summary: 'OWNER ONLY: sweeps the contract\'s entire balance of tick (proceeds, or leftover/retired cards)', params: [ { name: 'tick', type: 'tick' } ] },
+        info:     { summary: 'Read the pay tick, price, unit, draw count, and remaining stock per card', params: [], view: true }
+    } },
+
     // initialize(payTick, price, unit, card1, card2, ...)
     // payTick : the tick the buyer pays in.
     // price   : amount of payTick required per draw (> 0).

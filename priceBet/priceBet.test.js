@@ -235,6 +235,93 @@ const ROUND    = 7;
             assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
         });
 
+        // A node preloads a BOUNDED window of oracle history for the VM, so an old
+        // enough round is unreadable from inside a contract. Without the window
+        // floor it is indistinguishable from a round that never existed, which
+        // turns this contract's void hatch into a refund button for whoever is
+        // losing: refuse to settle, wait for the settle round to scroll out of the
+        // window, reclaim.
+        it('the loser cannot reclaim a decided bet by waiting for the round to scroll out', async function () {
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock();       // past the deadline
+
+            // The oracle published round 7 and the OVER maker lost... and then the
+            // node's preload window moved past round 7 and dropped it.
+            publishRound('59000');
+            h.ledger.seedOracle(PAIR, '65000', 0, {});         // the round is gone from the payload
+            h.ledger.seedOracleRoundFloor(ROUND + 1);          // and known to be gone, not absent
+
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: MAKER }),
+                'outside the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+            assertContractBalance(h.ledger, ADDR, TICK, '200');
+            assertBalance(h.ledger, MAKER, TICK, '0');
+        });
+
+        it('an unpublished round INSIDE the window still voids, so the hatch still works', async function () {
+            // The other side of the same guard: within the preloaded window an absent
+            // round really is an absent round, and the liveness hatch must still open.
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock();
+            h.ledger.seedOracleRoundFloor(ROUND);              // round 7 is the oldest covered
+
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: TAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'VOID');
+            assertBalance(h.ledger, MAKER, TICK, '100');
+            assertBalance(h.ledger, TAKER, TICK, '100');
+        });
+
+        it('a bet on an already-evicted round is refused at deploy', async function () {
+            // Such a bet is a pot with no exit: it can never be settled (the price is
+            // unreadable) and reclaim() will not void it either. Refused at birth.
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '100');
+            h.ledger.setTokenDecimals(TICK, 8);
+            h.ledger.seedOracleRoundFloor(ROUND + 1);
+
+            const r = await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(ROUND), '5']
+            });
+            // deploy() forwards initialize()'s full execute result under `result`,
+            // which is what carries the atomicity fields assertReverted checks.
+            assertReverted(r.result, 'older than the retrievable oracle window');
+        });
+
+        it('a bet on a FUTURE round still deploys, because absent is not evicted', async function () {
+            // The guard must not read "not published yet" as "evicted": every honest
+            // bet is made before its settle round exists.
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '100');
+            h.ledger.setTokenDecimals(TICK, 8);
+            h.ledger.seedOracleRoundFloor(ROUND - 2);          // the window starts below the bet
+
+            assertSuccess(await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, STAKE, String(ROUND), '5']
+            }));
+        });
+
+        it('accept() refuses a bet whose round has already scrolled out', async function () {
+            // Same free-option shape as the published-round snipe below: the taker
+            // cannot see the price, but neither can the pot ever be settled or voided.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            h.ledger.seedOracleRoundFloor(ROUND + 1);
+
+            assertReverted(await depositAnd(TAKER, 'accept'),
+                'older than the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+            // and the maker still gets out
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: MAKER }));
+        });
+
         it('underfunded fund() and accept() revert (no trust in caller-supplied amounts)', async function () {
             await deployBet('OVER');
             assertReverted(await depositAnd(MAKER, 'fund', '50'), 'insufficient deposit');

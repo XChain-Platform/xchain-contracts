@@ -25,6 +25,10 @@ const MATRIX = {
     pauseOnly: { name: 'PauseOnly', owner: OWNER, gates: ['transfer'], pausable: true },
     freezeOnly: { name: 'FreezeOnly', owner: OWNER, gates: ['transfer', 'trade'], freeze: ['1Frozen'] },
     allowOnly: { name: 'AllowOnly', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'] },
+    // allowOnly's holder-restricted twin: the same allowlist checked on BOTH ends.
+    // Carried in the shared matrix so the real-VM half covers the recipient branch,
+    // which is the only branch that emits the empty-recipient exemption.
+    allowBoth: { name: 'AllowBoth', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'], allowlistDirection: 'both' },
     royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: '1Creator', bps: 500 }] }
 };
 

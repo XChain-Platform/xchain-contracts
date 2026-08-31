@@ -350,6 +350,67 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             assertContractBalance(h.ledger, ADDR, TICK, '200');
         });
 
+        it('an EVICTED round in the scan span fails loud instead of letting a later round decide', async function () {
+            // The accessor's third answer. A round below the host's preload floor
+            // comes back as a priceless row with timestamp 0, not as null, so the
+            // metadata guard passes and `0 >= T` is false: the pre-fix scan stepped
+            // over it exactly like a gap and a LATER round decided the bet, which
+            // makes the outcome a function of when settle() was first called.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+
+            // Round 5 is all the payload still holds and it pays the OVER maker;
+            // whether rounds 1-4 already decided the bet is unknowable from here.
+            publishRounds({ 5: { ts: T + 700, price: '61000' } });
+            h.ledger.seedOracleRoundFloor(5);
+
+            assertReverted(await settleBy(STRANGER), 'outside the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+            assertContractBalance(h.ledger, ADDR, TICK, '200');
+            assertBalance(h.ledger, MAKER, TICK, '0');
+        });
+
+        it('a fully evicted scan span reverts instead of reporting SCANNING forever', async function () {
+            // cursor..top entirely below the floor: the pre-fix loop walked off the
+            // end with nothing found, persisted the cursor and answered SCANNING on
+            // every later call, while reclaim() refuses too (the tip already reaches
+            // settleTime). A wedged pot that reports progress it is not making.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+
+            h.ledger.seedOracle(PAIR, { price: '61000', roundNumber: 5, timestamp: T + 700 }, 0, {});
+            h.ledger.seedOracleRoundFloor(6);
+
+            assertReverted(await settleBy(STRANGER), 'outside the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+            assertContractBalance(h.ledger, ADDR, TICK, '200');
+        });
+
+        it('an absent round INSIDE the window is still a genuine gap and still settles', async function () {
+            // The other side of the guard. With the cursor at or above the floor a
+            // missing round really is a skipped/disputed one, so the scan must keep
+            // stepping over it rather than refusing every bet on a host that reports
+            // a floor at all.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            publishRounds({ 2: { ts: T - 1200, price: '59000' } });   // tip at match
+            await depositAnd(TAKER, 'accept');                        // pins cursor = 2
+
+            publishRounds({
+                2: { ts: T - 1200, price: '59000' },
+                3: { ts: T - 900,  price: '59000' },
+                5: { ts: T + 100,  price: '61000' }   // decides: OVER maker wins
+            });
+            h.ledger.seedOracleRoundFloor(2);   // round 1 is evicted, below the cursor
+            // Round 4 is absent and at/above the floor: a real gap, stepped over.
+
+            assertSuccess(await settleBy(STRANGER));
+            assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
         it('double-settle is impossible: the status guard blocks any second payout', async function () {
             await deployBet('OVER');
             await depositAnd(MAKER, 'fund');

@@ -136,7 +136,8 @@ const URL = 'https://api.example.com/btc/price';
             const requestId = JSON.parse(result.returnValue);
             assert.match(requestId, /^[0-9a-f]{64}$/);
 
-            // request_id is remembered in state for callback correlation.
+            // request_id is stored under `pending`. onPrice does not check it -
+            // see KNOWN LIMITATIONS in urlOracle.js.
             const pending = result.stateChanges.find(c => c.key === 'pending');
             assert.ok(pending && pending.value === requestId, 'pending request_id stored in state');
 

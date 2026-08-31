@@ -142,6 +142,35 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'audited with imaginary VM coverage: ' + missing.join(', '));
     });
 
+    // Same template -> artifact direction as the check above, one artifact over. The
+    // `abi` block is advisory (no VM or indexer reads it), so nothing anywhere goes red
+    // when a template ships without one: it just renders in wallets and explorers with
+    // no method summaries and no param names, which for a template whose privileged
+    // method is an owner-only sweep is exactly the method a reader needed to see. Three
+    // of fourteen had drifted out of the family before this was asserted. `require()`
+    // the module rather than string-matching, so a block that is present but malformed
+    // (no version, empty methods) fails here too.
+    it('every discovered template declares an advisory abi block', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) {
+                offenders.push(name + ' (does not load: ' + err.message + ')');
+                continue;
+            }
+            const abi = mod && mod.abi;
+            if (!abi || typeof abi !== 'object') { offenders.push(name + ' (no abi block)'); continue; }
+            if (abi.version !== 1) { offenders.push(name + ' (abi.version is not 1)'); continue; }
+            if (!abi.methods || typeof abi.methods !== 'object' || Object.keys(abi.methods).length === 0)
+                offenders.push(name + ' (abi.methods is missing or empty)');
+        }
+        assert.deepStrictEqual(offenders, [],
+            'these templates ship with no usable display metadata, so wallets and explorers ' +
+            'render their methods bare: ' + offenders.join(', '));
+    });
+
     it('every template suite deploys its template through the real VM', function () {
         // Existence alone is satisfied by a stub that only lints the source, which
         // leaves exactly the coverage hole above. Assert the suite reaches

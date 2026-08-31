@@ -53,6 +53,17 @@
 // 'PENDING' (a valid, no-op execution) rather than reverting, so the cursor
 // advance CAN persist (reverts discard state writes).
 //
+// THE ORACLE WINDOW
+//
+// A node preloads a bounded window of oracle history for the VM, so a round old
+// enough to have scrolled out of it is unreadable from inside a contract. The
+// accessor says so ("outside the window", distinct from the null that means the
+// round never existed) and settle() refuses such a read rather than stepping over
+// it, because a skipped round may be the one that decided the bet. A bet left
+// unsettled until its deciding round scrolls out therefore reverts instead of
+// paying the wrong side; sizing `deadlineBlocks` to settle well inside that
+// window is the instance's job. Same rule, same reason, as sibling priceBet.
+//
 // Custody model, BATCH funding, and the liveness escape hatches are identical
 // to priceBet; see that template's header for the full rationale.
 // ---------------------------------------------------------------------------
@@ -204,16 +215,23 @@ module.exports = {
         var top   = latest.roundNumber;
         var found = null;
 
-        // A null read is a genuine gap and is stepped over. A read that arrives
-        // WITHOUT round metadata is not a gap: normalize() gives it timestamp
-        // NaN, `NaN >= T` is false, so it would be stepped over exactly like a
-        // gap while the cursor advances past it, and a LATER round would decide
-        // the bet. latestRound() already refuses that shape; the scan refuses it
-        // identically, or the loud failure normalize() promises degrades into a
-        // silent mis-settlement.
+        // The accessor answers a round read three ways and only one of them is a
+        // gap. null means the round never existed (skipped/disputed) and is stepped
+        // over. A read WITHOUT round metadata, and a read from OUTSIDE the node's
+        // preload window, are both refused instead: they carry timestamp NaN and
+        // timestamp 0 respectively, `>= T` is false for both, so stepping over them
+        // would advance the cursor past a round that may have decided the bet and
+        // let a LATER round settle it. That would make the winner a function of when
+        // settle() was first called rather than of consensus history. Refusing to
+        // guess is the sibling priceBet's rule for the same reason: the pot stays
+        // where consensus put it rather than being paid out on an assumption.
         for (var i = 0; i < MAX_READS && r <= top; i++, r++) {
             var data = normalize(xchain.oracle.getPriceAtRound(coinPair, r));
             if (data === null) continue;
+            xchain.require(
+                data.outsideWindow !== true,
+                'scan round is outside the retrievable oracle window'
+            );
             xchain.require(
                 !isNaN(data.roundNumber) && !isNaN(data.timestamp),
                 'oracle accessor lacks round metadata'
@@ -315,21 +333,25 @@ module.exports = {
     }
 };
 
-// Normalize an oracle read to { price, roundNumber, timestamp } or null. The
-// production accessor (indexer getOracleDataForVM via xchain-vm
+// Normalize an oracle read to { price, roundNumber, timestamp, outsideWindow }
+// or null. The production accessor (indexer getOracleDataForVM via xchain-vm
 // readonly-accessors) returns that object; a bare-string price (legacy/mock
 // accessors) carries no round metadata, which this template cannot work
 // without - surface that loudly instead of mis-settling.
+// outsideWindow is carried through rather than flattened away: a round below the
+// host's preload floor arrives priceless with timestamp 0, which is otherwise
+// indistinguishable here from an ordinary pre-deadline round.
 function normalize(r) {
     if (r === null || r === undefined) return null;
     if (typeof r === 'object') {
         return {
-            price:       (r.price === null || r.price === undefined) ? null : String(r.price),
-            roundNumber: parseInt(r.roundNumber),
-            timestamp:   parseInt(r.timestamp)
+            price:         (r.price === null || r.price === undefined) ? null : String(r.price),
+            roundNumber:   parseInt(r.roundNumber),
+            timestamp:     parseInt(r.timestamp),
+            outsideWindow: (r.outsideWindow === true)
         };
     }
-    return { price: String(r), roundNumber: NaN, timestamp: NaN };
+    return { price: String(r), roundNumber: NaN, timestamp: NaN, outsideWindow: false };
 }
 
 // Latest finalized round for the bet's pair, normalized; null if none.

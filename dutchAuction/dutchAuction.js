@@ -122,6 +122,20 @@ module.exports = {
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
+        // Gate the NOTATION of both price terms before any magnitude check reads
+        // them. The magnitude checks below are no filter: xchain.math accepts every
+        // spelling mathjs parses ('1.23456789e2', '0x10', '1_000', '+1.5', '.5'),
+        // and the accepted string is stored verbatim, returned raw by currentPrice()
+        // once the decay window has elapsed, then handed to floorToDecimals in
+        // buy(). That helper is string surgery presupposing fixed notation, so on an
+        // exotic spelling it does not no-op, it CORRUPTS: '1.23456789e2' floors to
+        // '1.23456789', so the seller is paid 1% of the reserve, soldPrice records
+        // the wrong number, and there is no revert and no recourse (cancel() needs
+        // ACTIVE and the auction is already SOLD). Same gate and rationale as
+        // treasury.js / stableVault.js / priceBet.js:requirePlainDecimal, which is
+        // the rule patterns/validation.js states for exactly this seam.
+        requirePlainDecimal(xchain, startPrice, 'startPrice');
+        requirePlainDecimal(xchain, endPrice, 'endPrice');
         xchain.require(endPrice && xchain.math.gt(endPrice, '0'), 'endPrice must be positive');
         xchain.require(startPrice && xchain.math.gt(startPrice, endPrice), 'startPrice must exceed endPrice');
         // Shape-check the duration, do NOT parseInt-then-range-check it. A radix-less
@@ -228,6 +242,37 @@ function currentPrice(xchain) {
     var drop = xchain.math.subtract(startPrice, endPrice);
     var decayed = xchain.math.divide(xchain.math.multiply(drop, String(elapsed)), String(duration));
     return xchain.math.subtract(startPrice, decayed);
+}
+
+// Throw unless `value` is a plain fixed-notation decimal: digits, with at most one
+// decimal point carrying digits on both sides. No exponent, sign or radix prefix.
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
+//
+// This is a NOTATION check, not a grid check, and it does not replace the floor:
+// '100.123456789' is legitimately spelled and still off an 8-decimal grid, and
+// bidTick's decimals are not readable at deploy time anyway (the auction holds
+// none of the tick yet). Notation is checked here; the grid is checked in buy().
+//
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported for the same single-file
+// reason requireIntInRange below carries its own copy.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
 }
 
 // Throw unless `v` is a canonical base-10 integer string within [min, max]

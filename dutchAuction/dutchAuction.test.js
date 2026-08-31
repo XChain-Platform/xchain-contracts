@@ -241,5 +241,48 @@ const ADDR   = 'C:BTC:1';
             assertSuccess(r);
             assertContractState(ok.ledger, 'C:BTC:5', 'duration', '1000');
         });
+
+        // startPrice/endPrice are raw deployer text and xchain.math accepts every
+        // spelling mathjs parses, so the magnitude checks are no filter. endPrice
+        // reaches floorToDecimals unchanged once the decay window has elapsed, and
+        // that helper CORRUPTS an exotic spelling rather than no-opping on it
+        // ('1.23456789e2' -> '1.23456789', a 1% payout). Gate the notation at the door.
+        it('rejects a startPrice or endPrice that is not a plain fixed-notation decimal', async function () {
+            const BAD = ['1.5e-8', '0.15e-7', '1.5E-8', '1e-8', '1.23456789e2',
+                         '0x10', '0b101', '0o17', '1_000', '+1.5', '.5', '5.',
+                         'Infinity', 'NaN', '1.2.3', '10abc', ' 10'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:10',
+                    params: [SELLER, ITEM, '10', BID, '1000', BAD[i], '10']
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with endPrice ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+
+            const badStart = new E2EHarness(XChainVM);
+            badStart.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const rs = await badStart.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:11',
+                params: [SELLER, ITEM, '10', BID, '1e4', '100', '10']
+            });
+            assert.strictEqual(rs.success, false, "deploy with startPrice '1e4' should revert");
+        });
+
+        // The gate is notation-only, NOT a grid check: an off-grid but legitimately
+        // spelled price still deploys and is stored verbatim, because bidTick's
+        // decimals are unreadable at deploy time and buy() floors onto them instead.
+        it('accepts an off-grid but plainly spelled endPrice and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:12',
+                params: [SELLER, ITEM, '10', BID, '1000', '100.123456789', '10']
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:12', 'endPrice', '100.123456789');
+        });
     });
 });
