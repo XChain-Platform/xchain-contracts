@@ -88,9 +88,12 @@ cd xchain-vm
 npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
 ```
 
-> ⚠️ **Deploying on-chain currently requires `getBalance()` to be wired in the
-> indexer.** As of this writing `xchain-indexer/src/actions/execute.js` passes
-> `balances: null` to the VM (a TODO), so `getBalance()` returns `null` in the
-> live indexer, which blocks every custody template (escrow/vesting/crowdsale/
-> amm too), not just this one. The VM E2E harness supplies balances, so the test
-> above validates the contract logic regardless.
+> **On-chain deployment note.** `getBalance()`/`getTokenInfo()` are wired in
+> the live indexer: `xchain-indexer/src/actions/execute.js` builds a balance
+> and token-info snapshot (scoped to the caller plus this contract's own
+> address) and passes it to the VM, gated on the `VM_BALANCE_TOKENINFO`
+> flag-day. The flag is active from genesis on testnet/regtest and since
+> 2026-08-07 00:00 UTC on mainnet, so this and the other custody templates
+> (escrow/vesting/crowdsale/amm) deploy and read balances on-chain. The VM E2E
+> harness supplies balances directly, so the test above validates the contract
+> logic on its own.
