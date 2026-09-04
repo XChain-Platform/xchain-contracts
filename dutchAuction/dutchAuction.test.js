@@ -179,6 +179,31 @@ const ADDR   = 'C:BTC:1';
             await deployAuction(10);
             assertReverted(await buy('alice', '1000'), 'not active');
         });
+
+        // A sub-grid endPrice deploys clean (the constructor gates notation and
+        // magnitude, never the grid), so the decayed asking price can floor to '0'
+        // on bidTick. Without the post-floor positivity guard, gte(held, '0')
+        // admits a caller who deposited nothing, the seller is paid an AMOUNT=0
+        // no-op and the auction latches SOLD out of cancel()'s reach.
+        it('a sub-grid asking price reverts instead of selling the item for nothing', async function () {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(SELLER, 'XCHAIN', '1000000');
+            h.seedBalance(SELLER, ITEM, '10');
+            h.ledger.setTokenDecimals(BID, 0);
+            await h.deploy({
+                code: CODE, deployer: SELLER, contractAddress: ADDR,
+                params: [SELLER, ITEM, '10', BID, '1000', '0.5', '10']
+            });
+            await depositAndFund();
+            for (let i = 0; i < 50; i++) h.mineBlock(); // past duration: price is endPrice 0.5, which floors to '0'
+
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: 'mallory' }),
+                'below one unit of the bid tick');
+            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
+            assertContractBalance(h.ledger, ADDR, ITEM, '10');
+            assertBalance(h.ledger, 'mallory', ITEM, '0');
+        });
     });
 
     describe('deploy-time validation', function () {

@@ -59,7 +59,12 @@ pick a favorable moment. Instead:
 
 - `accept()` records a scan **cursor** at the round current when the bet is
   matched (earlier rounds can never qualify: `accept()` requires block time <
-  `settleTime`, and round timestamps are consensus history).
+  `settleTime`, and round timestamps are consensus history). A pair with no
+  readable tip has no round to anchor on, so `accept()` reverts with `no oracle
+  data for pair yet` rather than starting the cursor at round 1: on a host that
+  reports a preload floor, round 1 is already evicted, and a bet born there can
+  never settle *or* be reclaimed. The maker's funded bet stays `OPEN` and
+  `cancel()` still recovers it.
 - `settle()` walks rounds upward from the cursor via `getPriceAtRound()`
   (immutable consensus values); the **first** round with `timestamp >=
   settleTime` decides. Gaps (skipped/disputed rounds) are stepped over. The
@@ -87,7 +92,7 @@ discard the cursor advance (state writes only commit on success).
 |---|---|---|
 | `initialize(maker, coinPair, strike, side, tick, amount, settleTime, deadlineBlocks)` | deployer | Immutable terms; `settleTime` must be in the future; status → `INIT`. |
 | `fund()` | maker (BATCH after DEPOSIT) | Escrows the stake; status → `OPEN`. |
-| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime`; anchors cursor + void deadline; status → `MATCHED`. |
+| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair; anchors cursor + void deadline; status → `MATCHED`. |
 | `settle()` | anyone | See table above. |
 | `cancel()` | maker | Reclaims the stake while unmatched. |
 | `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match (O(1) guard: latest round's timestamp < `settleTime`). |

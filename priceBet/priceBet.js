@@ -75,7 +75,7 @@ var MAX_WINDOW_BLOCKS = 1000000;
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only.
+    // xchain-documentation/protocol/contract-abi.md). Advisory only.
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },

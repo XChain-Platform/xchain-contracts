@@ -96,7 +96,11 @@ await sdk.batch()
   minimum and the emitted amounts, so the indexer's own half-up
   re-normalization (its bcmath is half-up, not banker's/half-even) can never
   round the seller's payout - or the required
-  minimum - up past what was actually deposited.
+  minimum - up past what was actually deposited. A price the grid floors all the
+  way to `0` (a sub-grid `endPrice`, which the constructor cannot reject because
+  `bidTick`'s decimals are unreadable at deploy) is refused outright: `buy()`
+  requires the floored price to be positive, so the auction reverts with `price
+  is below one unit of the bid tick` rather than settling for a zero payment.
 - **Unauthorized fund/cancel.** Both require `getSourceAddress() === seller`.
 - **Delayed funding shrinking the price schedule.** Same pattern as `vesting`
   and `englishAuction`: the price clock is anchored in `fund()`, not

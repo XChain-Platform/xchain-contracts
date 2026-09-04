@@ -95,7 +95,7 @@ function tickDecimals(xchain, tick) {
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         fund:   { summary: 'Seller deposits the item and starts the price clock (BATCH after a DEPOSIT)', params: [] },
@@ -181,6 +181,11 @@ module.exports = {
         var bidTick = xchain.state.get('bidTick');
         var price   = floorToDecimals(currentPrice(xchain), tickDecimals(xchain, bidTick));
         var held    = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
+
+        // Refuse a price the grid floored to nothing (the constructor gates endPrice's
+        // notation, never the grid). Same guard as treasury.js:339, and without it
+        // gte(held, '0') hands the item to a caller who deposited nothing.
+        xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
 
         xchain.require(xchain.math.gte(held, price), 'insufficient payment for the current price (' + price + ')');
 

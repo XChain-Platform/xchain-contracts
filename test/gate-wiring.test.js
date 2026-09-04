@@ -171,6 +171,39 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'render their methods bare: ' + offenders.join(', '));
     });
 
+    // Guard the param SHAPE the check above does not reach (the fail-closed readers drop
+    // a whole method entry, summary and view included, on one malformed params element).
+    // ABI_PARAM_TYPES mirrors xchain-sdk/src/contract/abi-core.js:40, the source of truth.
+    it('every abi method declares its params as { name, type } object literals', function () {
+        const ABI_PARAM_TYPES = ['string', 'number', 'amount', 'address', 'tick', 'bool', 'json'];
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) {
+                offenders.push(name + ' (does not load: ' + err.message + ')');
+                continue;
+            }
+            const methods = (mod && mod.abi && mod.abi.methods) || {};
+            for (const [method, spec] of Object.entries(methods)) {
+                const where = name + '.' + method;
+                const params = spec && spec.params;
+                if (params === undefined) continue;
+                if (!Array.isArray(params)) { offenders.push(where + ' (params is not an array)'); continue; }
+                params.forEach(function (el, i) {
+                    const at = where + '[' + i + ']';
+                    if (!el || typeof el !== 'object' || Array.isArray(el)) offenders.push(at + ' (not an object literal)');
+                    else if (typeof el.name !== 'string' || el.name.length === 0) offenders.push(at + ' (no string name)');
+                    else if (ABI_PARAM_TYPES.indexOf(el.type) === -1) offenders.push(at + ' (type ' + JSON.stringify(el.type) + ' is not an allowed abi param type)');
+                });
+            }
+        }
+        assert.deepStrictEqual(offenders, [],
+            'the fail-closed abi readers drop the whole method entry for each of these, so its ' +
+            'summary, param names and view flag never reach a wallet or explorer: ' + offenders.join(', '));
+    });
+
     it('every template suite deploys its template through the real VM', function () {
         // Existence alone is satisfied by a stub that only lints the source, which
         // leaves exactly the coverage hole above. Assert the suite reaches

@@ -165,9 +165,12 @@ module.exports = {
 
     abi: { version: 1, methods: {
         requestClaim: { summary: 'Ask the network to check for new burns of cpAsset the caller sent to BURN_ADDRESS', params: [] },
-        onClaim:      { summary: 'Callback: mints the equivalent xchainTick for every newly-found burn transaction', params: ['request_id', 'address'] },
-        claimedTotal: { summary: 'Read how much an address has been credited in total so far', params: ['address'], view: true },
-        burned:       { summary: 'Check whether a specific Counterparty burn tx_hash has already been credited', params: ['tx_hash'], view: true },
+        // onClaim's first four params are the indexer's fixed attestation preamble
+        // (attest.js _injectCallbackExecute); requestClaim() appends [caller], so the
+        // credited address is slot 4 and the whole list is machine-supplied.
+        onClaim:      { summary: 'Callback: mints the equivalent xchainTick for every newly-found burn transaction; the indexer supplies the attestation preamble and the credited address (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'json' }, { name: 'address', type: 'address' } ] },
+        claimedTotal: { summary: 'Read how much an address has been credited in total so far', params: [ { name: 'address', type: 'address' } ], view: true },
+        burned:       { summary: 'Check whether a specific Counterparty burn tx_hash has already been credited', params: [ { name: 'txHash', type: 'string' } ], view: true },
         info:         { summary: 'Read the bridge configuration and progress', params: [], view: true }
     } },
 

@@ -39,7 +39,7 @@ const ADDR = 'C:BTC:1', A = 'AAA', B = 'BBB', LP = 'AAABBBLP';
 const bn = (x) => math.bignumber(x);
 const k = (r) => math.multiply(bn(r.a), bn(r.b));
 
-// ABI metadata (spec: xchain-documentation/protocol/Contract_ABI.md). Static
+// ABI metadata (spec: xchain-documentation/protocol/contract-abi.md). Static
 // module surface; no VM harness needed, so this suite always runs.
 describe('Template: amm abi', function () {
     const abi = require('./amm.js').abi;

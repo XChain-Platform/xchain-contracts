@@ -61,6 +61,15 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             code: CODE, deployer: MAKER, contractAddress: ADDR,
             params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(T), String(window || 5)]
         });
+        seedTipRound();
+    }
+
+    // Publish one pre-settleTime round so accept() has a tip to anchor the cursor
+    // on (it refuses the match without one). Round 1 keeps the historic cursor = 1
+    // start; a later publishRounds() replaces this history wholesale.
+    function seedTipRound() {
+        const tip = { price: '59000', roundNumber: 1, timestamp: T0 };
+        h.ledger.seedOracle(PAIR, tip, 0, { 1: tip });
     }
 
     async function depositAnd(who, method, amount) {
@@ -229,6 +238,7 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
                 code: CODE, deployer: MAKER, contractAddress: ADDR,
                 params: [MAKER, PAIR, STRIKE, 'OVER', TICK, ODD, String(T), '3']
             });
+            seedTipRound();
             assertSuccess(await depositAnd(MAKER, 'fund', '0.00000002'));
             assertSuccess(await depositAnd(TAKER, 'accept', '0.00000002'));
             publishRounds({ 2: { ts: T - 100, price: '65000' } }); // stuck before T
@@ -409,6 +419,26 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             assertSuccess(await settleBy(STRANGER));
             assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
             assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
+        it('accept() refuses a pair with no readable tip: the birth-wedge cannot be minted', async function () {
+            // Without the guard the cursor fell back to round 1, which on any host
+            // reporting a floor is already evicted: settle() reverts on its first
+            // read for the life of the bet while reclaim() refuses once a qualifying
+            // round arrives, so both stakes lock with no action either party can take.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            h.ledger.oraclePrices[PAIR].current = null;   // pair has no readable tip
+            h.ledger.seedOracleRoundFloor(1200);          // mature host: round 1 is long evicted
+
+            assertReverted(await depositAnd(TAKER, 'accept'), 'no oracle data for pair yet');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+            assertContractState(h.ledger, ADDR, 'cursor', undefined);
+
+            // Nothing is stranded: the bet never matched, so cancel() still drains it.
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: MAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
         });
 
         it('double-settle is impossible: the status guard blocks any second payout', async function () {

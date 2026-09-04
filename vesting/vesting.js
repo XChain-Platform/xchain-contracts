@@ -91,7 +91,7 @@ function tickDecimals(xchain, tick) {
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         fund:   { summary: 'Confirm custody and start the vesting clock (BATCH after a DEPOSIT)', params: [] },

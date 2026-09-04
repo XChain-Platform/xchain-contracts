@@ -67,8 +67,8 @@ module.exports = {
 
     abi: { version: 1, methods: {
         fund:            { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
-        requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: ['trackingUrl'] },
-        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched', params: ['request_id'] },
+        requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: [ { name: 'trackingUrl', type: 'string' } ] },
+        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched (not user-callable)', params: [ { name: 'requestId', type: 'string' } ] },
         release:         { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:          { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
         timeout:         { summary: 'Buyer reclaims after the deadline', params: [] },

@@ -83,7 +83,7 @@ var MAX_WINDOW_BLOCKS = 1000000;
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only.
+    // xchain-documentation/protocol/contract-abi.md). Advisory only.
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },
@@ -174,8 +174,14 @@ module.exports = {
         var needed = xchain.math.multiply(xchain.state.get('amount'), '2');
         xchain.require(xchain.math.gte(heldBalance(xchain), needed), 'insufficient deposit');
 
+        // Refuse the match unless the pair has a readable tip to anchor the cursor on.
+        // A fallback to round 1 sits below any mature host's preload floor, and settle()
+        // then reverts on its first read forever while reclaim() refuses once a
+        // qualifying round exists: both stakes locked. Sibling priceBet.js:190 refuses
+        // the same state at the same seam.
         var latest = latestRound(xchain);
-        var cursor = (latest !== null && latest.roundNumber > 0) ? latest.roundNumber : 1;
+        xchain.require(latest !== null && latest.roundNumber > 0, 'no oracle data for pair yet');
+        var cursor = latest.roundNumber;
 
         xchain.state.set('taker', taker);
         xchain.state.set('cursor', String(cursor));
