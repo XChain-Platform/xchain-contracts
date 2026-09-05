@@ -32,7 +32,7 @@
 // CUSTODY MODEL (read this before forking)
 //
 // XChain has no msg.value. The item enters via a DEPOSIT to the contract's own
-// address, funded atomically with BATCH:
+// address, funded in one transaction with BATCH:
 //
 //     BATCH( DEPOSIT(auction, ITEM_TICK, itemAmount), EXECUTE(auction, "fund") )
 //
@@ -40,6 +40,9 @@
 // execute buy() in the SAME transaction:
 //
 //     BATCH( DEPOSIT(auction, BID_TICK, quotedPrice), EXECUTE(auction, "buy") )
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so an underpaying
+// buy() strands its DEPOSIT in custody (see the README's Known limitations).
 //
 // buy() never trusts a caller-supplied amount: it reads the contract's actual
 // bidTick balance and compares it to the price in effect this block. Anything

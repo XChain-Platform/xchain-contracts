@@ -15,7 +15,9 @@ downward instead of up.
 
 XChain has **no `msg.value`**. Tokens enter a contract only via a separate
 **`DEPOSIT`**; logic runs via **`EXECUTE`**. Fund the item and attempt a
-purchase the same way, atomically, with **`BATCH`**:
+purchase the same way, both in one transaction, with **`BATCH`**. The two
+commands still settle independently: a `BATCH` is **not** atomic, so an `EXECUTE`
+that fails does not undo the `DEPOSIT` before it.
 
 ```
 BATCH( DEPOSIT(auction, ITEM_TICK, 10),        EXECUTE(auction, "fund") )

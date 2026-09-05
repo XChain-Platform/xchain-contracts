@@ -32,13 +32,17 @@
 // CUSTODY MODEL (read this before forking)
 //
 // XChain has no msg.value. The item enters via a DEPOSIT to the contract's own
-// address, funded atomically with BATCH:
+// address, funded in one transaction with BATCH:
 //
 //     BATCH( DEPOSIT(auction, ITEM_TICK, itemAmount), EXECUTE(auction, "fund") )
 //
 // Each bid works the same way:
 //
 //     BATCH( DEPOSIT(auction, BID_TICK, amount), EXECUTE(auction, "bid") )
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so a rejected bid's
+// DEPOSIT is not rolled back (see the README, "A rejected bid's DEPOSIT is not
+// rolled back", and the test that pins it).
 //
 // bid() never trusts a caller-supplied amount. Because every out-bid deposit is
 // refunded in the SAME execution that supersedes it, the contract's bidTick

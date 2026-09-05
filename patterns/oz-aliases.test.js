@@ -68,4 +68,21 @@ describe('oz-aliases.json integrity', function () {
         assert.ok(/oz-aliases\.json/.test(readme), 'README must link oz-aliases.json');
     });
 
+    // The README table is the human form of the JSON and the README says so, so the
+    // two row sets are pinned to each other in both directions: a JSON alias with no
+    // table row, or a table row with no alias, fails here by name.
+    it('the README OZ table and the JSON carry the same set of OZ names', function () {
+        const lines = fs.readFileSync(path.join(DIR, 'README.md'), 'utf8').split('\n');
+        const header = lines.indexOf('| OpenZeppelin | XChain equivalent | Where |');
+        assert.notStrictEqual(header, -1, 'README OZ table header not found; the table was renamed or removed');
+        const rows = [];
+        for (let i = header + 2; i < lines.length && lines[i].startsWith('|'); i++) rows.push(lines[i]);
+        assert.ok(rows.length > 0, 'README OZ table has no rows');
+        // Names render with backticks in the table and plain in the JSON.
+        const tableNames = rows.map(r => r.split('|')[1].replace(/`/g, '').trim()).sort();
+        const jsonNames = ALIASES.aliases.map(a => a.oz).sort();
+        assert.deepStrictEqual(tableNames, jsonNames,
+            'README OZ table rows and oz-aliases.json aliases differ; add the missing row or alias');
+    });
+
 });

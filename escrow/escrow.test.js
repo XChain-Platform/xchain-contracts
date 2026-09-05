@@ -53,7 +53,7 @@ const TICK    = 'TEST';
         });
     }
 
-    // Atomic fund: deposit then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+    // Same-batch fund: deposit then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund(amount) {
         h.deposit(BUYER, ADDR, TICK, amount || '200');
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER });

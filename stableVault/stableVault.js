@@ -38,9 +38,13 @@
 // CUSTODY AND ATTRIBUTION
 //
 // There is no msg.value on XChain. Tokens enter via DEPOSIT to the contract's
-// address; logic runs via EXECUTE. Fund-and-act atomically with BATCH:
+// address; logic runs via EXECUTE. Fund and act in one transaction with BATCH:
 //
 //     BATCH [ DEPOSIT(collateral -> vault) , EXECUTE deposit() ]
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so an EXECUTE that
+// reverts leaves the DEPOSIT ahead of it in custody but untracked, and the next
+// caller's delta credits it to them.
 //
 // A DEPOSIT carries no sender attribution, so the contract attributes by
 // DELTA: it tracks the total collateral and stable it has accounted for

@@ -29,7 +29,15 @@ const MATRIX = {
     // Carried in the shared matrix so the real-VM half covers the recipient branch,
     // which is the only branch that emits the empty-recipient exemption.
     allowBoth: { name: 'AllowBoth', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'], allowlistDirection: 'both' },
+    // The recipient-only shape: the guard declares `var to` in the allowlist branch
+    // itself, since no freeze block is there to declare it.
+    allowTo: { name: 'AllowTo', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'], allowlistDirection: 'to' },
     royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: '1Creator', bps: 500 }] }
 };
+
+// The whole stack with a two-sided allowlist: freeze AND a recipient allowlist both
+// need `to`, and the emitter moves the single `var to` declaration into the freeze
+// block for this combination. Derived from `full` so the two stay in lockstep.
+MATRIX.fullBoth = Object.assign({}, MATRIX.full, { name: 'FullBoth', allowlistDirection: 'both' });
 
 module.exports = { OWNER, NOTOWNER, MATRIX };

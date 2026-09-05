@@ -51,7 +51,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
                      String(DURATION), '8']
         });
     }
-    // Atomic pay: DEPOSIT then buy(), mirroring BATCH(DEPOSIT, EXECUTE("buy")).
+    // Same-batch pay: DEPOSIT then buy(), mirroring BATCH(DEPOSIT, EXECUTE("buy")).
     async function buy(who, amount) {
         h.deposit(who, ADDR, PAY, amount);
         return h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: who });

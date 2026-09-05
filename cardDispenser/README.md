@@ -21,7 +21,9 @@ whatever the operator DEPOSITs into the contract address for each card.
 
 ## Usage
 
-The VM has no `msg.value`; pay and draw atomically in one transaction:
+The VM has no `msg.value`; pay and draw in one transaction. A `BATCH` is **not**
+atomic, so a reverted `draw()` leaves its `DEPOSIT` standing (see "Sold-out
+payment stranding" under [Attacks we considered](#attacks-we-considered)):
 
 ```
 BATCH( DEPOSIT(contract, payTick, price), EXECUTE(contract, "draw") )

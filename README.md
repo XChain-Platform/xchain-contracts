@@ -74,7 +74,7 @@ npx xchain-contracts policy my-policy.json my-guard.js
 
 The config supports `pausable`, `freeze` (denylist), `allowlist`, a `royalty`
 proceeds split, a `maxTakeBps` cap, and a `permissions` manifest, over any of the
-`transfer`/`trade`/`burn`/`mint`/`stake`/`all` action classes. A controller guard
+`transfer`/`trade`/`burn`/`mint`/`stake`/`ownership`/`all` action classes. A controller guard
 is a contract the indexer runs *before* a gated native action settles; a token
 binds to it with ISSUE v6 (SDK: `sdk.controller.bindToken`). The generated source
 is built to pass the deploy linter clean. See
@@ -94,6 +94,16 @@ No setting is a complete holder restriction. Actions that carry no recipient
 (burns, and the escrow-creating order/swap/dispenser/airdrop/dividend actions)
 pass an empty `to` and are exempt, and matched trade settlement invokes no guard
 at all, so a matched buyer can still end up holding the token.
+
+**`royalty` scope.** The proceeds split is returned for `ORDER_CREATE` and
+`SWAP_CREATE` only: the indexer records the legs when the order or swap is listed
+and applies them when it matches. `DISPENSER_CREATE` is in the same `trade`
+class, so the guard runs when a holder opens a dispenser, but the dispenser path
+honours only a revert; the legs are discarded and dispenser sales pay no split.
+A holder can therefore sell a royalty-bearing token through a dispenser
+royalty-free, and a dispenser opened before the bind is never guarded at all.
+The generated header and the printed bind hints repeat this whenever a
+`royalty` is configured.
 
 ## The templates
 
@@ -135,11 +145,23 @@ XChain has **no `msg.value`**, so a contract call carries no tokens. Instead:
 - A contract is an address (`C:<CHAIN>:<index>`) that holds balances like a wallet.
 - Tokens enter via a separate **`DEPOSIT`** action to that address.
 - Logic runs via an **`EXECUTE`** action.
-- To fund-and-act atomically, submit both in one **`BATCH`**:
+- To fund and act in one transaction, submit both in one **`BATCH`**:
 
   ```
   BATCH( DEPOSIT(contract, TICK, amount), EXECUTE(contract, "method", ...args) )
   ```
+
+The two commands still settle independently: a `BATCH` is **not** atomic, so an
+`EXECUTE` that fails does not undo the `DEPOSIT` before it. The deposit stays in
+the contract's custody and is **not recoverable by its sender**. Where a template
+attributes tokens by balance delta (`amm`, `crowdsale`, `stableVault`,
+`cardDispenser`, the auctions) it is folded into the next caller's credited
+amount; where a template instead verifies an absolute balance (`escrow`,
+`escrowDelivery`, `vesting`) it sits untracked until settlement sweeps the
+contract's whole balance to whoever that template pays. Each template's own README
+names its case. Size the call to clear before batching the deposit behind
+it. ("Atomic" in these templates means the intra-`EXECUTE` scope, where a method's
+state writes and its deferred emissions commit or roll back together.)
 
 A safe contract **never trusts a caller-supplied amount**: it reads its own balance
 with `xchain.getBalance(xchain.getContractAddress(), tick)`. Every template here

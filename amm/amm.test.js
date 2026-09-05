@@ -22,11 +22,11 @@ const fs = require('fs');
 const path = require('path');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
-let XChainVM, E2EHarness, assertSuccess, assertReverted, math;
+let XChainVM, E2EHarness, assertSuccess, assertReverted, assertContractBalance, assertContractState, math;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
-    ({ assertSuccess, assertReverted } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+    ({ assertSuccess, assertReverted, assertContractBalance, assertContractState } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
     const { create, all } = require(path.join(VM_DIR, 'node_modules', 'mathjs'));
     math = create(all, { number: 'BigNumber', precision: 64 });
 } catch (e) { XChainVM = null; console.log('Skipping AMM tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
@@ -171,6 +171,30 @@ describe('Template: amm abi', function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
             assertReverted(await swap(T1, A, '100', '95'), 'slippage');
+        });
+
+        // Pins the documented COST of reverting on minOut (amm.js "CUSTODY MODEL",
+        // README "A reverted call's DEPOSIT is not rolled back"). BATCH is not
+        // all-or-nothing, so the deposit batched ahead of a reverting swap() settles
+        // anyway and the delta accounting hands it to the NEXT trader. A future
+        // change that refunds or credits it instead must rewrite this test together
+        // with those doc entries, not delete it.
+        it('a reverted swap strands its batched DEPOSIT, and the next trader inherits it', async function () {
+            await deploy();
+            await addLiq(LP1, '1000', '1000');
+            assertReverted(await swap(T1, A, '100', '95'), 'slippage');
+            assertContractBalance(h.ledger, ADDR, A, '1100');   // T1's 100 settled anyway
+            assertContractState(h.ledger, ADDR, 'reserveA', '1000'); // reserves never saw it
+
+            // LP2 deposits 100 and is priced on 200: T1's stranded input plus their own.
+            const r = await swap(LP2, A, '100', '0');
+            assertSuccess(r);
+            assertContractState(h.ledger, ADDR, 'reserveA', '1200');
+            // A lone 100-in trade on this pool cannot pay more than the no-fee bound
+            // 1000 - 1000*1000/1100 = 90.909..., so a larger payout is T1's tokens.
+            const out = emitted(r, 'SEND', B).params.quantity;
+            assert.ok(math.larger(bn(out), bn('90.9091')), 'credited more than a 100-in trade could ever pay');
+            assert.strictEqual(h.ledger.getBalance(T1, B), '100000000', 'T1 got nothing back');
         });
 
         it('cannot be drained: a huge swap still leaves the output reserve positive', async function () {

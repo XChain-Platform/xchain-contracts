@@ -67,16 +67,19 @@ These are **OZ-equivalents**, not the OZ contracts: XChain contracts are a singl
 import-free JS blob, so you paste the helper, you do not depend on a package. For
 several OZ contracts the answer is "you don't need it" - a native protocol action
 or the deferred-emission model already covers it. A machine-readable version of
-this table lives in [oz-aliases.json](./oz-aliases.json) (consumed by the docs
-and the Solidity-to-XChain on-ramp tooling).
+this table lives in [oz-aliases.json](./oz-aliases.json), kept row-for-row in
+step with the table by `oz-aliases.test.js` and intended for docs and
+Solidity-to-XChain on-ramp tooling.
 
 | OpenZeppelin | XChain equivalent | Where |
 |---|---|---|
 | `Ownable` | `onlyOwner` / `isOwner` | [access-control.js](./access-control.js) |
+| `Ownable2Step` | `onlyOwner` on a pending-owner state key (no native two-step helper) | [access-control.js](./access-control.js) |
 | `AccessControl` | `onlyRole` | [access-control.js](./access-control.js) |
 | `Pausable` | `whenNotPaused` / `isPaused` / `setPaused` (or token-wide `SLEEP`) | [pausable.js](./pausable.js) |
 | `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) |
 | `Address` | `requireAddress` | [validation.js](./validation.js) |
+| `Enumerable` / `EnumerableSet` | `requireEnum` (compose keys in the flat state store; no set type) | [validation.js](./validation.js) |
 | `ReentrancyGuard` | **not needed** - deferred emissions (see below) | - |
 | `SafeMath` | **not needed** - built-in `xchain.math.*` bignumber, floats rejected at deploy | - |
 | `ERC20` | **not a contract** - native `ISSUE` + `SEND` | protocol action |

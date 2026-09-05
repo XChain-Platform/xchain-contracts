@@ -39,14 +39,19 @@
 // CUSTODY MODEL: read this, it has a real footgun
 //
 // XChain has no msg.value. Buyers pay by DEPOSITing `payTick` to the contract and
-// EXECUTEing buy() atomically, in ONE transaction:
+// EXECUTEing buy() in ONE transaction:
 //
 //     BATCH( DEPOSIT(sale, PAY, amount), EXECUTE(sale, "buy") )
 //
 // buy() attributes the deposit to its caller by reading how much the contract's
 // payTick balance grew since the last accounted buy. This is only safe because
-// the DEPOSIT and buy() are atomic. **Never DEPOSIT without buy() in the same
-// transaction.** An un-bought deposit would be credited to the NEXT buyer.
+// the DEPOSIT and buy() ride in the same BATCH. **Never DEPOSIT without buy() in
+// the same transaction.** An un-bought deposit would be credited to the NEXT buyer.
+//
+// A BATCH is NOT atomic, which is WHY that rule matters: its sub-actions settle
+// independently, so a buy() that reverts ('sale closed (deadline passed)', 'hard
+// cap exceeded', and the other guards) leaves the DEPOSIT ahead of it standing,
+// and the next buyer's delta absorbs it. Size the payment to clear.
 // ---------------------------------------------------------------------------
 
 // Quantise a computed amount DOWN to its tick's decimal grid before emitting it.

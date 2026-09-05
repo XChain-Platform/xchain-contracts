@@ -42,15 +42,23 @@
 //
 // CUSTODY MODEL (and its footgun)
 //
-// XChain has no msg.value. Move tokens in via DEPOSIT, act via EXECUTE, atomically
-// with BATCH. Example swap:
+// XChain has no msg.value. Move tokens in via DEPOSIT, act via EXECUTE, both in
+// one transaction with BATCH. Example swap:
 //
 //     BATCH( DEPOSIT(pool, tokenIn, amount), EXECUTE(pool, "swap", tokenIn, minOut) )
 //
 // Each entrypoint credits the caller by the balance delta since the last accounted
-// reserve, so it MUST be atomic with the deposit. Tokens sent to the pool address
-// outside a BATCHed call are credited to whoever calls next. Reserves are tracked
-// in state (not raw balance), so direct donations don't move the price.
+// reserve, so the call MUST ride in the same BATCH as its deposit. Tokens sent to
+// the pool address outside a BATCHed call are credited to whoever calls next.
+// Reserves are tracked in state (not raw balance), so direct donations don't move
+// the price.
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so an EXECUTE that
+// reverts does not undo the DEPOSIT batched ahead of it. A swap that trips minOut
+// (or addLiquidity / removeLiquidity that trips one of their requires) leaves the
+// deposit in pool custody with reserves unchanged, and the delta accounting hands
+// it to the next caller. See the README, "A reverted call's DEPOSIT is not rolled
+// back", and the test that pins it in amm.test.js.
 //
 // LP TICK NAMING: the contract issues `lpTick` at deploy and becomes its owner.
 // Pick an UNUSED name (ticks are a global namespace). A collision makes the

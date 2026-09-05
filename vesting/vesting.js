@@ -34,9 +34,13 @@
 // CUSTODY MODEL
 //
 // XChain has no msg.value. Tokens enter via a separate DEPOSIT to the contract's
-// address; fund it atomically with BATCH:
+// address; fund it in one transaction with BATCH:
 //
 //     BATCH( DEPOSIT(vesting, TICK, TOTAL), EXECUTE(vesting, "fund") )
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so a fund() that
+// reverts ('vesting not awaiting funds', 'insufficient deposit') leaves the
+// DEPOSIT ahead of it standing in the contract's custody.
 //
 // fund() verifies the contract actually holds `total` (via getBalance) and starts
 // the vesting clock from that block. The contract never trusts a caller-supplied

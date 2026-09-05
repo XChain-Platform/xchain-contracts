@@ -111,35 +111,99 @@ describe('pattern helpers pasted into templates match the library source', funct
         return src.slice(start + 1, end + 3);
     }
 
-    // helper -> templates that paste it. Add a row when a template adopts one.
-    const PASTED = {
-        requirePlainDecimal: [
-            'priceBet/priceBet.js',
-            'priceBetTimed/priceBetTimed.js',
-            'stableVault/stableVault.js',
-            'treasury/treasury.js'
-        ],
-        requireIntInRange: [
-            'crowdsale/crowdsale.js',
-            'priceBet/priceBet.js',
-            'priceBetTimed/priceBetTimed.js',
-            'stableVault/stableVault.js',
-            'treasury/treasury.js'
-        ]
+    // Top-level `function NAME(` declarations in a source file, by the same shape
+    // helperSource() scans for (oz-aliases.test.js uses the same extractor).
+    function topLevelFns(file) {
+        const out = [];
+        const re = /^function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/gm;
+        const src = fs.readFileSync(file, 'utf8');
+        let m;
+        while ((m = re.exec(src)) !== null) out.push(m[1]);
+        return out;
+    }
+
+    // Every shipped template, by the predicate bin/xchain-contracts.js listAvailable()
+    // and test/gate-wiring.test.js share: a directory holding <name>/<name>.js.
+    function discoverTemplates() {
+        const rels = [];
+        for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+            const rel = entry.name + '/' + entry.name + '.js';
+            if (fs.existsSync(path.join(ROOT, rel))) rels.push(rel);
+        }
+        return rels.sort();
+    }
+
+    // helper name -> the pattern file that defines it. gate-wiring.test.js asserts
+    // no name is declared in two pattern files, so the map is single-valued.
+    const LIBRARY = new Map();
+    for (const f of PATTERN_FILES) {
+        for (const fn of topLevelFns(path.join(DIR, f))) LIBRARY.set(fn, f);
+    }
+
+    // The adopter set is DISCOVERED, never enumerated: a template that declares a
+    // library helper's name at top level is pinned the moment it lands. A literal
+    // roster here would let an adopter ship unpinned while the block stays green.
+    //
+    // Deliberate variants are listed by `<template>::<helper>` with the reason. Each
+    // entry must still name a real declaration whose body DIFFERS from the library's,
+    // so an exemption outliving its divergence fails instead of widening the hole.
+    const DIVERGENT = {
+        'priceBet/priceBet.js::heldBalance':
+            'one-arg heldBalance(xchain): the bet holds a single tick read from state',
+        'priceBetTimed/priceBetTimed.js::heldBalance':
+            'one-arg heldBalance(xchain): the bet holds a single tick read from state'
     };
 
-    for (const name of Object.keys(PASTED)) {
+    const TEMPLATES = discoverTemplates();
+    const PAIRS = []; // { rel, name, lib }
+    for (const rel of TEMPLATES) {
+        for (const name of topLevelFns(path.join(ROOT, rel))) {
+            if (!LIBRARY.has(name)) continue;
+            if (DIVERGENT[rel + '::' + name] !== undefined) continue;
+            PAIRS.push({ rel: rel, name: name, lib: LIBRARY.get(name) });
+        }
+    }
+
+    it('the scan is live: templates and pasted helpers are both discovered', function () {
+        assert.ok(TEMPLATES.length > 0,
+            'template discovery found nothing; the <name>/<name>.js predicate has drifted from ' +
+            'bin/xchain-contracts.js listAvailable() and this guard is now inert');
+        assert.ok(LIBRARY.size > 0, 'no top-level helper found in any patterns/*.js');
+        // 10 requireIntInRange copies plus 5 requirePlainDecimal copies ship today. A
+        // template that stops pasting a helper lowers this on purpose, here, in review.
+        assert.ok(PAIRS.length >= 15,
+            'only ' + PAIRS.length + ' pasted helper copies discovered; the scan has lost part ' +
+            'of the population it pins');
+    });
+
+    it('every DIVERGENT entry names a real declaration that still differs from the library', function () {
+        for (const key of Object.keys(DIVERGENT)) {
+            const [rel, name] = key.split('::');
+            assert.ok(LIBRARY.has(name), key + ': ' + name + ' is not a library helper');
+            const body = helperSource(path.join(ROOT, rel), name);
+            assert.notStrictEqual(body, helperSource(path.join(DIR, LIBRARY.get(name)), name),
+                key + ' is byte-identical to the library, so the exemption is stale: remove it');
+        }
+    });
+
+    const byName = {};
+    for (const p of PAIRS) (byName[p.name] = byName[p.name] || []).push(p);
+
+    for (const name of Object.keys(byName).sort()) {
         describe(name, function () {
-            const canonical = helperSource(path.join(DIR, 'validation.js'), name);
+            const lib = byName[name][0].lib;
+            const canonical = helperSource(path.join(DIR, lib), name);
 
             it('is exported by the pattern library', function () {
                 assert.ok(canonical.length > 0);
             });
 
-            for (const rel of PASTED[name]) {
-                it(rel + ' pastes the library body verbatim', function () {
-                    assert.strictEqual(helperSource(path.join(ROOT, rel), name), canonical,
-                        rel + ' has drifted from patterns/validation.js:' + name +
+            for (const p of byName[name]) {
+                it(p.rel + ' pastes the library body verbatim', function () {
+                    assert.strictEqual(helperSource(path.join(ROOT, p.rel), name), canonical,
+                        p.rel + ' has drifted from patterns/' + lib + ':' + name +
                         ' - re-paste the library body (comments above it may differ)');
                 });
             }

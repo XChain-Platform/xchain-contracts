@@ -31,13 +31,15 @@
 // CUSTODY MODEL (read this before forking)
 //
 // There is no msg.value on XChain. Funds enter a contract via a separate DEPOSIT
-// action to the contract's own address; logic runs via EXECUTE. To make funding
-// atomic, the buyer submits BOTH in one transaction with BATCH:
+// action to the contract's own address; logic runs via EXECUTE. To fund and act
+// in one transaction, the buyer submits BOTH with BATCH:
 //
 //     BATCH( DEPOSIT(this_contract, TICK, AMOUNT), EXECUTE(this_contract, "fund") )
 //
 // Batched sub-actions are applied in order with the deposit persisted before the
-// EXECUTE runs, so fund() sees the deposited balance via getBalance(). The
+// EXECUTE runs, so fund() sees the deposited balance via getBalance(). They still
+// settle independently: a BATCH is NOT atomic, so an EXECUTE that reverts does not
+// undo the DEPOSIT ahead of it and the funds stay in the contract's custody. The
 // contract never trusts a caller-supplied amount; it reads its own balance.
 //
 // SETTLEMENT sends the contract's ENTIRE balance of the escrowed tick to the

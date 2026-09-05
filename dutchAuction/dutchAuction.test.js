@@ -52,13 +52,13 @@ const ADDR   = 'C:BTC:1';
         });
     }
 
-    // Atomic fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+    // Same-batch fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund() {
         h.deposit(SELLER, ADDR, ITEM, '10');
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER });
     }
 
-    // Atomic buy: fund the buyer, deposit `pay` of BID, then buy(). Mirrors
+    // Same-batch buy: fund the buyer, deposit `pay` of BID, then buy(). Mirrors
     // BATCH(DEPOSIT, EXECUTE("buy")).
     async function buy(buyer, pay) {
         h.seedBalance(buyer, BID, pay);

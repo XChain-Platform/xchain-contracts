@@ -14,7 +14,7 @@ delta-accounting trick to safely track a repeatedly-refilled balance.
 
 XChain has **no `msg.value`**. Tokens enter a contract only via a separate
 **`DEPOSIT`**; logic runs via **`EXECUTE`**. Fund the item and place bids the
-same way, atomically, with **`BATCH`**:
+same way, both in one transaction, with **`BATCH`**:
 
 ```
 BATCH( DEPOSIT(auction, ITEM_TICK, 10), EXECUTE(auction, "fund") )
@@ -26,6 +26,11 @@ deposit is refunded within the same execution that supersedes it, the
 contract's `bidTick` balance is always exactly the current high bid - so a new
 bid's size is read as *the growth in that balance since the last bid*
 (`held - highBid`), not a separately-passed parameter.
+
+The two commands still settle independently: a `BATCH` is **not** atomic, so an
+`EXECUTE` that fails does not undo the `DEPOSIT` before it. See "A rejected bid's
+DEPOSIT is not rolled back" under [Attacks we
+considered](#attacks-we-considered).
 
 ## Lifecycle
 

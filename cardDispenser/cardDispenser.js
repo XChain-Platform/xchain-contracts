@@ -21,13 +21,16 @@
 //
 // There is no msg.value on XChain. Funds enter a contract via a separate DEPOSIT
 // action to the contract's own address; logic runs via EXECUTE. To pay and draw
-// atomically, the buyer submits BOTH in one transaction with BATCH:
+// in ONE transaction, the buyer submits BOTH with BATCH:
 //
 //     BATCH( DEPOSIT(this_contract, payTick, price), EXECUTE(this_contract, "draw") )
 //
 // Batched sub-actions apply in order with the deposit persisted before EXECUTE
-// runs, so draw() sees the payment via getBalance(). The contract never trusts a
-// caller-supplied amount; it reads its own balance delta.
+// runs, so draw() sees the payment via getBalance(). They still settle
+// independently: a BATCH is NOT atomic, so a draw() that reverts ('underpaid')
+// does not undo the DEPOSIT ahead of it. That is exactly why sold-out REFUNDS
+// rather than reverting (see "Sold-out payment stranding"). The contract never
+// trusts a caller-supplied amount; it reads its own balance delta.
 //
 // The contract canNOT enumerate its own holdings (the VM only exposes
 // getBalance(address, tick)), so the candidate card ticks are FIXED at deploy.

@@ -46,7 +46,9 @@ would have got a 1-block one and a matched bet voidable almost at once.
 
 ## Usage
 
-Fund and act atomically (there is no `msg.value` on XChain):
+Fund and act in one transaction (there is no `msg.value` on XChain). A `BATCH` is
+**not** atomic, so a reverted `fund()`/`accept()` leaves its `DEPOSIT` standing in
+the contract:
 
 ```
 BATCH( DEPOSIT(contract, TICK, stake), EXECUTE(contract, "fund") )    # maker

@@ -50,8 +50,10 @@
 // a genuine dispute still resolves through the buyer/seller/arbiter/deadline
 // paths, not just automation.
 //
-// CUSTODY MODEL: identical to `escrow` (read that template first). Fund
-// atomically with BATCH(DEPOSIT(this, TICK, AMOUNT), EXECUTE(this, "fund")).
+// CUSTODY MODEL: identical to `escrow` (read that template first). Fund in one
+// transaction with BATCH(DEPOSIT(this, TICK, AMOUNT), EXECUTE(this, "fund")).
+// A BATCH is NOT atomic: a fund() that reverts leaves the DEPOSIT ahead of it
+// standing in custody.
 // Settlement always sends the contract's ENTIRE balance of the escrowed tick.
 // ---------------------------------------------------------------------------
 
