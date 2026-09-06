@@ -64,6 +64,20 @@
 // paying the wrong side; sizing `deadlineBlocks` to settle well inside that
 // window is the instance's job. Same rule, same reason, as sibling priceBet.
 //
+// That refusal is safe for the POT only while the cursor keeps pointing at a round
+// the node can still read, because a cursor below the floor makes settle() revert
+// on its first read while reclaim() refuses as soon as a qualifying round exists:
+// no exit, both stakes locked. So the cursor's readability is maintained at both
+// seams that can break it. accept() refuses to anchor on a tip that is already
+// evicted (getPrice() reports a pair's own newest round with no floor comparison,
+// while the floor is global across pairs, so a pair that stops publishing keeps a
+// readable tip whose round is long gone). settle() carries the cursor up to the tip
+// on the PENDING path, where the tip being pre-T proves every round at or below it
+// is pre-T, so a bet anyone settles on before its deadline can never be overtaken
+// by the window. A bet NOBODY calls settle() on before the window slides past its
+// acceptance round is still reachable, and stays the instance's `deadlineBlocks`
+// job.
+//
 // Custody model, BATCH funding, and the liveness escape hatches are identical
 // to priceBet; see that template's header for the full rationale.
 // ---------------------------------------------------------------------------
@@ -174,13 +188,24 @@ module.exports = {
         var needed = xchain.math.multiply(xchain.state.get('amount'), '2');
         xchain.require(xchain.math.gte(heldBalance(xchain), needed), 'insufficient deposit');
 
-        // Refuse the match unless the pair has a readable tip to anchor the cursor on.
-        // A fallback to round 1 sits below any mature host's preload floor, and settle()
-        // then reverts on its first read forever while reclaim() refuses once a
-        // qualifying round exists: both stakes locked. Sibling priceBet.js:190 refuses
-        // the same state at the same seam.
+        // Refuse the match unless the pair has a tip the scan can actually start from.
+        // Two ways that fails and both wedge the pot identically: the pair may have no
+        // tip at all (the cursor would fall back to round 1, below any mature host's
+        // preload floor), or the tip may itself already sit below that floor. The second
+        // is not the first in disguise. The two accessor views are built from different
+        // queries: getPrice() reports each pair's OWN newest round with no floor
+        // comparison, while the floor is global across pairs, so a pair that stops
+        // publishing while the rest of the fleet advances keeps a perfectly readable tip
+        // whose round is long evicted. Either way settle() then reverts on its first read
+        // for the life of the bet while reclaim() refuses once a qualifying round exists:
+        // both stakes locked with no action either party can take. Sibling priceBet.js:190
+        // refuses the same state at the same seam.
         var latest = latestRound(xchain);
         xchain.require(latest !== null && latest.roundNumber > 0, 'no oracle data for pair yet');
+        xchain.require(
+            !roundOutsideWindow(xchain, xchain.state.get('coinPair'), latest.roundNumber),
+            'tip round is outside the retrievable oracle window'
+        );
         var cursor = latest.roundNumber;
 
         xchain.state.set('taker', taker);
@@ -209,7 +234,22 @@ module.exports = {
         // The latest round is the newest consensus product; if even it is
         // before T, no qualifying round can exist yet (timestamps are
         // non-decreasing in round number).
-        if (latest.timestamp < T) return 'PENDING';
+        if (latest.timestamp < T) {
+            // Carry the cursor up to the tip on the way out. Every round at or below a
+            // pre-T tip is itself pre-T, by the same monotonicity this early return
+            // already rests on, so none of them can decide the bet and none is lost by
+            // stepping over it. This is not an optimisation: the cursor write below is
+            // the ONLY one in settle() and it sits after this return, so without this a
+            // cursor could never move before the settle time, and a node's bounded
+            // oracle preload would scroll past it while both parties waited. The tip
+            // round stays in scope (cursor = its number, not +1), the convention
+            // accept() uses. Never walk backwards: a lower tip must not undo scan
+            // progress already paid for.
+            if (latest.roundNumber > parseInt(xchain.state.get('cursor'))) {
+                xchain.state.set('cursor', String(latest.roundNumber));
+            }
+            return 'PENDING';
+        }
 
         // Walk from the cursor to the first round with timestamp >= T. Gaps
         // (skipped/disputed rounds) return null and are stepped over. The
@@ -358,6 +398,18 @@ function normalize(r) {
         };
     }
     return { price: String(r), roundNumber: NaN, timestamp: NaN, outsideWindow: false };
+}
+
+// True for a round the node can see is unreadable: below the host's preload floor,
+// which the accessor reports as a priceless row carrying outsideWindow rather than as
+// the null that means the round never existed. A NULL read is deliberately not this.
+// settle() steps over nulls as genuine skipped/disputed gaps, and a host that ships no
+// round history at all (a legacy accessor) answers null for everything, so treating it
+// as unreadable would refuse every match on those hosts while preventing no wedge.
+// Mirrors priceBet.js:roundOutsideWindow, same distinction and same reason.
+function roundOutsideWindow(xchain, coinPair, round) {
+    var r = normalize(xchain.oracle.getPriceAtRound(coinPair, round));
+    return (r !== null && r.outsideWindow === true);
 }
 
 // Latest finalized round for the bet's pair, normalized; null if none.

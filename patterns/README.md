@@ -74,7 +74,7 @@ Solidity-to-XChain on-ramp tooling.
 | OpenZeppelin | XChain equivalent | Where |
 |---|---|---|
 | `Ownable` | `onlyOwner` / `isOwner` | [access-control.js](./access-control.js) |
-| `Ownable2Step` | `onlyOwner` on a pending-owner state key (no native two-step helper) | [access-control.js](./access-control.js) |
+| `Ownable2Step` | `onlyOwner` to offer, `onlyRole` on a `pendingOwner` state key to accept (no native two-step helper) | [access-control.js](./access-control.js) |
 | `AccessControl` | `onlyRole` | [access-control.js](./access-control.js) |
 | `Pausable` | `whenNotPaused` / `isPaused` / `setPaused` (or token-wide `SLEEP`) | [pausable.js](./pausable.js) |
 | `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) |

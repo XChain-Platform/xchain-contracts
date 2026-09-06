@@ -11,8 +11,8 @@
     {
       "oz": "Ownable2Step",
       "file": "access-control.js",
-      "helpers": ["onlyOwner"],
-      "note": "No native two-step transfer helper; implement pending-owner in state and gate acceptance with onlyOwner on the pending key."
+      "helpers": ["onlyOwner", "onlyRole"],
+      "note": "No native two-step transfer helper. Gate the offer method with onlyOwner(xchain) and store the incoming address under a 'pendingOwner' state key; gate the acceptance method with onlyRole(xchain, 'pendingOwner'), then set 'owner' to the caller and xchain.state.delete('pendingOwner'). onlyOwner(xchain) takes no key argument - it always reads the 'owner' key - so it cannot guard the acceptance step."
     },
     {
       "oz": "AccessControl",

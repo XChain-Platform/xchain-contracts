@@ -126,6 +126,20 @@ await sdk.batch()
 - **No reserve beyond `endPrice`.** The price never falls below `endPrice` and
   never expires into an unsellable state - it's a genuine floor, not a
   "cancel if unsold by X" deadline. Use `cancel()` if the seller wants out.
+- **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,
+  not at deploy.** The item tick's decimals are unreadable while the contract
+  holds none of it, so the constructor can only check that `itemAmount` is a
+  plainly spelled positive decimal; the grid check runs at `fund()`, the first
+  point the ledger can answer and the last before the price clock starts. It is
+  the item-leg counterpart of the price-leg floor in `buy()`, and it rejects
+  rather than flooring: the ledger re-quantises every emitted amount at write
+  time, so an off-grid `itemAmount` would deliver less than advertised -
+  nothing at all on a 0-decimal tick - while the buyer paid in full. **The cost
+  of that choice:** a seller who deposits the item in a standalone transaction
+  rather than the `BATCH(DEPOSIT, EXECUTE fund)` above, and is then rejected
+  here, has no in-contract path to reclaim the deposit (`cancel()` requires
+  `ACTIVE`). That is the same exposure the "insufficient item deposit" check
+  already carries. Deposit and fund in one BATCH.
 
 ## Tests
 

@@ -59,6 +59,35 @@
 // ceiling escrow.js, treasury.js and patterns/validation.js use.
 var MAX_WINDOW_BLOCKS = 1000000;
 
+// Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
+// whether an amount is already on the grid (floor === value), never to rewrite
+// the seller's terms. Same helper and rationale as
+// dutchAuction.js/vesting.js/crowdsale.js/amm.js:floorToDecimals.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of a tick, read from the ledger snapshot. Mirrors
+// dutchAuction.js/vesting.js/amm.js:tickDecimals; requires the token info to be
+// readable (same VM_BALANCE_TOKENINFO gate getBalance rides on, and the indexer
+// builds both from ONE snapshot over SOURCE + the contract address, so a tick
+// this contract holds a balance of always carries its info).
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
+}
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -87,6 +116,13 @@ module.exports = {
         xchain.require(seller, 'seller required');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
+        // Gate the NOTATION of itemAmount before any magnitude check reads it, and
+        // before fund()'s grid check does string surgery on it. xchain.math accepts
+        // every spelling mathjs parses ('2.5e-2', '0x10', '+1.5', '.5') and the
+        // accepted string is stored verbatim and emitted verbatim at settlement, so
+        // an exotic spelling does not no-op through floorToDecimals, it corrupts.
+        // Same gate and rationale as dutchAuction.js's price terms.
+        requirePlainDecimal(xchain, itemAmount, 'itemAmount');
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
         xchain.require(minBid && xchain.math.gt(minBid, '0'), 'minBid must be positive');
 
@@ -121,6 +157,20 @@ module.exports = {
         var itemAmount = xchain.state.get('itemAmount');
         var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         xchain.require(xchain.math.gte(held, itemAmount), 'insufficient item deposit');
+
+        // itemAmount is emitted VERBATIM by settle() and cancel(), and the indexer
+        // re-quantises every emitted amount onto the tick's grid at ledger-write time
+        // (bcadd(amount, 0, decimals), HALF-UP). Off the grid that rewrite is silent
+        // and a zero amount is a VALID SEND that moves nothing: with a 0-decimal item
+        // and itemAmount '0.25', the auction reaches SOLD, the seller is paid in full,
+        // the winner receives nothing, and the deposit is stranded in a terminal
+        // contract with no cancel() path left. The constructor cannot check this - the
+        // item tick's decimals are unreadable at deploy, when the contract holds none
+        // of it. Here is the first point the ledger can answer AND the last point
+        // before the auction arms, so a rejected seller has lost nothing but a deploy.
+        var itemGrid = tickDecimals(xchain, itemTick);
+        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+            'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
 
         xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
         xchain.state.set('status', 'ACTIVE');
@@ -203,6 +253,37 @@ module.exports = {
         });
     }
 };
+
+// Require a plain fixed-notation decimal: digits and at most one interior decimal
+// point, no exponent, sign or radix prefix. The magnitude checks in initialize()
+// are no filter, because xchain.math accepts every spelling mathjs parses, and
+// floorToDecimals is string surgery that presupposes fixed notation: on '2.5e-2'
+// it does not no-op, it returns '2.5e-2' unchanged and the grid check passes an
+// amount the ledger reads as 0.025. Same helper and rationale as
+// dutchAuction.js / treasury.js / stableVault.js / priceBet.js:requirePlainDecimal,
+// which is the rule patterns/validation.js states for exactly this seam.
+//
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported for the same single-file
+// reason requireIntInRange below carries its own copy.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
 
 // Throw unless `v` is a canonical base-10 integer string within [min, max]
 // inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.

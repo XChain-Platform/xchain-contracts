@@ -52,6 +52,50 @@
 // it, which would strand the buyer's payment in the contract.
 // ---------------------------------------------------------------------------
 
+// Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
+// whether `unit` is already on a card's grid (floor === value), never to rewrite
+// it. Same helper and rationale as amm.js/dutchAuction.js:floorToDecimals.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Copies of `tick` this contract can actually DELIVER at `unit`: floor(balance /
+// unit), or zero when `unit` is not exactly representable on the tick's grid.
+//
+// The grid half is the load-bearing part. The indexer re-quantises every emitted
+// amount onto its tick's grid at ledger-write time (bcadd(amount, 0, decimals),
+// HALF-UP), and a zero amount is a VALID SEND that moves nothing. With a
+// zero-decimal card, a balance of '1' and unit '0.25', the division below counts
+// four copies: draw() keeps the payment, emits a quantity the ledger reads as 0,
+// and the card balance never moves - so the next paid draw delivers nothing too,
+// forever, while the owner withdraws the proceeds (AML #7036).
+//
+// Two ordering details are deliberate. Decimals are read only AFTER copies is
+// known positive, because a positive balance is what GUARANTEES the read: the
+// indexer builds balances and tokenInfo from one snapshot over SOURCE + the
+// contract address, so a tick this contract holds always carries its info while a
+// card it holds none of need not. And an unreadable read yields zero copies rather
+// than a throw, because a reverting draw() would strand the buyer's batched
+// DEPOSIT - the very outcome the sold-out path refunds instead of reverting.
+function deliverableCopies(xchain, self, tick, unit) {
+    var q      = xchain.math.divide(xchain.getBalance(self, tick) || '0', unit);
+    var copies = xchain.math.subtract(q, xchain.math.mod(q, '1')); // floor (>=0)
+    if (xchain.math.isZero(copies)) return copies;
+    var info = xchain.getTokenInfo(tick);
+    if (!info || info.DECIMALS === null || info.DECIMALS === undefined) return '0';
+    if (floorToDecimals(unit, info.DECIMALS) !== unit) return '0';
+    return copies;
+}
+
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -75,6 +119,14 @@ module.exports = {
 
         xchain.require(payTick, 'payTick required');
         xchain.require(price && xchain.math.gt(price, '0'), 'price must be > 0');
+        // Gate the NOTATION of unit before the magnitude check. xchain.math accepts
+        // every spelling mathjs parses ('2.5e-1', '0x10', '+1.5', '.5'), and unit is
+        // stored verbatim, emitted verbatim as a draw's quantity, and handed to
+        // floorToDecimals by deliverableCopies - which is string surgery presupposing
+        // fixed notation, so on an exotic spelling it does not no-op, it blesses a
+        // unit the ledger reads as something else. The card ticks' grids cannot be
+        // checked here: the contract holds none of them at deploy.
+        requirePlainDecimal(xchain, unit, 'unit');
         xchain.require(unit && xchain.math.gt(unit, '0'), 'unit must be > 0');
 
         var count = xchain.getInputParamCount();
@@ -118,9 +170,10 @@ module.exports = {
         var weights = [];
         var total   = '0';
         for (var i = 0; i < cards.length; i++) {
-            var bal    = xchain.getBalance(self, cards[i]) || '0';
-            var q      = xchain.math.divide(bal, unit);
-            var copies = xchain.math.subtract(q, xchain.math.mod(q, '1')); // floor (>=0)
+            // Weight by DELIVERABLE copies: a card whose grid cannot express `unit`
+            // weighs zero and is never picked, so an all-off-grid dispenser falls
+            // through to the refund below instead of taking payment for nothing.
+            var copies = deliverableCopies(xchain, self, cards[i], unit);
             weights.push(copies);
             total = xchain.math.add(total, copies);
         }
@@ -172,9 +225,11 @@ module.exports = {
         var unit  = xchain.state.get('unit');
         var cards = xchain.state.get('cards').split('|');
         var stock = {};
+        // Same deliverable count draw() weights by, so a card whose grid cannot
+        // express `unit` reads as 0 stock here rather than advertising phantom
+        // copies an operator would believe.
         for (var i = 0; i < cards.length; i++) {
-            var q = xchain.math.divide(xchain.getBalance(self, cards[i]) || '0', unit);
-            stock[cards[i]] = xchain.math.subtract(q, xchain.math.mod(q, '1'));
+            stock[cards[i]] = deliverableCopies(xchain, self, cards[i], unit);
         }
         return JSON.stringify({
             payTick: xchain.state.get('payTick'),
@@ -185,6 +240,33 @@ module.exports = {
         });
     }
 };
+
+// Require a plain fixed-notation decimal: digits and at most one interior decimal
+// point, no exponent, sign or radix prefix. Same helper and rationale as
+// dutchAuction.js / treasury.js / stableVault.js / priceBet.js:requirePlainDecimal,
+// which is the rule patterns/validation.js states for exactly this seam.
+//
+// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
+// this is a character walk. Inlined rather than imported: contract sources load as
+// a single file into the isolated VM.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
 
 // Deterministic pseudo-random integer in [0, total). Entropy is the block hash,
 // folded char-by-char so it works whether the host gives a 64-hex sha256 (real

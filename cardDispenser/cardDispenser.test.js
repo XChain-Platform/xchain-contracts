@@ -52,6 +52,14 @@ const UNIT  = '1';
         h.seedBalance(OWNER, 'XCHAIN', '1000000');
         h.seedBalance(BUYER, 'XCHAIN', '1000000');
         h.seedBalance(BUYER, PAY, '1000');
+        // draw() and info() count only DELIVERABLE copies, so they read each stocked
+        // card's decimals. The harness's decimals registry is balance-INDEPENDENT
+        // (MockLedger) while a node's is not: the indexer builds balances and
+        // tokenInfo from ONE snapshot over SOURCE + the contract address (db.js
+        // buildVmBalancesAndTokenInfo), so a card this contract holds always carries
+        // its info in the same snapshot getBalance reads. Seeding the card ticks
+        // models that reachability rather than papering over it.
+        for (const tick of CARDS) h.ledger.setTokenDecimals(tick, 0);
         await h.deploy({
             code: CODE, deployer: OWNER, contractAddress: ADDR,
             params: [PAY, PRICE, UNIT, A, B, C]
@@ -200,6 +208,70 @@ const UNIT  = '1';
                 'owner only'
             );
         });
+
+        // The dispenser emits `unit` verbatim and the indexer re-quantises every
+        // emitted amount onto its tick's grid at write time, so an off-grid unit
+        // normalises silently - to ZERO on a zero-decimal card, which is a VALID
+        // SEND that moves nothing. floor(balance/unit) counts the phantom copies,
+        // so before the grid check the buyer paid, received nothing, the card
+        // balance never moved, and the same paid draw delivered nothing again for
+        // as long as the owner cared to collect (AML #7036).
+        async function deployOffGridUnit(unit, cardDecimals) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(OWNER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, PAY, '1000');
+            for (const tick of CARDS) h.ledger.setTokenDecimals(tick, cardDecimals);
+            await h.deploy({
+                code: CODE, deployer: OWNER, contractAddress: ADDR,
+                params: [PAY, PRICE, unit, A, B, C]
+            });
+            h.ledger.creditContractBalance(ADDR, A, '1');
+        }
+
+        it('a card whose grid cannot express unit is refunded, never drawn', async function () {
+            await deployOffGridUnit('0.25', 0);
+            const r = await draw();
+            assertSuccess(r);
+            // Refund, not a card: the only stocked card weighs zero, so the draw
+            // falls through to the existing sold-out path.
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+            assertBalance(h.ledger, BUYER, A, '0');
+            assertBalance(h.ledger, BUYER, PAY, '1000');    // deposit fully returned
+            assertContractBalance(h.ledger, ADDR, A, '1');  // stock untouched
+            assertContractState(h.ledger, ADDR, 'nonce', '0');
+        });
+
+        it('info() reports zero stock for a card whose grid cannot express unit', async function () {
+            await deployOffGridUnit('0.25', 0);
+            const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: BUYER });
+            assertSuccess(r);
+            // returnValue is the method's JSON string, itself JSON-encoded by the VM.
+            assert.strictEqual(JSON.parse(JSON.parse(r.returnValue)).stock[A], '0',
+                'info() must not advertise phantom copies the dispenser cannot deliver');
+        });
+
+        // The other direction of the same normalisation: HALF-UP rounds '1.5' on a
+        // zero-decimal card UP to 2, so the dispenser would ship two copies for one
+        // unit of price and drain its own stock at double rate.
+        it('an off-grid unit above one is refused too, not rounded up', async function () {
+            await deployOffGridUnit('1.5', 0);
+            h.ledger.creditContractBalance(ADDR, A, '9');   // 10 held, 6 phantom copies
+            const r = await draw();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+            assertContractBalance(h.ledger, ADDR, A, '10');
+        });
+
+        // The control: a sub-unit unit that IS on its card's grid must still draw.
+        // Without it, a change that refused every draw would look identical to one
+        // that caught the defect.
+        it('an on-grid fractional unit still draws and delivers exactly that amount', async function () {
+            await deployOffGridUnit('0.25', 2);
+            const r = await draw();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: '0.25' } }]);
+        });
     });
 
     describe('deploy-time validation', function () {
@@ -221,6 +293,40 @@ const UNIT  = '1';
                 params: [PAY, '0', UNIT, A]
             });
             assert.strictEqual(r.success, false, 'deploy with price=0 should revert in initialize');
+        });
+
+        // unit is stored verbatim, emitted verbatim as a draw's quantity, and fed to
+        // floorToDecimals by deliverableCopies - string surgery presupposing fixed
+        // notation. On '2.5e-1' the floor is a no-op, so the grid check would bless a
+        // unit the ledger reads as 0.25. The magnitude check is no filter: xchain.math
+        // parses every one of these.
+        it('rejects a unit that is not a plain fixed-notation decimal', async function () {
+            const BAD = ['2.5e-1', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
+                         '1.2.3', '', ' 1', 'abc', '-1'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(OWNER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: OWNER, contractAddress: 'C:BTC:4',
+                    params: [PAY, PRICE, BAD[i], A]
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with unit ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+        });
+
+        // Notation-only: the card ticks' grids are unreadable at deploy (the contract
+        // holds none of them), so an off-grid but plainly spelled unit still deploys
+        // and is caught per card at draw() instead.
+        it('accepts an off-grid but plainly spelled unit and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: OWNER, contractAddress: 'C:BTC:5',
+                params: [PAY, PRICE, '0.25', A]
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:5', 'unit', '0.25');
         });
     });
 });

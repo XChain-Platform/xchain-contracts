@@ -124,6 +124,10 @@ module.exports = {
         xchain.require(seller, 'seller required');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
+        // itemAmount gets the same notation gate as the price terms below, for the
+        // same reason: fund() hands it to floorToDecimals, which is string surgery
+        // presupposing fixed notation, and buy()/cancel() emit it verbatim.
+        requirePlainDecimal(xchain, itemAmount, 'itemAmount');
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
         // Gate the NOTATION of both price terms before any magnitude check reads
         // them. The magnitude checks below are no filter: xchain.math accepts every
@@ -171,6 +175,21 @@ module.exports = {
         var itemAmount = xchain.state.get('itemAmount');
         var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         xchain.require(xchain.math.gte(held, itemAmount), 'insufficient item deposit');
+
+        // buy() already floors the PRICE leg onto bidTick's grid; the ITEM leg was
+        // never checked at all. itemAmount is emitted verbatim, and the indexer
+        // re-quantises every emitted amount onto its tick's grid at ledger-write time
+        // (bcadd(amount, 0, decimals), HALF-UP). Off the grid that rewrite is silent
+        // and a zero amount is a VALID SEND that moves nothing: with a 0-decimal item
+        // and itemAmount '0.25', buy() latches SOLD, the seller is paid in full, the
+        // buyer receives nothing, and the deposit is stranded in a terminal contract
+        // out of cancel()'s reach. The constructor cannot check this - the item tick's
+        // decimals are unreadable at deploy, when the contract holds none of it. Here
+        // is the first point the ledger can answer AND the last before the auction
+        // arms, so a rejected seller has lost nothing but a deploy.
+        var itemGrid = tickDecimals(xchain, itemTick);
+        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+            'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
 
         xchain.state.set('start', String(xchain.getBlockHeight()));
         xchain.state.set('status', 'ACTIVE');
