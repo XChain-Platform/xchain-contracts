@@ -57,9 +57,9 @@ jobs:
           ssh-key: ${{ secrets.XCHAIN_VM_DEPLOY_KEY }}
           path: xchain-vm
 
-      # Node 22 exactly. isolated-vm 5.0.4 is V8-ABI-specific and will not build
-      # on 24, and a VM that fails to load makes these suites SKIP rather than
-      # fail (see bin/ci-preflight.js).
+      # Node 22 exactly. The VM's consensus runtime pins the Node ABI to 127, so
+      # results taken on another major are not the fleet's, and a VM that fails
+      # to load makes these suites SKIP rather than fail (see bin/ci-preflight.js).
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:

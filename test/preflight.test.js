@@ -72,12 +72,13 @@ process.on('exit', function () {
 describe('Preflight: the xchain-vm harness must be usable', function () {
     this.timeout(0);
 
-    it('runs on Node 22 (isolated-vm is V8-ABI-specific)', function () {
+    it('runs on Node 22 (the consensus runtime pins the V8 ABI)', function () {
         const major = Number(process.versions.node.split('.')[0]);
         assert.strictEqual(major, 22,
             'these suites require Node 22; running ' + process.versions.node +
-            '. isolated-vm 5.0.4 does not build on 24, and a harness that fails ' +
-            'to load makes every template suite SKIP rather than fail.');
+            '. The VM pins the Node ABI to 127, so another major is not the ' +
+            'fleet\'s engine, and a harness that fails to load makes every ' +
+            'template suite SKIP rather than fail.');
     });
 
     it('loads the xchain-vm entrypoint from the sibling checkout', function () {
