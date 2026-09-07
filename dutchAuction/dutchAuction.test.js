@@ -46,19 +46,27 @@ const ADDR   = 'C:BTC:1';
         h.seedBalance(SELLER, 'XCHAIN', '1000000');
         h.seedBalance(SELLER, ITEM, '10');
         h.ledger.setTokenDecimals(BID, 0);
+        // fund() reads itemTick's decimals to check the amount lands on its grid, and
+        // the harness's decimals registry is balance-INDEPENDENT (MockLedger) while a
+        // node's is not: the indexer builds balances and tokenInfo from ONE snapshot
+        // over SOURCE + the contract address (db.js buildVmBalancesAndTokenInfo), so a
+        // tick the contract holds a just-DEPOSITed amount of always carries its info
+        // in the same snapshot getBalance reads. Seeding the item tick models that
+        // reachability; it is not the stableVault trap of seeding a tick nobody holds.
+        h.ledger.setTokenDecimals(ITEM, 0);
         await h.deploy({
             code: CODE, deployer: SELLER, contractAddress: ADDR,
             params: [SELLER, ITEM, '10', BID, '1000', '100', String(duration || 10)]
         });
     }
 
-    // Atomic fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+    // Same-batch fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund() {
         h.deposit(SELLER, ADDR, ITEM, '10');
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER });
     }
 
-    // Atomic buy: fund the buyer, deposit `pay` of BID, then buy(). Mirrors
+    // Same-batch buy: fund the buyer, deposit `pay` of BID, then buy(). Mirrors
     // BATCH(DEPOSIT, EXECUTE("buy")).
     async function buy(buyer, pay) {
         h.seedBalance(buyer, BID, pay);
@@ -179,6 +187,84 @@ const ADDR   = 'C:BTC:1';
             await deployAuction(10);
             assertReverted(await buy('alice', '1000'), 'not active');
         });
+
+        // The price leg above is floored onto bidTick's grid; the ITEM leg was never
+        // checked at all. buy() and cancel() emit itemAmount verbatim and the indexer
+        // re-quantises every emitted amount onto its tick's grid at write time, so an
+        // off-grid item silently normalises - to ZERO on a 0-decimal tick, which is a
+        // VALID SEND that moves nothing. The buyer would pay in full, receive nothing,
+        // and the deposit would sit in a SOLD auction out of cancel()'s reach, so the
+        // gate belongs at fund(), before the auction arms.
+        async function deployOffGridItem(itemAmount) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(SELLER, 'XCHAIN', '1000000');
+            h.seedBalance(SELLER, ITEM, '10');
+            h.ledger.setTokenDecimals(BID, 0);
+            h.ledger.setTokenDecimals(ITEM, 0);
+            return h.deploy({
+                code: CODE, deployer: SELLER, contractAddress: ADDR,
+                params: [SELLER, ITEM, itemAmount, BID, '1000', '100', '10']
+            });
+        }
+
+        it('fund() rejects an itemAmount that is off the item tick grid', async function () {
+            assertSuccess(await deployOffGridItem('0.25'));
+            h.deposit(SELLER, ADDR, ITEM, '10');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+                'not representable at itemTick decimals');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            // Never armed: no buy, and no cancel() latching a terminal state that
+            // emits an amount the ledger reads as zero.
+            assertReverted(await buy('alice', '1000'), 'not active');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER }),
+                'not active');
+        });
+
+        it('an off-grid itemAmount above one unit is rejected too, not rounded up', async function () {
+            assertSuccess(await deployOffGridItem('2.5'));
+            h.deposit(SELLER, ADDR, ITEM, '10');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+                'not representable at itemTick decimals');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
+
+        // The control the gate needs: a gate that reverted every fund() would look
+        // identical to a gate that caught the defect.
+        it('an on-grid itemAmount still funds, sells and delivers the exact quantity', async function () {
+            await deployAuction(10);
+            assertSuccess(await depositAndFund());
+            assertSuccess(await buy('alice', '1000'));
+            assertBalance(h.ledger, 'alice', ITEM, '10');
+        });
+
+        // A sub-grid endPrice deploys clean (the constructor gates notation and
+        // magnitude, never the grid), so the decayed asking price can floor to '0'
+        // on bidTick. Without the post-floor positivity guard, gte(held, '0')
+        // admits a caller who deposited nothing, the seller is paid an AMOUNT=0
+        // no-op and the auction latches SOLD out of cancel()'s reach.
+        it('a sub-grid asking price reverts instead of selling the item for nothing', async function () {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(SELLER, 'XCHAIN', '1000000');
+            h.seedBalance(SELLER, ITEM, '10');
+            h.ledger.setTokenDecimals(BID, 0);
+            h.ledger.setTokenDecimals(ITEM, 0);   // see deployAuction: fund() reads the item grid
+            await h.deploy({
+                code: CODE, deployer: SELLER, contractAddress: ADDR,
+                params: [SELLER, ITEM, '10', BID, '1000', '0.5', '10']
+            });
+            await depositAndFund();
+            for (let i = 0; i < 50; i++) h.mineBlock(); // past duration: price is endPrice 0.5, which floors to '0'
+
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: 'mallory' }),
+                'below one unit of the bid tick');
+            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
+            assertContractBalance(h.ledger, ADDR, ITEM, '10');
+            assertBalance(h.ledger, 'mallory', ITEM, '0');
+        });
     });
 
     describe('deploy-time validation', function () {
@@ -283,6 +369,36 @@ const ADDR   = 'C:BTC:1';
             });
             assertSuccess(r);
             assertContractState(ok.ledger, 'C:BTC:12', 'endPrice', '100.123456789');
+        });
+
+        // itemAmount reaches floorToDecimals at fund() and is emitted verbatim at
+        // buy()/cancel(), so it needs the same notation gate the price terms have:
+        // on '2.5e-2' the floor is a no-op and the grid check would bless an amount
+        // the ledger reads as 0.025.
+        it('rejects an itemAmount that is not a plain fixed-notation decimal', async function () {
+            const BAD = ['2.5e-2', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
+                         '1.2.3', '', ' 10', 'abc', '-10'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:13',
+                    params: [SELLER, ITEM, BAD[i], BID, '1000', '100', '10']
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with itemAmount ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+        });
+
+        it('accepts an off-grid but plainly spelled itemAmount and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:14',
+                params: [SELLER, ITEM, '0.25', BID, '1000', '100', '10']
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:14', 'itemAmount', '0.25');
         });
     });
 });

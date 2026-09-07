@@ -50,8 +50,10 @@
 // a genuine dispute still resolves through the buyer/seller/arbiter/deadline
 // paths, not just automation.
 //
-// CUSTODY MODEL: identical to `escrow` (read that template first). Fund
-// atomically with BATCH(DEPOSIT(this, TICK, AMOUNT), EXECUTE(this, "fund")).
+// CUSTODY MODEL: identical to `escrow` (read that template first). Fund in one
+// transaction with BATCH(DEPOSIT(this, TICK, AMOUNT), EXECUTE(this, "fund")).
+// A BATCH is NOT atomic: a fund() that reverts leaves the DEPOSIT ahead of it
+// standing in custody.
 // Settlement always sends the contract's ENTIRE balance of the escrowed tick.
 // ---------------------------------------------------------------------------
 
@@ -67,8 +69,8 @@ module.exports = {
 
     abi: { version: 1, methods: {
         fund:            { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
-        requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: ['trackingUrl'] },
-        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched', params: ['request_id'] },
+        requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: [ { name: 'trackingUrl', type: 'string' } ] },
+        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched (not user-callable)', params: [ { name: 'requestId', type: 'string' } ] },
         release:         { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:          { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
         timeout:         { summary: 'Buyer reclaims after the deadline', params: [] },

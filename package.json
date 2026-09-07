@@ -1,6 +1,6 @@
 {
   "name": "xchain-contracts",
-  "version": "0.11.0",
+  "version": "0.15.0",
   "description": "XChain Platform contract template & pattern library: audited, copy-pasteable smart contracts plus a scaffold + lint CLI",
   "overrides": {
     "brace-expansion": "^5.0.9",
@@ -9,7 +9,7 @@
     "js-yaml": "^4.3.1"
   },
   "engines": {
-    "comment": "Bounded to Node 22: the tests load xchain-vm, whose isolated-vm binding is V8-ABI-specific (Node 24 cannot build it). See .nvmrc.",
+    "comment": "Bounded to Node 22: the tests load xchain-vm, whose consensus runtime pins process.versions.modules to 127, so results taken on another Node ABI are not the fleet's. isolated-vm 6.2.0 ships prebuilt bindings for Node 22 (abi127) and Node 24 (abi137) alike, so the binding no longer sets the bound. See .nvmrc.",
     "node": ">=22.0.0 <23"
   },
   "license": "MIT",

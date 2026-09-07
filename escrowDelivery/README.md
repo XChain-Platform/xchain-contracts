@@ -60,7 +60,7 @@ browser execution.
 // Deploy with terms (same params as escrow, plus deliveryMarker)
 // DEPLOY|0|<deploy>|<gasLimit>|buyer|seller|arbiter|TEST|200|144|"status":"delivered"
 
-// Fund atomically
+// Fund in one BATCH
 await sdk.batch()
   .deposit({ contractActionIndex: idx, tick: 'TEST', quantity: 200 })
   .execute({ contractActionIndex: idx, method: 'fund' })

@@ -44,19 +44,27 @@ const ADDR   = 'C:BTC:1';
         h = new E2EHarness(XChainVM);
         h.seedBalance(SELLER, 'XCHAIN', '1000000');
         h.seedBalance(SELLER, ITEM, '10');
+        // fund() reads itemTick's decimals to check the amount lands on its grid, and
+        // the harness's decimals registry is balance-INDEPENDENT (MockLedger) while a
+        // node's is not: the indexer builds balances and tokenInfo from ONE snapshot
+        // over SOURCE + the contract address (db.js buildVmBalancesAndTokenInfo), so a
+        // tick the contract holds a just-DEPOSITed amount of always carries its info
+        // in the same snapshot getBalance reads. Seeding the item tick models that
+        // reachability; it is not the stableVault trap of seeding a tick nobody holds.
+        h.ledger.setTokenDecimals(ITEM, 0);
         await h.deploy({
             code: CODE, deployer: SELLER, contractAddress: ADDR,
             params: [SELLER, ITEM, '10', BID, '50', String(window || 5)]
         });
     }
 
-    // Atomic fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+    // Same-batch fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund(amount) {
         h.deposit(SELLER, ADDR, ITEM, amount || '10');
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER });
     }
 
-    // Atomic bid: fund the bidder, deposit, then bid(). Mirrors
+    // Same-batch bid: fund the bidder, deposit, then bid(). Mirrors
     // BATCH(DEPOSIT, EXECUTE("bid")).
     async function bid(bidder, amount) {
         h.seedBalance(bidder, BID, amount);
@@ -234,6 +242,61 @@ const ADDR   = 'C:BTC:1';
             await deployAuction();
             assertReverted(await bid('alice', '50'), 'not active');
         });
+
+        // settle() emits itemAmount VERBATIM and the indexer re-quantises every
+        // emitted amount onto its tick's grid at write time. Off the grid that is
+        // silent, and a zero amount is a VALID SEND that moves nothing: the winner
+        // would pay in full and receive nothing while the deposit sat in a SOLD
+        // auction with no cancel() left. The gate has to fire at fund(), before the
+        // auction arms, because after that there is no path that refunds anyone.
+        async function deployOffGridItem(itemAmount) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(SELLER, 'XCHAIN', '1000000');
+            h.seedBalance(SELLER, ITEM, '10');
+            h.ledger.setTokenDecimals(ITEM, 0);
+            return h.deploy({
+                code: CODE, deployer: SELLER, contractAddress: ADDR,
+                params: [SELLER, ITEM, itemAmount, BID, '50', '5']
+            });
+        }
+
+        it('fund() rejects an itemAmount that is off the item tick grid', async function () {
+            assertSuccess(await deployOffGridItem('0.25'));
+            h.deposit(SELLER, ADDR, ITEM, '10');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+                'not representable at itemTick decimals');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            // Never armed, so no bid, no payment, and cancel() cannot latch a
+            // terminal state that emits a zero-normalising amount either.
+            assertReverted(await bid('alice', '50'), 'not active');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER }),
+                'not active');
+        });
+
+        it('an off-grid itemAmount above one unit is rejected too, not rounded up', async function () {
+            assertSuccess(await deployOffGridItem('2.5'));
+            h.deposit(SELLER, ADDR, ITEM, '10');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+                'not representable at itemTick decimals');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
+
+        // The control the reject case needs: the gate must not refuse a legitimate
+        // auction. Without this, a gate that reverted every fund() would look
+        // identical to a gate that caught the defect.
+        it('an on-grid itemAmount still funds, settles and delivers the exact quantity', async function () {
+            await deployAuction(3);
+            assertSuccess(await depositAndFund());
+            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
+            assertSuccess(await bid('alice', '50'));
+            h.mineBlock(); h.mineBlock(); h.mineBlock();
+            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
+            assertSuccess(r);
+            assertBalance(h.ledger, 'alice', ITEM, '10');
+        });
     });
 
     describe('deploy-time validation', function () {
@@ -285,6 +348,36 @@ const ADDR   = 'C:BTC:1';
             });
             assertSuccess(r);
             assertContractState(ok.ledger, 'C:BTC:4', 'window', '1000');
+        });
+
+        // itemAmount is stored verbatim and fed to floorToDecimals at fund(), which
+        // is string surgery presupposing fixed notation: on '2.5e-2' it returns the
+        // string unchanged, so the grid check would pass an amount the ledger reads
+        // as 0.025. The notation gate has to run before either.
+        it('rejects an itemAmount that is not a plain fixed-notation decimal', async function () {
+            const BAD = ['2.5e-2', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
+                         '1.2.3', '', ' 10', 'abc', '-10'];
+            for (let i = 0; i < BAD.length; i++) {
+                const bad = new E2EHarness(XChainVM);
+                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+                const r = await bad.deploy({
+                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:11',
+                    params: [SELLER, ITEM, BAD[i], BID, '50', '5']
+                });
+                assert.strictEqual(r.success, false,
+                    'deploy with itemAmount ' + JSON.stringify(BAD[i]) + ' should revert');
+            }
+        });
+
+        it('accepts an off-grid but plainly spelled itemAmount and stores it verbatim', async function () {
+            const ok = new E2EHarness(XChainVM);
+            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
+            const r = await ok.deploy({
+                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:12',
+                params: [SELLER, ITEM, '0.25', BID, '50', '5']
+            });
+            assertSuccess(r);
+            assertContractState(ok.ledger, 'C:BTC:12', 'itemAmount', '0.25');
         });
     });
 });

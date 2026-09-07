@@ -32,7 +32,7 @@
 // CUSTODY MODEL (read this before forking)
 //
 // XChain has no msg.value. The item enters via a DEPOSIT to the contract's own
-// address, funded atomically with BATCH:
+// address, funded in one transaction with BATCH:
 //
 //     BATCH( DEPOSIT(auction, ITEM_TICK, itemAmount), EXECUTE(auction, "fund") )
 //
@@ -40,6 +40,9 @@
 // execute buy() in the SAME transaction:
 //
 //     BATCH( DEPOSIT(auction, BID_TICK, quotedPrice), EXECUTE(auction, "buy") )
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so an underpaying
+// buy() strands its DEPOSIT in custody (see the README's Known limitations).
 //
 // buy() never trusts a caller-supplied amount: it reads the contract's actual
 // bidTick balance and compares it to the price in effect this block. Anything
@@ -95,7 +98,7 @@ function tickDecimals(xchain, tick) {
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         fund:   { summary: 'Seller deposits the item and starts the price clock (BATCH after a DEPOSIT)', params: [] },
@@ -121,6 +124,10 @@ module.exports = {
         xchain.require(seller, 'seller required');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
+        // itemAmount gets the same notation gate as the price terms below, for the
+        // same reason: fund() hands it to floorToDecimals, which is string surgery
+        // presupposing fixed notation, and buy()/cancel() emit it verbatim.
+        requirePlainDecimal(xchain, itemAmount, 'itemAmount');
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
         // Gate the NOTATION of both price terms before any magnitude check reads
         // them. The magnitude checks below are no filter: xchain.math accepts every
@@ -169,6 +176,21 @@ module.exports = {
         var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         xchain.require(xchain.math.gte(held, itemAmount), 'insufficient item deposit');
 
+        // buy() already floors the PRICE leg onto bidTick's grid; the ITEM leg was
+        // never checked at all. itemAmount is emitted verbatim, and the indexer
+        // re-quantises every emitted amount onto its tick's grid at ledger-write time
+        // (bcadd(amount, 0, decimals), HALF-UP). Off the grid that rewrite is silent
+        // and a zero amount is a VALID SEND that moves nothing: with a 0-decimal item
+        // and itemAmount '0.25', buy() latches SOLD, the seller is paid in full, the
+        // buyer receives nothing, and the deposit is stranded in a terminal contract
+        // out of cancel()'s reach. The constructor cannot check this - the item tick's
+        // decimals are unreadable at deploy, when the contract holds none of it. Here
+        // is the first point the ledger can answer AND the last before the auction
+        // arms, so a rejected seller has lost nothing but a deploy.
+        var itemGrid = tickDecimals(xchain, itemTick);
+        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+            'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
+
         xchain.state.set('start', String(xchain.getBlockHeight()));
         xchain.state.set('status', 'ACTIVE');
     },
@@ -181,6 +203,11 @@ module.exports = {
         var bidTick = xchain.state.get('bidTick');
         var price   = floorToDecimals(currentPrice(xchain), tickDecimals(xchain, bidTick));
         var held    = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
+
+        // Refuse a price the grid floored to nothing (the constructor gates endPrice's
+        // notation, never the grid). Same guard as treasury.js:339, and without it
+        // gte(held, '0') hands the item to a caller who deposited nothing.
+        xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
 
         xchain.require(xchain.math.gte(held, price), 'insufficient payment for the current price (' + price + ')');
 

@@ -14,7 +14,7 @@ global namespace, and the deploy's constructor issue fails on a name collision.
 ## Custody model - note the footgun
 
 There is no `msg.value`. Buyers pay by DEPOSITing `payTick` and EXECUTEing `buy()`
-atomically:
+in one transaction:
 
 ```
 BATCH( DEPOSIT(sale, PAY, amount), EXECUTE(sale, "buy") )
@@ -26,6 +26,11 @@ the DEPOSIT and `buy()` are in the **same transaction**. **Never DEPOSIT without
 `buy()` in the same BATCH**: an un-bought deposit would be credited to the next
 buyer who calls `buy()`. (This per-caller attribution is the pattern the AMM will
 build on.)
+
+A `BATCH` is **not** atomic, which is why that rule bites: its sub-actions settle
+independently, so a `buy()` that reverts (`sale not open`, `sale closed (deadline
+passed)`, `hard cap exceeded`) leaves the `DEPOSIT` ahead of it standing in the
+contract, where the next buyer's delta absorbs it. Size the payment to clear.
 
 ## Lifecycle
 
@@ -42,8 +47,9 @@ build on.)
 ## Attacks we considered
 
 - **Deposit misattribution.** Contributions are credited to the `buy()` caller via
-  the balance delta - safe under atomic `BATCH(DEPOSIT, buy)`. The footgun (orphan
-  deposits) is documented above; it is a usage rule, not a contract bug.
+  the balance delta - safe under a single `BATCH(DEPOSIT, buy)`. The footgun
+  (orphan deposits, whether un-batched or left behind by a reverted `buy()`) is
+  documented above; it is a usage rule, not a contract bug.
 - **Buying after close.** `buy()` reverts past the deadline and rejects any
   contribution that would push `raised` over the hard cap.
 - **Premature finalize.** `finalize()` requires either the deadline or the hard
@@ -61,7 +67,7 @@ build on.)
 ## Known limitations (teaching baseline)
 
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
-  atomically with `buy()`. Other-tick deposits are not recoverable.
+  in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
 - **Whole-payment caps.** A contribution that would exceed the hard cap is rejected
   outright (no partial accept + change). Buyers size their own deposits.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published

@@ -21,7 +21,9 @@ whatever the operator DEPOSITs into the contract address for each card.
 
 ## Usage
 
-The VM has no `msg.value`; pay and draw atomically in one transaction:
+The VM has no `msg.value`; pay and draw in one transaction. A `BATCH` is **not**
+atomic, so a reverted `draw()` leaves its `DEPOSIT` standing (see "Sold-out
+payment stranding" under [Attacks we considered](#attacks-we-considered)):
 
 ```
 BATCH( DEPOSIT(contract, payTick, price), EXECUTE(contract, "draw") )
@@ -76,6 +78,21 @@ de-correlate same-block draws.
 - **Fractional stock inflation.** Copies are `floor(balance / unit)`, so a
   dust deposit below one `unit` adds zero draw weight and can never dispense a
   partial card.
+- **A `unit` the card's decimals cannot express.** The ledger re-quantises
+  every emitted amount onto its tick's grid at write time, and a zero amount is
+  a *valid* SEND that moves nothing. With a zero-decimal card and `unit`
+  `"0.25"` the copy count would read four, the buyer would pay, the SEND would
+  deliver nothing, and the card balance would never move - so the same paid
+  draw could take payment for nothing indefinitely while the owner withdrew the
+  proceeds. `draw()` and `info()` therefore count only *deliverable* copies: a
+  card whose decimals cannot express `unit` exactly weighs zero, is never
+  picked, and reads as `0` stock, so an all-off-grid dispenser falls through to
+  the sold-out refund rather than reverting. The opposite rounding is covered
+  too (`"1.5"` on a zero-decimal card would round UP to two copies per draw).
+  The check is per card at draw time, because card grids are unreadable at
+  deploy, when the contract holds none of them; `initialize` still rejects a
+  `unit` that is not a plain fixed-notation decimal, since `"2.5e-1"` would
+  pass the grid check unchanged and the ledger would read it as `0.25`.
 - **Unauthorized sweep.** `withdraw(tick)` is owner-only
   (`getSourceAddress()` checked against the stored deployer).
 - **Rounding / float drift.** All arithmetic uses `xchain.math` bignumber ops;

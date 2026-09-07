@@ -17,8 +17,11 @@ collateral. Leftover collateral still belongs to the vault owner.
 
 ## Custody and attribution
 
-No `msg.value` on XChain: tokens enter via DEPOSIT, logic runs via EXECUTE,
-atomically with BATCH. A DEPOSIT carries no sender, so the contract attributes
+No `msg.value` on XChain: tokens enter via DEPOSIT, logic runs via EXECUTE, both
+in one transaction with BATCH. A `BATCH` is **not** atomic, so an `EXECUTE` that
+fails does not undo the `DEPOSIT` before it: the tokens stay in custody untracked,
+and the next caller's delta credits them. A DEPOSIT carries no sender, so the
+contract attributes
 by **custody delta**: it tracks the totals it has accounted for
 (`trackedColl`/`trackedStable`) and credits the caller of the batched EXECUTE
 with `actual custody − tracked total`. The on-chain balance is the only source

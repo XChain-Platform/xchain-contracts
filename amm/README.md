@@ -24,7 +24,8 @@ the fee. The k-invariant is the property the test suite fuzzes.
 
 ## Custody model (and its footgun)
 
-No `msg.value`. Move tokens in via DEPOSIT, act via EXECUTE, atomically with BATCH:
+No `msg.value`. Move tokens in via DEPOSIT, act via EXECUTE, both in one
+transaction with **`BATCH`**:
 
 ```
 # swap 100 AAA for BBB, accepting no less than 90 out
@@ -35,8 +36,13 @@ BATCH( DEPOSIT(pool, AAA, 1000), DEPOSIT(pool, BBB, 1000), EXECUTE(pool, "addLiq
 ```
 
 Every entrypoint credits the caller by the balance delta since the last accounted
-reserve, so it MUST be atomic with the deposit. Reserves are tracked in **state**,
-not raw balance, so a direct token donation can't move the price.
+reserve, so the call MUST ride in the same `BATCH` as its deposit. Reserves are
+tracked in **state**, not raw balance, so a direct token donation can't move the
+price.
+
+The two commands still settle independently: a `BATCH` is **not** atomic, so an
+`EXECUTE` that fails does not undo the `DEPOSIT` before it. See "A reverted call's
+DEPOSIT is not rolled back" under [Attacks we considered](#attacks-we-considered).
 
 ## Methods
 
@@ -71,6 +77,19 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   so an unbalanced deposit can't mint extra shares; the surplus enriches the pool.
 - **Double / unauthorized settlement.** Each path keys off the caller and the
   balance delta within one atomic execution; emissions and state commit together.
+- **A reverted call's DEPOSIT is not rolled back.** BATCH sub-actions are not
+  all-or-nothing, so when the EXECUTE reverts the DEPOSIT batched ahead of it has
+  already settled and stays in pool custody with reserves unchanged. Every
+  entrypoint can revert this way: `swap` below `minOut` (also `insufficient
+  output`, `output exceeds reserves`, `no liquidity`, `tokenIn not in pair`),
+  `addLiquidity` on `must deposit both tokens` / `insufficient liquidity minted`,
+  and `removeLiquidity` on `must deposit LP shares` / `shares exceed total` /
+  `insufficient liquidity burned`. The deposit is **not recoverable by its
+  sender**: the delta accounting folds it into the *next* caller's credited
+  input, and for `removeLiquidity` the stranded LP shares are burned by the next
+  caller against *their* payout. Same footgun the `englishAuction`,
+  `dutchAuction` and `cardDispenser` templates document. Read `info()` and size
+  the call so it will clear before batching the DEPOSIT behind it.
 
 ## Known limitations (teaching baseline)
 
@@ -80,6 +99,11 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   them on a fork if needed.
 - **Exact, paired tokens only.** Like the other templates: move only the configured
   ticks, only inside a BATCHed call.
+- **No recovery for a stranded deposit.** A reverted call's input is gone to its
+  sender (see "A reverted call's DEPOSIT is not rolled back" above), because the
+  pool attributes tokens by anonymous balance delta and nothing records who sent
+  them. A fork that needs real recovery attributes deposits per sender in state (a
+  credit ledger plus a withdraw entrypoint) instead of relying on the delta.
 
 ## Tests
 

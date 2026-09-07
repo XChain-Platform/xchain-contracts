@@ -14,7 +14,7 @@ delta-accounting trick to safely track a repeatedly-refilled balance.
 
 XChain has **no `msg.value`**. Tokens enter a contract only via a separate
 **`DEPOSIT`**; logic runs via **`EXECUTE`**. Fund the item and place bids the
-same way, atomically, with **`BATCH`**:
+same way, both in one transaction, with **`BATCH`**:
 
 ```
 BATCH( DEPOSIT(auction, ITEM_TICK, 10), EXECUTE(auction, "fund") )
@@ -26,6 +26,11 @@ deposit is refunded within the same execution that supersedes it, the
 contract's `bidTick` balance is always exactly the current high bid - so a new
 bid's size is read as *the growth in that balance since the last bid*
 (`held - highBid`), not a separately-passed parameter.
+
+The two commands still settle independently: a `BATCH` is **not** atomic, so an
+`EXECUTE` that fails does not undo the `DEPOSIT` before it. See "A rejected bid's
+DEPOSIT is not rolled back" under [Attacks we
+considered](#attacks-we-considered).
 
 ## Lifecycle
 
@@ -120,6 +125,19 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   reserve.
 - **No bid increment schedule.** Any bid that clears `minBid` and exceeds the
   current high bid is accepted, however small the margin.
+- **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,
+  not at deploy.** The item tick's decimals are unreadable while the contract
+  holds none of it, so the constructor can only check that `itemAmount` is a
+  plainly spelled positive decimal; the grid check runs at `fund()`, the first
+  point the ledger can answer and the last before bidding opens. Rejecting is
+  deliberate rather than silently flooring: the ledger re-quantises every
+  emitted amount at write time, so an off-grid `itemAmount` would deliver less
+  than advertised - nothing at all on a 0-decimal tick - while the winner paid
+  in full. **The cost of that choice:** a seller who deposits the item in a
+  standalone transaction rather than the `BATCH(DEPOSIT, EXECUTE fund)` above,
+  and is then rejected here, has no in-contract path to reclaim the deposit
+  (`cancel()` requires `ACTIVE`). That is the same exposure the "insufficient
+  item deposit" check already carries. Deposit and fund in one BATCH.
 
 ## Tests
 

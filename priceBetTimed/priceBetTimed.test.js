@@ -61,6 +61,15 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             code: CODE, deployer: MAKER, contractAddress: ADDR,
             params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(T), String(window || 5)]
         });
+        seedTipRound();
+    }
+
+    // Publish one pre-settleTime round so accept() has a tip to anchor the cursor
+    // on (it refuses the match without one). Round 1 keeps the historic cursor = 1
+    // start; a later publishRounds() replaces this history wholesale.
+    function seedTipRound() {
+        const tip = { price: '59000', roundNumber: 1, timestamp: T0 };
+        h.ledger.seedOracle(PAIR, tip, 0, { 1: tip });
     }
 
     async function depositAnd(who, method, amount) {
@@ -229,6 +238,7 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
                 code: CODE, deployer: MAKER, contractAddress: ADDR,
                 params: [MAKER, PAIR, STRIKE, 'OVER', TICK, ODD, String(T), '3']
             });
+            seedTipRound();
             assertSuccess(await depositAnd(MAKER, 'fund', '0.00000002'));
             assertSuccess(await depositAnd(TAKER, 'accept', '0.00000002'));
             publishRounds({ 2: { ts: T - 100, price: '65000' } }); // stuck before T
@@ -408,6 +418,113 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
 
             assertSuccess(await settleBy(STRANGER));
             assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
+        it('accept() refuses a pair with no readable tip: the birth-wedge cannot be minted', async function () {
+            // Without the guard the cursor fell back to round 1, which on any host
+            // reporting a floor is already evicted: settle() reverts on its first
+            // read for the life of the bet while reclaim() refuses once a qualifying
+            // round arrives, so both stakes lock with no action either party can take.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            h.ledger.oraclePrices[PAIR].current = null;   // pair has no readable tip
+            h.ledger.seedOracleRoundFloor(1200);          // mature host: round 1 is long evicted
+
+            assertReverted(await depositAnd(TAKER, 'accept'), 'no oracle data for pair yet');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+            assertContractState(h.ledger, ADDR, 'cursor', undefined);
+
+            // Nothing is stranded: the bet never matched, so cancel() still drains it.
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: MAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+        });
+
+        it('accept() refuses a tip round that is itself already evicted', async function () {
+            // The OTHER birth wedge, and the one a null-tip check cannot see. The two
+            // accessor views are built from different queries: `prices` is each pair's
+            // own MAX(round_number) with no floor comparison, while `roundFloor` is a
+            // GLOBAL floor over every pair's rounds (indexer db.js getOracleDataForVM).
+            // So a pair that stops publishing while the rest of the fleet advances keeps
+            // a perfectly readable getPrice() tip whose round is long below the floor.
+            // `latest.roundNumber > 0` passes, the cursor anchors on an unreadable round,
+            // and from there settle() reverts on its first read while reclaim() refuses
+            // as soon as the pair resumes with a qualifying round.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            // Tip readable through getPrice, its round absent from the loaded history.
+            h.ledger.seedOracle(PAIR, { price: '59000', roundNumber: 7, timestamp: T0 }, 0, {});
+            h.ledger.seedOracleRoundFloor(1200);
+
+            assertReverted(await depositAnd(TAKER, 'accept'),
+                'tip round is outside the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+            assertContractState(h.ledger, ADDR, 'cursor', undefined);
+
+            // Nothing is stranded: the bet never matched, so cancel() still drains it.
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: MAKER }));
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+        });
+
+        it('a withheld-price tip below the floor is refused at accept() too', async function () {
+            // Same wedge wearing the post-flag-day stale shape: the tip is kept with its
+            // price withheld, so getPrice() answers a non-null object and the null-tip
+            // guard is silent. Readability of the ROUND is what accept() must check.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            publishRoundsWithTip({ 9: { ts: T0, price: '59000' } },
+                { price: null, roundNumber: 9, timestamp: T0, stale: true });
+            h.ledger.oraclePrices[PAIR].rounds = {};   // round 9 evicted from the payload
+            h.ledger.seedOracleRoundFloor(1200);
+
+            assertReverted(await depositAnd(TAKER, 'accept'),
+                'tip round is outside the retrievable oracle window');
+            assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+        });
+
+        it('PENDING advances the cursor, so window slide cannot wedge a watched bet', async function () {
+            // The cursor is only meaningful while it stays inside the node's preload
+            // window, and before this the ONLY cursor write sat behind the `latest
+            // .timestamp < T` early return: no pre-expiry call could move it, however
+            // many were made. A bet whose settleTime is far enough out for the window to
+            // slide past the acceptance round therefore wedged even under continuous
+            // settle() calls. Rounds evicted here by raising the floor rather than by
+            // publishing 1200 of them: the wedge is a floor-above-cursor relation, and
+            // the round COUNT that produced the floor is not something the contract can
+            // see or reason about.
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            publishRounds({ 2: { ts: T - 1200, price: '59000' } });
+            await depositAnd(TAKER, 'accept');                        // pins cursor = 2
+            assertContractState(h.ledger, ADDR, 'cursor', '2');
+
+            publishRounds({
+                2: { ts: T - 1200, price: '59000' },
+                3: { ts: T - 900,  price: '59000' },
+                4: { ts: T - 600,  price: '59500' }   // tip, still pre-T
+            });
+            const pending = await settleBy(STRANGER);
+            assertSuccess(pending);
+            assert.strictEqual(returned(pending), 'PENDING');
+            assertContractState(h.ledger, ADDR, 'cursor', '4');
+
+            // A second PENDING call on an unmoved tip must not walk the cursor back.
+            assertSuccess(await settleBy(STRANGER));
+            assertContractState(h.ledger, ADDR, 'cursor', '4');
+
+            // Now the window slides past the acceptance round and the deciding round
+            // lands. The pre-fix cursor of 2 reads outsideWindow and reverts forever.
+            publishRounds({
+                4: { ts: T - 600, price: '59500' },
+                5: { ts: T + 100, price: '61000' }    // decides: OVER maker wins
+            });
+            h.ledger.seedOracleRoundFloor(4);
+
+            assertSuccess(await settleBy(STRANGER));
+            assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertContractState(h.ledger, ADDR, 'settledRound', '5');
             assertBalance(h.ledger, MAKER, TICK, '200');
         });
 

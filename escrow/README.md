@@ -15,14 +15,17 @@ XChain has **no `msg.value`** - a contract call does not carry tokens. Instead:
 - Tokens enter a contract through a separate **`DEPOSIT`** action to that address.
 - Logic runs through an **`EXECUTE`** action.
 
-To fund and act in one atomic step, submit both in a single **`BATCH`**:
+To fund and act in one transaction, submit both in a single **`BATCH`**:
 
 ```
 BATCH( DEPOSIT(escrow, TICK, 200), EXECUTE(escrow, "fund") )
 ```
 
 Batched sub-actions apply in order, and the deposit is persisted before the
-`EXECUTE` runs - so `fund()` sees the deposited balance. The contract **never
+`EXECUTE` runs - so `fund()` sees the deposited balance. They still settle
+independently: a `BATCH` is **not** atomic, so an `EXECUTE` that fails does not
+undo the `DEPOSIT` before it, and the deposit stays in the contract's custody.
+The contract **never
 trusts a caller-supplied amount**; it reads its own balance with
 `xchain.getBalance(xchain.getContractAddress(), tick)`. That single habit is what
 makes custody contracts safe on XChain.
@@ -48,7 +51,7 @@ dust is ever stranded.
 const deploy = sdk.contracts.encode(escrowSource); // hex for the DEPLOY payload
 // ... submit DEPLOY|0|<deploy>|<gasLimit>|buyer|seller|arbiter|TEST|200|144
 
-// Fund atomically
+// Fund in one BATCH
 await sdk.batch()
   .deposit({ contractActionIndex: escrowIndex, tick: 'TEST', quantity: 200 })
   .execute({ contractActionIndex: escrowIndex, method: 'fund' })

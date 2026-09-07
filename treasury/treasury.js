@@ -95,17 +95,20 @@ var MAX_WINDOW_BLOCKS = 1000000;
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only; never
+    // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
-        propose:         { summary: 'Governance-token holder records a spend proposal (recipient, tick, amount, memo)', params: ['recipient', 'tick', 'amount', 'memo'] },
-        approvePoll:     { summary: 'Guardian binds a verified poll to a proposal (guardian mode only)', params: ['proposalId', 'pollIndex'] },
-        arm:             { summary: 'Poll finalization callback: arms the proposal and starts the timelock (set as the binding poll\'s CALLBACK_METHOD; not user-callable)', params: [] },
-        veto:            { summary: 'Guardian kills a proposed or armed proposal', params: ['proposalId'] },
-        cancel:          { summary: 'Proposer withdraws their own not-yet-armed proposal', params: ['proposalId'] },
-        executeProposal: { summary: 'Anyone executes an armed proposal after the timelock, inside the execution window', params: ['proposalId'] },
+        propose:         { summary: 'Governance-token holder records a spend proposal (recipient, tick, amount, memo)', params: [ { name: 'recipient', type: 'address' }, { name: 'tick', type: 'tick' }, { name: 'amount', type: 'amount' }, { name: 'memo', type: 'string' } ] },
+        approvePoll:     { summary: 'Guardian binds a verified poll to a proposal (guardian mode only)', params: [ { name: 'proposalId', type: 'number' }, { name: 'pollIndex', type: 'number' } ] },
+        // arm's nine params are the VOTE finalization signature the indexer injects,
+        // not user inputs (vote.js builds them); declaring them keeps the metadata
+        // honest about an arity arm() pins and reverts on.
+        arm:             { summary: 'Poll finalization callback: arms the proposal and starts the timelock (set as the binding poll\'s CALLBACK_METHOD; not user-callable)', params: [ { name: 'pollIndex', type: 'number' }, { name: 'status', type: 'string' }, { name: 'winningOption', type: 'number' }, { name: 'totalWeight', type: 'amount' }, { name: 'totalVoters', type: 'number' }, { name: 'quorumMet', type: 'number' }, { name: 'minVotersMet', type: 'number' }, { name: 'tick', type: 'tick' }, { name: 'proposalId', type: 'number' } ] },
+        veto:            { summary: 'Guardian kills a proposed or armed proposal', params: [ { name: 'proposalId', type: 'number' } ] },
+        cancel:          { summary: 'Proposer withdraws their own not-yet-armed proposal', params: [ { name: 'proposalId', type: 'number' } ] },
+        executeProposal: { summary: 'Anyone executes an armed proposal after the timelock, inside the execution window', params: [ { name: 'proposalId', type: 'number' } ] },
         info:            { summary: 'Read the treasury configuration and proposal count', params: [], view: true },
-        proposalInfo:    { summary: 'Read one proposal, with EXPIRED derived for a stale armed proposal', params: ['proposalId'], view: true }
+        proposalInfo:    { summary: 'Read one proposal, with EXPIRED derived for a stale armed proposal', params: [ { name: 'proposalId', type: 'number' } ], view: true }
     } },
 
     // initialize(guardian, govTick, timelockBlocks, executeWindowBlocks,

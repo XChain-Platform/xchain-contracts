@@ -11,7 +11,9 @@ only deterministic `getBlockHeight()`.
 
 ## Custody model
 
-Same as [escrow](../escrow/) - there is no `msg.value`. Fund atomically:
+Same as [escrow](../escrow/) - there is no `msg.value`. Fund in one transaction
+(read escrow's note: a `BATCH` is not atomic, so a reverted `fund()` leaves the
+`DEPOSIT` standing in the contract):
 
 ```
 BATCH( DEPOSIT(vesting, TICK, TOTAL), EXECUTE(vesting, "fund") )

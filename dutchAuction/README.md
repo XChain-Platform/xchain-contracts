@@ -15,7 +15,9 @@ downward instead of up.
 
 XChain has **no `msg.value`**. Tokens enter a contract only via a separate
 **`DEPOSIT`**; logic runs via **`EXECUTE`**. Fund the item and attempt a
-purchase the same way, atomically, with **`BATCH`**:
+purchase the same way, both in one transaction, with **`BATCH`**. The two
+commands still settle independently: a `BATCH` is **not** atomic, so an `EXECUTE`
+that fails does not undo the `DEPOSIT` before it.
 
 ```
 BATCH( DEPOSIT(auction, ITEM_TICK, 10),        EXECUTE(auction, "fund") )
@@ -96,7 +98,11 @@ await sdk.batch()
   minimum and the emitted amounts, so the indexer's own half-up
   re-normalization (its bcmath is half-up, not banker's/half-even) can never
   round the seller's payout - or the required
-  minimum - up past what was actually deposited.
+  minimum - up past what was actually deposited. A price the grid floors all the
+  way to `0` (a sub-grid `endPrice`, which the constructor cannot reject because
+  `bidTick`'s decimals are unreadable at deploy) is refused outright: `buy()`
+  requires the floored price to be positive, so the auction reverts with `price
+  is below one unit of the bid tick` rather than settling for a zero payment.
 - **Unauthorized fund/cancel.** Both require `getSourceAddress() === seller`.
 - **Delayed funding shrinking the price schedule.** Same pattern as `vesting`
   and `englishAuction`: the price clock is anchored in `fund()`, not
@@ -120,6 +126,20 @@ await sdk.batch()
 - **No reserve beyond `endPrice`.** The price never falls below `endPrice` and
   never expires into an unsellable state - it's a genuine floor, not a
   "cancel if unsold by X" deadline. Use `cancel()` if the seller wants out.
+- **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,
+  not at deploy.** The item tick's decimals are unreadable while the contract
+  holds none of it, so the constructor can only check that `itemAmount` is a
+  plainly spelled positive decimal; the grid check runs at `fund()`, the first
+  point the ledger can answer and the last before the price clock starts. It is
+  the item-leg counterpart of the price-leg floor in `buy()`, and it rejects
+  rather than flooring: the ledger re-quantises every emitted amount at write
+  time, so an off-grid `itemAmount` would deliver less than advertised -
+  nothing at all on a 0-decimal tick - while the buyer paid in full. **The cost
+  of that choice:** a seller who deposits the item in a standalone transaction
+  rather than the `BATCH(DEPOSIT, EXECUTE fund)` above, and is then rejected
+  here, has no in-contract path to reclaim the deposit (`cancel()` requires
+  `ACTIVE`). That is the same exposure the "insufficient item deposit" check
+  already carries. Deposit and fund in one BATCH.
 
 ## Tests
 

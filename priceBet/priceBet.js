@@ -36,10 +36,13 @@
 // CUSTODY MODEL (same as the sibling templates)
 //
 // There is no msg.value on XChain. Stakes enter via DEPOSIT to the contract's
-// address; logic runs via EXECUTE. Fund-and-act atomically with BATCH:
+// address; logic runs via EXECUTE. Fund and act in one transaction with BATCH:
 //
 //     BATCH( DEPOSIT(this_contract, TICK, STAKE), EXECUTE(this_contract, "fund") )
 //     BATCH( DEPOSIT(this_contract, TICK, STAKE), EXECUTE(this_contract, "accept") )
+//
+// A BATCH is NOT atomic: its sub-actions settle independently, so an EXECUTE that
+// reverts does not undo the DEPOSIT ahead of it and the stake stays in custody.
 //
 // The contract never trusts a caller-supplied amount; it reads its own balance.
 //
@@ -75,7 +78,7 @@ var MAX_WINDOW_BLOCKS = 1000000;
 module.exports = {
 
     // Self-declared display metadata for wallets/explorers (spec:
-    // xchain-documentation/protocol/Contract_ABI.md). Advisory only.
+    // xchain-documentation/protocol/contract-abi.md). Advisory only.
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },
