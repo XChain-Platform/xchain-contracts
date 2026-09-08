@@ -40,6 +40,15 @@
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'URL Oracle',
+        description: 'Teaching example of reading off-chain HTTP data on chain: it emits an ATTEST http_get request for a URL and stores the price the network agrees on in its callback, deliberately leaving the callback unpinned and the requester unrestricted so a fork sees the gaps it must close.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.

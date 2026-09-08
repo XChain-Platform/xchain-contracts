@@ -163,6 +163,15 @@ function extractBurnSends(payload, asset, source) {
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Counterparty Bridge',
+        description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then mints the migrated tokens one for one.',
+        version:     '1.0.0'
+    },
+
     abi: { version: 1, methods: {
         requestClaim: { summary: 'Ask the network to check for new burns of cpAsset the caller sent to BURN_ADDRESS', params: [] },
         // onClaim's first four params are the indexer's fixed attestation preamble

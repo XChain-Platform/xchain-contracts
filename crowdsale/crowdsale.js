@@ -115,6 +115,15 @@ function requireIntInRange(xchain, v, min, max, name) {
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Crowdsale',
+        description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues its own sale token at deploy and mints it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.

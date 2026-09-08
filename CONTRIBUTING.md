@@ -103,6 +103,37 @@ Run `npm test` before every commit. New template logic or pattern helpers should
 
 ---
 
+## Contract identity (`meta`) and the version bump
+
+Every template exports a `meta` block as the **first key** of `module.exports`, above the advisory `abi` block:
+
+```js
+module.exports = {
+    meta: {
+        name:        'Escrow',
+        description: 'Two-party escrow with an arbiter: ...',
+        version:     '1.0.0'
+    },
+    abi: { /* ... */ },
+    // ...
+};
+```
+
+Unlike `abi`, this is not advisory. The indexer reads `meta` off the deployed export at deploy time and **rejects** a `DEPLOY` whose contract exports no `meta.name` and `meta.description`, so a template shipped without one is undeployable and a developer who scaffolds it pays a fee for a refused transaction. `test/gate-wiring.test.js` fails the build for any template that is missing the block, whose `name` or `description` is empty, or that does not declare `meta` first.
+
+Rules:
+
+- `name` is a human label (`'Escrow'`, `'Dutch Auction'`), 1 to 64 bytes. It is a label, not an identity: the contract address `C:<CHAIN>:<index>` stays the identity, and names are never unique.
+- `description` is one honest sentence about what the contract actually does, 1 to 512 bytes. Do not sell the template; if it has a known limitation that a reader needs (`stableVault` is not production-grade, `cardDispenser`'s entropy is miner-influenced), the sentence says so.
+- `version` is a string, 1 to 32 bytes. Templates use semver.
+- Use string literals. A computed name is deterministic on chain but invisible to the SDK's pre-flight and to anyone reading the source.
+- **Any edit to a template's source bumps `meta.version`** in the same commit: patch for a comment or doc-only change, minor for new behaviour, major for a change that breaks an existing deployment's assumptions. Deployed copies are immutable, so the version is the only thing that tells a reader which revision of the template a given contract was deployed from.
+- Generated guards get their `meta` from `lib/policy-gen.js`, which defaults `name` from the policy config's `name`, `description` to a sentence naming the gated action classes and the enforced rules, and `version` to `1.0.0`; a caller-supplied `meta` overrides those field by field.
+
+Template source is vendored base64 into the SDK (`xchain-sdk/src/contract/templates.js`, sha256-pinned by its `template-parity` test), so run the SDK's `npm run sync:templates` in the same commit as any template edit.
+
+---
+
 ## Commit messages
 
 Match the existing log style: a concise subject line, then a short body explaining what changed and why.

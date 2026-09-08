@@ -204,6 +204,55 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'summary, param names and view flag never reach a wallet or explorer: ' + offenders.join(', '));
     });
 
+    // Same template -> artifact direction again, on the one export key that is NOT
+    // advisory. Under the CONTRACT_META_REQUIRED flag day the indexer reads `meta` off
+    // the deployed export and refuses the DEPLOY outright when name or description is
+    // missing, so a template that ships without it is undeployable on a meta-active
+    // chain and every other gate in this repo stays green over it: the linter is
+    // advisory, and the template suites deploy on a regtest harness whose flag day need
+    // not be armed. `require()` the module rather than string-matching, so a block that
+    // is present but malformed (empty name, non-string version) fails here too.
+    it('every discovered template declares a consensus-required meta block', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) {
+                offenders.push(name + ' (does not load: ' + err.message + ')');
+                continue;
+            }
+            const meta = mod && mod.meta;
+            if (!meta || typeof meta !== 'object' || Array.isArray(meta)) { offenders.push(name + ' (no meta block)'); continue; }
+            if (typeof meta.name !== 'string' || meta.name.length === 0) { offenders.push(name + ' (meta.name is missing or empty)'); continue; }
+            if (typeof meta.description !== 'string' || meta.description.length === 0) { offenders.push(name + ' (meta.description is missing or empty)'); continue; }
+            if (meta.version !== undefined && typeof meta.version !== 'string')
+                offenders.push(name + ' (meta.version is present but not a string)');
+        }
+        assert.deepStrictEqual(offenders, [],
+            'consensus rejects a DEPLOY of these templates with "invalid: CONTRACT_MANIFEST ' +
+            '(meta required)", so anyone who scaffolds one pays a fee for a refused deploy: ' +
+            offenders.join(', '));
+    });
+
+    // Key ORDER is a house convention, not a consensus rule, and nothing else asserts
+    // it: identity reads first in the file and in every diff of it, which is the point
+    // of putting it above the advisory `abi` block. Cheap to keep, invisible to lose.
+    it('every discovered template declares meta as the first exported key', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) { continue; }   // named by the meta check above
+            const first = Object.keys(mod)[0];
+            if (first !== 'meta') offenders.push(name + ' (first key is ' + JSON.stringify(first) + ')');
+        }
+        assert.deepStrictEqual(offenders, [],
+            'meta must be the first key of module.exports, above abi, so a reader sees what the ' +
+            'contract IS before what it documents: ' + offenders.join(', '));
+    });
+
     it('every template suite deploys its template through the real VM', function () {
         // Existence alone is satisfied by a stub that only lints the source, which
         // leaves exactly the coverage hole above. Assert the suite reaches
