@@ -46,7 +46,7 @@ module.exports = {
     meta: {
         name:        'URL Oracle',
         description: 'Teaching example of reading off-chain HTTP data on chain: it emits an ATTEST http_get request for a URL and stores the price the network agrees on in its callback, deliberately leaving the callback unpinned and the requester unrestricted so a fork sees the gaps it must close.',
-        version:     '1.0.0'
+ version: '1.0.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -54,7 +54,10 @@ module.exports = {
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         requestPrice: { summary: 'Ask the network to GET url via the http_get attestation provider, returning the request id', params: [ { name: 'url', type: 'string' } ] },
-        onPrice:      { summary: 'Attestation callback fired by the indexer once the body settles; commits it to state (not user-callable)', params: [ { name: 'requestId', type: 'string' } ] },
+ // onPrice's params ARE the indexer's fixed attestation preamble (attest.js
+ // _injectCallbackExecute); requestPrice() registers an empty context array, so
+ // the wire is exactly those four slots even though the body reads only slot 0.
+ onPrice: { summary: 'Attestation callback fired by the indexer once the body settles; commits it to state (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },
         price:        { summary: 'Read the last settled body', params: [], view: true }
     } },
 
@@ -78,8 +81,13 @@ module.exports = {
         return requestId;
     },
 
-    // Callback fired by the indexer after the off-chain GET has settled.
-    // Invoked as onPrice(request_id, ...callbackParams).
+ // Callback fired by the indexer after the off-chain GET has settled. Invoked as
+ // onPrice(request_id, provider_id, status, response_payload, ...callbackParams):
+ // the first four are the injector's fixed preamble (xchain-indexer's
+ // _injectCallbackExecute), and requestPrice() registers no extra context, so the
+ // wire is those four slots. This body needs only slot 0 - the response itself is
+ // read back through attestation.getResponse() rather than off slot 3 - but the
+ // other three arrive regardless and the abi above declares them.
     onPrice: function (xchain) {
         var requestId = xchain.getInputParam(0);
 
