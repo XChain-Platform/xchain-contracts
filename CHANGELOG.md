@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-10
+
 ### Added
 - Every template now exports a `meta` block (name, description, version) as its first key, which the chain requires at deploy and which wallets and explorers show beside the contract address.
 - The policy generator emits a `meta` block on every generated guard, defaulted from the policy config and overridable field by field.
+
+### Fixed
+- The `onDelivery` and `onPrice` callback abis declare the indexer's four-slot attestation preamble.
 
 ## [0.15.0] - 2026-09-07
 
