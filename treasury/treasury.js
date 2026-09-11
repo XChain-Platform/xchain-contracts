@@ -94,6 +94,15 @@ var MAX_WINDOW_BLOCKS = 1000000;
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Treasury',
+        description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.

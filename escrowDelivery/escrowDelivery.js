@@ -67,10 +67,22 @@ var MAX_WINDOW_BLOCKS = 1000000;
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Delivery Escrow',
+        description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
+        version:     '1.0.1'
+    },
+
     abi: { version: 1, methods: {
         fund:            { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
         requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: [ { name: 'trackingUrl', type: 'string' } ] },
-        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched (not user-callable)', params: [ { name: 'requestId', type: 'string' } ] },
+        // onDelivery's params ARE the indexer's fixed attestation preamble (attest.js
+        // _injectCallbackExecute); requestDelivery() registers an empty context array,
+        // so the wire is exactly those four slots even though the body reads only slot 0.
+        onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched; the indexer supplies the attestation preamble (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },
         release:         { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:          { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
         timeout:         { summary: 'Buyer reclaims after the deadline', params: [] },

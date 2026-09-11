@@ -119,6 +119,15 @@ function tickDecimals(xchain, tick) {
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'AMM',
+        description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.

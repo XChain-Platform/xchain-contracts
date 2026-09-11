@@ -77,6 +77,15 @@ var MAX_WINDOW_BLOCKS = 1000000;
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Price Bet',
+        description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only.
     abi: { version: 1, methods: {

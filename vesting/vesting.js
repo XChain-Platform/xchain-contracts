@@ -94,6 +94,15 @@ function tickDecimals(xchain, tick) {
 
 module.exports = {
 
+    // Contract identity, read off this export at deploy and recorded on chain:
+    // consensus REQUIRES name and description under CONTRACT_META_REQUIRED, and
+    // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
+    meta: {
+        name:        'Vesting',
+        description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
+        version:     '1.0.0'
+    },
+
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.

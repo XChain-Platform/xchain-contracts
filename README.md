@@ -5,7 +5,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.15.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-404%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-456%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
 </p>
@@ -73,7 +73,8 @@ npx xchain-contracts policy my-policy.json my-guard.js
 ```
 
 The config supports `pausable`, `freeze` (denylist), `allowlist`, a `royalty`
-proceeds split, a `maxTakeBps` cap, and a `permissions` manifest, over any of the
+proceeds split, a `maxTakeBps` cap, an optional `meta` (contract identity, generated
+from the config when you leave it out), and a `permissions` manifest, over any of the
 `transfer`/`trade`/`burn`/`mint`/`stake`/`ownership`/`all` action classes. A controller guard
 is a contract the indexer runs *before* a gated native action settles; a token
 binds to it with ISSUE v6 (SDK: `sdk.controller.bindToken`). The generated source
@@ -125,6 +126,23 @@ The generated header and the printed bind hints repeat this whenever a
 | **Counterparty bridge** | [counterpartyBridge.js](./counterpartyBridge/counterpartyBridge.js) | [README](./counterpartyBridge/README.md) | [tests](./counterpartyBridge/counterpartyBridge.test.js) | A burn-to-mint bridge for a single Counterparty asset: an off-chain attestation (the same pattern as `urlOracle`) confirms an irreversible burn to a well-known unspendable address before minting, so a holder cannot claim the migrated tokens and still sell the original asset. |
 
 Start with **escrow**: it explains the custody model the others build on.
+
+### Every template names itself
+
+Each template above exports a `meta` block as the first key of `module.exports`, carrying the
+human name in the **Template** column, a one-sentence honest version of the **What it teaches**
+column, and a `version` string (`1.0.0` for every template in this release):
+
+```js
+meta: { name: 'Dutch Auction', description: 'Descending-price auction: ...', version: '1.0.0' }
+```
+
+This is not advisory metadata like `abi`. The indexer reads it off the deployed export and
+**refuses a `DEPLOY` that carries no `name` and `description`**, and it is what a wallet history
+row and an explorer contract page show beside the contract address (`Dutch Auction v1.0.0 ·
+C:DOGE:2154`). A fork keeps the block and rewrites it for the contract it has become; the address
+stays the identity, since names are not unique. Editing a template means bumping its
+`meta.version`: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## What these are (and are not)
 

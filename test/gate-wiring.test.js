@@ -62,6 +62,115 @@ function discoverTemplates() {
     return names.sort();
 }
 
+// The injector's fixed attestation preamble, mirroring xchain-indexer/src/actions/
+// attest.js _injectCallbackExecute():
+//
+//   callbackArgs = [request_id, provider_id, status, response_payload, ...callback_params]
+//
+// Slots 0-3 are on the wire for EVERY attestation callback the indexer fires,
+// whether or not the contract body ever reads them, so a callback's true arity is
+// 4 + the length of the context array the contract handed attestation.request().
+// Types: the first three are always indexer strings; slot 3 carries whatever the
+// provider returned, so its declared type is the template's call to make.
+const PREAMBLE = [
+    { name: 'requestId',  type: 'string' },
+    { name: 'providerId', type: 'string' },
+    { name: 'status',     type: 'string' },
+    { name: 'responsePayload' }
+];
+
+// Blank out comments (preserving offsets and line structure) so an argument list
+// that carries inline documentation - urlOracle's does, one comment per argument -
+// still splits on its real commas. String state is tracked so a '//' inside a URL
+// literal is not mistaken for a comment.
+function blankComments(src) {
+    let out = '';
+    let i = 0;
+    while (i < src.length) {
+        const c = src[i];
+        if (c === '"' || c === "'" || c === '`') {
+            const quote = c;
+            out += c; i++;
+            while (i < src.length) {
+                if (src[i] === '\\') { out += src[i] + (src[i + 1] || ''); i += 2; continue; }
+                out += src[i];
+                if (src[i] === quote) { i++; break; }
+                i++;
+            }
+            continue;
+        }
+        if (c === '/' && src[i + 1] === '/') {
+            while (i < src.length && src[i] !== '\n') { out += ' '; i++; }
+            continue;
+        }
+        if (c === '/' && src[i + 1] === '*') {
+            while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) { out += (src[i] === '\n' ? '\n' : ' '); i++; }
+            out += '  '; i += 2;
+            continue;
+        }
+        out += c; i++;
+    }
+    return out;
+}
+
+// Split a bracketed list at top level. `open` is the index of the opening bracket;
+// returns the trimmed source of each element, or null if the bracket never closes.
+function splitList(src, open) {
+    const PAIRS = { '(': ')', '[': ']', '{': '}' };
+    const close = PAIRS[src[open]];
+    const args  = [];
+    let depth = 0, start = open + 1, i = open;
+    for (; i < src.length; i++) {
+        const c = src[i];
+        if (c === '"' || c === "'" || c === '`') {
+            const quote = c;
+            i++;
+            while (i < src.length && src[i] !== quote) { if (src[i] === '\\') i++; i++; }
+            continue;
+        }
+        if (c === '(' || c === '[' || c === '{') { depth++; continue; }
+        if (c === ')' || c === ']' || c === '}') {
+            depth--;
+            if (depth === 0) {
+                const tail = src.slice(start, i).trim();
+                if (tail.length > 0 || args.length > 0) args.push(tail);
+                return (c === close) ? args : null;
+            }
+            continue;
+        }
+        if (c === ',' && depth === 1) { args.push(src.slice(start, i).trim()); start = i + 1; }
+    }
+    return null;
+}
+
+const STRING_LITERAL = /^(['"])([A-Za-z_$][A-Za-z0-9_$]*)\1$/;
+
+// Every xchain.attestation.request() call site in one template's source, with the
+// callback method name and the context-array length it registers.
+function callbackRegistrations(src) {
+    const clean = blankComments(src);
+    const re    = /xchain\s*\.\s*attestation\s*\.\s*request\s*\(/g;
+    const sites = [];
+    let m;
+    while ((m = re.exec(clean)) !== null) {
+        const open = clean.indexOf('(', m.index);
+        const args = splitList(clean, open);
+        const site = { args: args };
+        if (args && args.length >= 4) {
+            const name = STRING_LITERAL.exec(args[2]);
+            site.method = name ? name[2] : null;
+            if (args[3][0] === '[') {
+                const els = splitList(args[3], 0);
+                site.context = els ? els.length : null;
+            } else {
+                site.context = null;
+            }
+        }
+        sites.push(site);
+    }
+    return sites;
+}
+
 describe('gate wiring: the preflight cannot be dropped silently', function () {
 
     it('`npm test` runs the preflight', function () {
@@ -204,6 +313,55 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'summary, param names and view flag never reach a wallet or explorer: ' + offenders.join(', '));
     });
 
+    // Same template -> artifact direction again, on the one export key that is NOT
+    // advisory. Under the CONTRACT_META_REQUIRED flag day the indexer reads `meta` off
+    // the deployed export and refuses the DEPLOY outright when name or description is
+    // missing, so a template that ships without it is undeployable on a meta-active
+    // chain and every other gate in this repo stays green over it: the linter is
+    // advisory, and the template suites deploy on a regtest harness whose flag day need
+    // not be armed. `require()` the module rather than string-matching, so a block that
+    // is present but malformed (empty name, non-string version) fails here too.
+    it('every discovered template declares a consensus-required meta block', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) {
+                offenders.push(name + ' (does not load: ' + err.message + ')');
+                continue;
+            }
+            const meta = mod && mod.meta;
+            if (!meta || typeof meta !== 'object' || Array.isArray(meta)) { offenders.push(name + ' (no meta block)'); continue; }
+            if (typeof meta.name !== 'string' || meta.name.length === 0) { offenders.push(name + ' (meta.name is missing or empty)'); continue; }
+            if (typeof meta.description !== 'string' || meta.description.length === 0) { offenders.push(name + ' (meta.description is missing or empty)'); continue; }
+            if (meta.version !== undefined && typeof meta.version !== 'string')
+                offenders.push(name + ' (meta.version is present but not a string)');
+        }
+        assert.deepStrictEqual(offenders, [],
+            'consensus rejects a DEPLOY of these templates with "invalid: CONTRACT_MANIFEST ' +
+            '(meta required)", so anyone who scaffolds one pays a fee for a refused deploy: ' +
+            offenders.join(', '));
+    });
+
+    // Key ORDER is a house convention, not a consensus rule, and nothing else asserts
+    // it: identity reads first in the file and in every diff of it, which is the point
+    // of putting it above the advisory `abi` block. Cheap to keep, invisible to lose.
+    it('every discovered template declares meta as the first exported key', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try {
+                mod = require(path.join(REPO_DIR, name, name + '.js'));
+            } catch (err) { continue; }   // named by the meta check above
+            const first = Object.keys(mod)[0];
+            if (first !== 'meta') offenders.push(name + ' (first key is ' + JSON.stringify(first) + ')');
+        }
+        assert.deepStrictEqual(offenders, [],
+            'meta must be the first key of module.exports, above abi, so a reader sees what the ' +
+            'contract IS before what it documents: ' + offenders.join(', '));
+    });
+
     it('every template suite deploys its template through the real VM', function () {
         // Existence alone is satisfied by a stub that only lints the source, which
         // leaves exactly the coverage hole above. Assert the suite reaches
@@ -269,5 +427,148 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'these pattern sources are listed, scaffolded and linted but no helper of theirs is ' +
             'ever called in the vault patterns.e2e.test.js deploys, so their VM coverage is ' +
             'imaginary: ' + offenders.join(', '));
+    });
+});
+
+// Every check above reads a template against an artifact of its own. This one reads
+// it against the CALLER: the indexer fires attestation callbacks with a four-slot
+// preamble the contract never names, so the declared signature and the wire signature
+// can disagree while every other gate stays green.
+//
+// The arity here is derived from the injector's own rule (4 + the context array the
+// contract registered), never from the getInputParam indices the callback body
+// happens to read. That distinction is the whole point: a callback that reads only
+// slot 0 - escrowDelivery.onDelivery and urlOracle.onPrice both did - passes any
+// reads-derived scan while declaring one param against a four-param wire, which is
+// exactly how two instances of this survived the round that found the first two.
+describe('attestation callbacks: arity is the injector\'s, not the contract\'s reads', function () {
+
+    // Guard the scanner itself. If blankComments or splitList quietly stops finding
+    // call sites, every assertion below passes over an empty set and the family of
+    // checks goes inert without a single red test - the same false-green shape the
+    // rest of this file exists to lock down.
+    it('the scan actually finds the registrations that exist', function () {
+        const found = [];
+        for (const name of discoverTemplates()) {
+            const src = fs.readFileSync(path.join(REPO_DIR, name, name + '.js'), 'utf8');
+            for (const site of callbackRegistrations(src)) found.push(name + '.' + site.method);
+        }
+        assert.ok(found.length >= 3,
+            'the attestation.request() scan found ' + found.length + ' call sites across ' +
+            'the templates; it found 3 when it was written, so the parser has broken and ' +
+            'every callback assertion below is now vacuous. Found: ' + found.join(', '));
+
+        // Registered inline, with comments between the arguments (urlOracle) and with a
+        // non-empty context array (counterpartyBridge): the two shapes the parser can
+        // regress on independently.
+        assert.ok(found.indexOf('urlOracle.onPrice') !== -1,
+            'the scan no longer sees urlOracle.onPrice, whose arguments are separated by ' +
+            'inline comments; comment blanking has regressed. Found: ' + found.join(', '));
+        assert.ok(found.indexOf('counterpartyBridge.onClaim') !== -1,
+            'the scan no longer sees counterpartyBridge.onClaim, the only site with a ' +
+            'non-empty context array. Found: ' + found.join(', '));
+    });
+
+    it('every registration is parseable, so no callback escapes certification', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            const src = fs.readFileSync(path.join(REPO_DIR, name, name + '.js'), 'utf8');
+            callbackRegistrations(src).forEach(function (site, i) {
+                const where = name + ' attestation.request()#' + i;
+                if (!site.args)              { offenders.push(where + ' (argument list does not close)'); return; }
+                if (site.args.length < 4)    { offenders.push(where + ' (only ' + site.args.length + ' arguments; the callback method and context array are required)'); return; }
+                if (!site.method)            { offenders.push(where + ' (callback method is not a plain string literal, so its abi entry cannot be located)'); return; }
+                if (site.context === null)   offenders.push(where + ' (context is not an array literal, so the callback arity cannot be derived)');
+            });
+        }
+        assert.deepStrictEqual(offenders, [],
+            'these attestation registrations cannot be read statically, so the preamble check ' +
+            'below silently skips them and the callback ships uncertified: ' + offenders.join(', '));
+    });
+
+    it('every registered callback declares the full injector arity in its abi', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try { mod = require(path.join(REPO_DIR, name, name + '.js')); }
+            catch (err) { continue; }   // named by the meta/abi checks above
+            const src     = fs.readFileSync(path.join(REPO_DIR, name, name + '.js'), 'utf8');
+            const methods = (mod && mod.abi && mod.abi.methods) || {};
+            for (const site of callbackRegistrations(src)) {
+                if (!site.method || site.context === null) continue;   // named by the previous test
+                const where = name + '.' + site.method;
+                if (typeof mod[site.method] !== 'function') {
+                    offenders.push(where + ' (registered as a callback but not exported, so the injected EXECUTE reverts)');
+                    continue;
+                }
+                const spec = methods[site.method];
+                if (!spec) { offenders.push(where + ' (registered as a callback with no abi entry)'); continue; }
+                const params = spec.params;
+                if (!Array.isArray(params)) { offenders.push(where + ' (abi params is not an array)'); continue; }
+                const expected = PREAMBLE.length + site.context;
+                if (params.length !== expected) {
+                    offenders.push(where + ' (declares ' + params.length + ' param(s); the injector sends ' +
+                                   expected + ': the ' + PREAMBLE.length + '-slot preamble plus ' + site.context +
+                                   ' registered context value(s))');
+                }
+            }
+        }
+        assert.deepStrictEqual(offenders, [],
+            'the indexer sends every attestation callback [request_id, provider_id, status, ' +
+            'response_payload, ...context] (attest.js _injectCallbackExecute), so these declared ' +
+            'signatures are wrong on the wire and anyone reading the abi picks the wrong slot ' +
+            'index: ' + offenders.join(', '));
+    });
+
+    it('every registered callback names the preamble slots in injector order', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try { mod = require(path.join(REPO_DIR, name, name + '.js')); }
+            catch (err) { continue; }
+            const src     = fs.readFileSync(path.join(REPO_DIR, name, name + '.js'), 'utf8');
+            const methods = (mod && mod.abi && mod.abi.methods) || {};
+            for (const site of callbackRegistrations(src)) {
+                if (!site.method) continue;
+                const params = (methods[site.method] || {}).params;
+                if (!Array.isArray(params)) continue;   // named above
+                PREAMBLE.forEach(function (slot, i) {
+                    const at = name + '.' + site.method + '[' + i + ']';
+                    const el = params[i];
+                    if (!el || typeof el !== 'object') { offenders.push(at + ' (missing; expected ' + slot.name + ')'); return; }
+                    if (el.name !== slot.name) offenders.push(at + ' (named ' + JSON.stringify(el.name) + ', the injector puts ' + slot.name + ' here)');
+                    if (slot.type && el.type !== slot.type) offenders.push(at + ' (type ' + JSON.stringify(el.type) + '; the indexer always sends ' + slot.type + ' here)');
+                });
+            }
+        }
+        assert.deepStrictEqual(offenders, [],
+            'the preamble slots arrive in a fixed order, so a template that renames or reorders ' +
+            'them documents a wire that does not exist: ' + offenders.join(', '));
+    });
+
+    // The inverse direction, keyed on behaviour rather than on the word "callback" in a
+    // summary (treasury.arm is a POLL finalization callback with a different, longer
+    // wire). A method that reads an attestation response is one the injector fires, so
+    // if no attestation.request() in the same template registers it, nothing anywhere
+    // pins its declared arity to the preamble - which is the state every callback in
+    // this repo was in until the check above existed.
+    it('every method that reads an attestation response is registered as a callback', function () {
+        const offenders = [];
+        for (const name of discoverTemplates()) {
+            let mod;
+            try { mod = require(path.join(REPO_DIR, name, name + '.js')); }
+            catch (err) { continue; }
+            const src        = fs.readFileSync(path.join(REPO_DIR, name, name + '.js'), 'utf8');
+            const registered = new Set(callbackRegistrations(src).map(s => s.method).filter(Boolean));
+            for (const [method, fn] of Object.entries(mod)) {
+                if (typeof fn !== 'function') continue;
+                if (!/xchain\s*\.\s*attestation\s*\.\s*getResponse\s*\(/.test(blankComments(String(fn)))) continue;
+                if (!registered.has(method)) offenders.push(name + '.' + method);
+            }
+        }
+        assert.deepStrictEqual(offenders, [],
+            'these methods consume an attestation response but no attestation.request() in the ' +
+            'same template names them as its callback, so their wire signature is derived from ' +
+            'nothing: ' + offenders.join(', '));
     });
 });
