@@ -267,7 +267,7 @@ module.exports = {
         // The indexer invokes attestation callbacks with the fixed preamble
         // [request_id, provider_id, status, response_payload] followed by
         // whatever custom context array was passed to attestation.request()
-        // (see xchain-indexer's _injectCallbackExecute). requestClaim() passed
+        // (see xchain-indexer's injectCallbackExecute). requestClaim() passed
         // [caller] as that context, so the address we asked about is param 4,
         // not param 1 - param 1 is the provider_id ('http_get').
         var requestId = xchain.getInputParam(0);
