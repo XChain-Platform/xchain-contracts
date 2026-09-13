@@ -46,8 +46,18 @@
 //     across calls without ever exceeding the gas budget.
 //
 // The chosen round is a pure function of consensus history: any node, any
-// caller, any time, same winner. Assumes round timestamps are non-decreasing
-// in round number (they are consensus round products).
+// caller, any time, same winner.
+//
+// ROUND TIMESTAMPS ARE NOT MONOTONIC, AND NOTHING HERE MAY ASSUME THEY ARE.
+// A round's stored timestamp is the reference BTC block's time (falling back to
+// the hub's wall clock), and a Bitcoin block header only has to beat the median
+// of the previous eleven, so a later round can legitimately carry an EARLIER
+// timestamp than the round before it. So the tip's timestamp says nothing about
+// the rounds below it: neither settle() nor reclaim() may conclude "no
+// qualifying round exists" from the tip alone. Both read the range instead.
+// Reading the tip and calling it pre-deadline paid the wrong party on a
+// T+100 / T-100 / T+200 sequence, and voided a bet whose deciding round was
+// still readable.
 //
 // PENDING vs REVERT: when no qualifying round exists yet, settle() RETURNS
 // 'PENDING' (a valid, no-op execution) rather than reverting, so the cursor
@@ -93,6 +103,11 @@
 // blocks), the same ceiling patterns/validation.js uses in its example.
 var MAX_SETTLE_TIME = 253402300799;
 var MAX_WINDOW_BLOCKS = 1000000;
+
+// Rounds a single call may read while walking cursor -> tip. Shared by settle()
+// and reclaim() so the two agree on how much history one execution pays for;
+// each read is a metered VM_STATE-class charge (100 gas).
+var MAX_READS = 200;
 
 module.exports = {
 
@@ -228,8 +243,9 @@ module.exports = {
     // function of consensus history, so the caller has no discretion.
     //
     // Returns (instead of reverting) when the bet cannot settle yet:
-    //   'PENDING'  - the oracle has not yet produced any round at/after
-    //                settleTime; nothing to scan.
+    //   'PENDING'  - the walk reached the tip and every round from the cursor
+    //                up to it missed settleTime, so no qualifying round exists
+    //                yet. The cursor advance is persisted.
     //   'SCANNING' - qualifying rounds exist but the per-call read cap was
     //                hit paging through pre-deadline rounds; the cursor
     //                advance is persisted, call again to continue.
@@ -240,31 +256,18 @@ module.exports = {
         var latest = latestRound(xchain);
         xchain.require(latest !== null, 'no oracle data yet');
 
-        // The latest round is the newest consensus product; if even it is
-        // before T, no qualifying round can exist yet (timestamps are
-        // non-decreasing in round number).
-        if (latest.timestamp < T) {
-            // Carry the cursor up to the tip on the way out. Every round at or below a
-            // pre-T tip is itself pre-T, by the same monotonicity this early return
-            // already rests on, so none of them can decide the bet and none is lost by
-            // stepping over it. This is not an optimisation: the cursor write below is
-            // the ONLY one in settle() and it sits after this return, so without this a
-            // cursor could never move before the settle time, and a node's bounded
-            // oracle preload would scroll past it while both parties waited. The tip
-            // round stays in scope (cursor = its number, not +1), the convention
-            // accept() uses. Never walk backwards: a lower tip must not undo scan
-            // progress already paid for.
-            if (latest.roundNumber > parseInt(xchain.state.get('cursor'))) {
-                xchain.state.set('cursor', String(latest.roundNumber));
-            }
-            return 'PENDING';
-        }
+        // There is deliberately NO tip-timestamp shortcut here. A pre-T tip does not
+        // mean every round below it is pre-T (see ROUND TIMESTAMPS ARE NOT MONOTONIC
+        // in the header), so returning PENDING on the tip alone stepped the cursor
+        // over rounds that decide the bet and handed the pot to the loser. The scan
+        // below is the only evidence that no qualifying round exists, and it is also
+        // what keeps the cursor moving before the settle time, so a node's bounded
+        // oracle preload cannot scroll past it while both parties wait.
 
         // Walk from the cursor to the first round with timestamp >= T. Gaps
         // (skipped/disputed rounds) return null and are stepped over. The
         // walk is capped so a long backlog cannot exhaust gas; each read is
         // a metered VM_STATE-class charge (100 gas).
-        var MAX_READS = 200;
         var coinPair = xchain.state.get('coinPair');
         var r     = parseInt(xchain.state.get('cursor'));
         var top   = latest.roundNumber;
@@ -295,10 +298,15 @@ module.exports = {
         }
 
         if (found === null) {
-            // Cap hit mid-backlog. Persist the progress and report; a revert
-            // here would throw the cursor advance away.
+            // Persist the progress and report; a revert here would throw the cursor
+            // advance away. Which of the two loop exits happened is the difference
+            // between PENDING and SCANNING, and it is read off r, never off a
+            // timestamp: r > top means every round from the cursor to the tip was
+            // actually read and none reaches T, so nothing qualifies yet. r <= top
+            // means the per-call read cap stopped the walk mid-backlog and a
+            // qualifying round may still be sitting above the cursor.
             xchain.state.set('cursor', String(r));
-            return 'SCANNING';
+            return (r > top) ? 'PENDING' : 'SCANNING';
         }
 
         var strike = xchain.state.get('strike');
@@ -346,10 +354,10 @@ module.exports = {
 
     // reclaim(): liveness escape hatch. If `deadlineBlocks` after the match
     // the oracle has STILL not produced any round at/after settleTime, either
-    // party voids the bet and both stakes are returned. The guard is O(1):
-    // qualifying rounds exist iff the LATEST round's timestamp reaches T.
-    // Once one exists, settle() is the only path - reclaim() cannot be used
-    // to dodge a lost bet.
+    // party voids the bet and both stakes are returned. Once a qualifying round
+    // exists, settle() is the only path: reclaim() cannot dodge a lost bet,
+    // which is why the guard below is read off the round range and never off
+    // the tip alone.
     reclaim: function (xchain) {
         xchain.require(xchain.state.get('status') === 'MATCHED', 'bet not matched');
 
@@ -363,11 +371,36 @@ module.exports = {
             'deadline not reached'
         );
 
+        // A pre-T tip is NOT evidence that no qualifying round exists: a later round
+        // can carry an earlier timestamp, so the tip can sit above a round that
+        // already decided this bet, and voiding on the tip alone refunds a bet
+        // somebody won. Read the same range settle() reads, from the same cursor, and
+        // void only after every round in it has been SEEN to miss T. The walk carries
+        // settle()'s per-call read cap so reclaim stays bounded; when the cap stops it
+        // short, refuse rather than guess - settle() is the call that persists cursor
+        // progress, so it is the one that pages through a long backlog.
+        var T = parseInt(xchain.state.get('settleTime'));
         var latest = latestRound(xchain);
-        xchain.require(
-            latest === null || latest.timestamp < parseInt(xchain.state.get('settleTime')),
-            'qualifying round exists: settle() instead'
-        );
+        if (latest !== null) {
+            var coinPair = xchain.state.get('coinPair');
+            var top = latest.roundNumber;
+            var r = parseInt(xchain.state.get('cursor'));
+            for (var i = 0; i < MAX_READS && r <= top; i++, r++) {
+                var data = normalize(xchain.oracle.getPriceAtRound(coinPair, r));
+                if (data === null) continue;
+                xchain.require(
+                    data.outsideWindow !== true,
+                    'scan round is outside the retrievable oracle window'
+                );
+                xchain.require(
+                    !isNaN(data.roundNumber) && !isNaN(data.timestamp),
+                    'oracle accessor lacks round metadata'
+                );
+                xchain.require(data.timestamp < T, 'qualifying round exists: settle() instead');
+            }
+            xchain.require(r > top,
+                'scan incomplete: call settle() to advance the cursor, then reclaim');
+        }
 
         xchain.state.set('status', 'VOID');
         refundBoth(xchain);

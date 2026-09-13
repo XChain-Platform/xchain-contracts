@@ -267,12 +267,49 @@ const ADDR   = 'C:BTC:1';
                 await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
                 'not representable at itemTick decimals');
             assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            // Never armed, so no bid, no payment, and cancel() cannot latch a
-            // terminal state that emits a zero-normalising amount either.
+            // Never armed, so no bid and no payment.
             assertReverted(await bid('alice', '50'), 'not active');
+            // The rejecting fund() did NOT roll back the deposit, so cancel() from
+            // the pre-funded state is the seller's recovery path. It returns the
+            // HELD balance, not the off-grid itemAmount the ledger would re-quantise
+            // to nothing.
+            const c = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
+            assertSuccess(c);
+            assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
+            assertBalance(h.ledger, SELLER, ITEM, '10');
+            assertContractBalance(h.ledger, ADDR, ITEM, '0');
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+        });
+
+        it('cancel() returns a short deposit after fund() rejected it', async function () {
+            await deployAuction();
+            assertReverted(await depositAndFund('5'), 'insufficient item deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            const c = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
+            assertSuccess(c);
+            assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5' } }]);
+            assertBalance(h.ledger, SELLER, ITEM, '10');
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+        });
+
+        it('a stranger cannot cancel() a pre-funded auction', async function () {
+            await deployAuction();
+            h.deposit(SELLER, ADDR, ITEM, '10');
+            assertReverted(
+                await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: 'stranger' }),
+                'only the seller');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
+
+        it('cancel() on a contract holding nothing reverts rather than latching CANCELLED', async function () {
+            await deployAuction();
             assertReverted(
                 await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER }),
-                'not active');
+                'nothing to reclaim');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            // Still fundable afterwards.
+            assertSuccess(await depositAndFund());
+            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
         });
 
         it('an off-grid itemAmount above one unit is rejected too, not rounded up', async function () {

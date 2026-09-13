@@ -274,6 +274,44 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             assertBalance(h.ledger, TAKER, TICK, '200');
         });
 
+        // A round's stored timestamp is its reference BTC block's time, and a Bitcoin
+        // block header only has to beat the median of the previous eleven, so round
+        // N+1 may legitimately carry an EARLIER timestamp than round N. Every sibling
+        // fixture here uses increasing timestamps, which is exactly how the two
+        // tip-timestamp shortcuts survived: reading the tip and calling the bet
+        // pre-deadline stepped the cursor over the round that had already decided it.
+        it('a BACKWARD tip timestamp cannot hide the deciding round from settle()', async function () {
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            publishRounds({
+                3: { ts: T + 100, price: '61000' },  // decides: OVER maker wins
+                4: { ts: T - 100, price: '59000' }   // tip, timestamp moves BACKWARD
+            });
+            const r = await settleBy(STRANGER);
+            assertSuccess(r);
+            assert.strictEqual(returned(r), 'SETTLED');
+            assertContractState(h.ledger, ADDR, 'settledRound', '3');
+            assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
+        it('a BACKWARD tip timestamp cannot void a decided bet through reclaim()', async function () {
+            await deployBet('OVER', 3);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            h.mineBlock(); h.mineBlock(); h.mineBlock(); // past the deadline
+            publishRounds({
+                3: { ts: T + 10,  price: '59000' },  // decides: OVER maker LOST
+                4: { ts: T - 100, price: '59000' }   // tip, timestamp moves BACKWARD
+            });
+            // The losing maker reads a pre-T tip and reaches for the liveness hatch.
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'reclaim', params: [], caller: MAKER }),
+                'settle() instead');
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+            assertSuccess(await settleBy(TAKER));
+            assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
         it('STALE ORACLE, pre-flag-day node: the loser voids a bet history already decided', async function () {
             // Documents the exposure the ORACLE_STALE_ROUND_VISIBILITY flag day
             // closes, and it is why an instance running against a node that has
@@ -508,11 +546,14 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             const pending = await settleBy(STRANGER);
             assertSuccess(pending);
             assert.strictEqual(returned(pending), 'PENDING');
-            assertContractState(h.ledger, ADDR, 'cursor', '4');
+            // Every round from the cursor to the tip was READ and missed T, so the
+            // cursor clears the tip: 5, not 4. PENDING is now a statement about what
+            // the scan saw, not about the tip's timestamp.
+            assertContractState(h.ledger, ADDR, 'cursor', '5');
 
             // A second PENDING call on an unmoved tip must not walk the cursor back.
             assertSuccess(await settleBy(STRANGER));
-            assertContractState(h.ledger, ADDR, 'cursor', '4');
+            assertContractState(h.ledger, ADDR, 'cursor', '5');
 
             // Now the window slides past the acceptance round and the deciding round
             // lands. The pre-fix cursor of 2 reads outsideWindow and reverts forever.

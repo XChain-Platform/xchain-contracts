@@ -106,7 +106,7 @@ module.exports = {
         fund:   { summary: 'Seller deposits the item (BATCH after a DEPOSIT)', params: [] },
         bid:    { summary: 'Place a strictly-higher bid (BATCH after a DEPOSIT); outbids the prior leader who is refunded instantly', params: [] },
         settle: { summary: 'After the deadline: pay the item to the high bidder and the bid to the seller (or return the item, if unsold)', params: [] },
-        cancel: { summary: 'Seller reclaims the item before any bid has been placed', params: [] },
+        cancel: { summary: 'Seller reclaims the item: before any bid has been placed, or from the pre-funded state after fund() rejected the terms', params: [] },
         info:   { summary: 'Read the auction status and current high bid', params: [], view: true }
     } },
 
@@ -176,7 +176,10 @@ module.exports = {
         // contract with no cancel() path left. The constructor cannot check this - the
         // item tick's decimals are unreadable at deploy, when the contract holds none
         // of it. Here is the first point the ledger can answer AND the last point
-        // before the auction arms, so a rejected seller has lost nothing but a deploy.
+        // before the auction arms. The deposit that reached this call has already
+        // settled and a revert does NOT roll it back (a BATCH is not atomic, see the
+        // custody note at the top of this file), so the rejected seller reclaims it
+        // with cancel(), which is reachable from INIT and returns the HELD balance.
         var itemGrid = tickDecimals(xchain, itemTick);
         xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
             'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
@@ -238,17 +241,36 @@ module.exports = {
         }
     },
 
-    // cancel(): seller reclaims the item before any bid has landed.
+    // cancel(): seller reclaims the item, either before any bid has landed on a
+    // live auction or from the pre-funded INIT state after fund() rejected the
+    // terms. The INIT leg exists because a rejected fund() does NOT roll back the
+    // DEPOSIT that reached it, batched or not, so without it the item is stranded.
+    // It sweeps the contract's HELD item balance rather than the stored itemAmount:
+    // off the tick's grid itemAmount is exactly the unusable value fund() refused
+    // (the ledger re-quantises it at write time, possibly to zero), and after an
+    // 'insufficient item deposit' rejection the held balance is the smaller truth.
+    // cancel() is terminal - a seller who was short and would rather top up should
+    // deposit the remainder and call fund() again instead of cancelling.
     cancel: function (xchain) {
-        xchain.require(xchain.state.get('status') === 'ACTIVE', 'auction not active');
+        var status = xchain.state.get('status');
+        xchain.require(status === 'ACTIVE' || status === 'INIT', 'auction not cancellable');
         xchain.require(xchain.getSourceAddress() === xchain.state.get('seller'), 'only the seller can cancel');
         xchain.require(!xchain.state.get('highBidder'), 'cannot cancel: a bid has already been placed');
+
+        var itemTick = xchain.state.get('itemTick');
+        var quantity = status === 'ACTIVE'
+            ? xchain.state.get('itemAmount')
+            : (xchain.getBalance(xchain.getContractAddress(), itemTick) || '0');
+        // Guard the empty INIT case: without this a cancel() on a contract holding
+        // nothing burns the terminal status on a send that moves no value, and the
+        // seller can no longer fund the auction they deployed.
+        xchain.require(xchain.math.gt(quantity, '0'), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({
             destination: xchain.state.get('seller'),
-            tick: xchain.state.get('itemTick'),
-            quantity: xchain.state.get('itemAmount')
+            tick: itemTick,
+            quantity: quantity
         });
     },
 
