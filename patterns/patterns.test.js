@@ -13,7 +13,7 @@ const fs     = require('fs');
 const path   = require('path');
 
 let lintSource;
-try { ({ lintSource } = require('../../xchain-vm/src/lint-core.js')); }
+try { ({ lintSource } = require('../../xchain-vm/src/lint_core.js')); }
 catch (e) { console.log('Skipping pattern lint tests: xchain-vm linter not available (need adjacent xchain-vm install)'); }
 
 const DIR = __dirname;

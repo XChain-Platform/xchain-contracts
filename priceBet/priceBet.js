@@ -314,7 +314,7 @@ module.exports = {
 // Price of the agreed settle round, normalized to a bignumber string, or null
 // if the round is not yet published. The production accessor returns a
 // { price, roundNumber, timestamp } object (indexer's getOracleDataForVM via
-// xchain-vm/src/readonly-accessors.js); older/mocked accessors may return the
+// xchain-vm/src/readonly_accessors.js); older/mocked accessors may return the
 // bare price string. Accept both.
 function roundPrice(xchain) {
     var r = readRound(xchain, xchain.state.get('coinPair'),

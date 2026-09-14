@@ -71,7 +71,7 @@ const ROUND    = 7;
     // Publish the settle round at `price` (current price is irrelevant to the
     // bet). Seeds the PRODUCTION accessor shape -- getPriceAtRound returns a
     // { price, roundNumber, timestamp } object, not a bare string (see the
-    // indexer's getOracleDataForVM + xchain-vm/src/readonly-accessors.js).
+    // indexer's getOracleDataForVM + xchain-vm/src/readonly_accessors.js).
     function publishRound(price) {
         const rounds = {};
         rounds[ROUND] = { price: price, roundNumber: ROUND, timestamp: 1750000000 };
