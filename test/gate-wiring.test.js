@@ -63,7 +63,7 @@ function discoverTemplates() {
 }
 
 // The injector's fixed attestation preamble, mirroring xchain-indexer/src/actions/
-// attest/index.js _injectCallbackExecute():
+// attest/index.js injectCallbackExecute():
 //
 //   callbackArgs = [request_id, provider_id, status, response_payload, ...callback_params]
 //
@@ -528,7 +528,7 @@ describe('attestation callbacks: arity is the injector\'s, not the contract\'s r
         }
         assert.deepStrictEqual(offenders, [],
             'the indexer sends every attestation callback [request_id, provider_id, status, ' +
-            'response_payload, ...context] (attest/index.js _injectCallbackExecute), so these declared ' +
+            'response_payload, ...context] (attest/index.js injectCallbackExecute), so these declared ' +
             'signatures are wrong on the wire and anyone reading the abi picks the wrong slot ' +
             'index: ' + offenders.join(', '));
     });
