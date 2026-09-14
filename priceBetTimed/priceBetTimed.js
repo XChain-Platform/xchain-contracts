@@ -506,7 +506,7 @@ function refundBoth(xchain) {
 // Every OTHER template feeds floorToDecimals a value mathjs computed, and the VM's
 // math API formats every result in fixed notation (xchain-vm/src/math.js toFixed),
 // so fixed input is free there. Here `amount` and `strike` are raw maker-supplied
-// constructor text (deploy.js pipe-splits CONSTRUCTOR_PARAMS with no numeric
+// constructor text (deploy/index.js pipe-splits CONSTRUCTOR_PARAMS with no numeric
 // validation), and `xchain.math.gt(x, '0')` is no filter: mathjs accepts
 // exponential ('1.5e-8'), radix prefixes ('0x10'), numeric separators ('1_000'),
 // a leading '+', a bare leading dot, and 'Infinity'. Fed those, floorToDecimals

@@ -58,7 +58,7 @@
 // xchain.math computes at 64 significant digits, but the indexer normalises every
 // emitted amount to its tick's decimals at ledger-write time (mathjs HALF-UP
 // round: the indexer's bcmath rounds half-up, NOT half-even, the mode is stated in
-// xchain-indexer/src/xchainPrice.js and pinned by test, because a mis-read mode at
+// xchain-indexer/src/consensus/xchainPrice.js and pinned by test, because a mis-read mode at
 // the .5 boundary is a consensus fork),
 // which can round a computed quantity UP. For claim() that means minting
 // MORE saleTick than paid*rate and, cumulatively across buyers, past the maxMint

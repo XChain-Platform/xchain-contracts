@@ -79,7 +79,7 @@ module.exports = {
     abi: { version: 1, methods: {
         fund:            { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
         requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: [ { name: 'trackingUrl', type: 'string' } ] },
-        // onDelivery's params ARE the indexer's fixed attestation preamble (attest.js
+        // onDelivery's params ARE the indexer's fixed attestation preamble (attest/index.js
         // _injectCallbackExecute); requestDelivery() registers an empty context array,
         // so the wire is exactly those four slots even though the body reads only slot 0.
         onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched; the indexer supplies the attestation preamble (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },

@@ -54,7 +54,7 @@ module.exports = {
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         requestPrice: { summary: 'Ask the network to GET url via the http_get attestation provider, returning the request id', params: [ { name: 'url', type: 'string' } ] },
-        // onPrice's params ARE the indexer's fixed attestation preamble (attest.js
+        // onPrice's params ARE the indexer's fixed attestation preamble (attest/index.js
         // _injectCallbackExecute); requestPrice() registers an empty context array, so
         // the wire is exactly those four slots even though the body reads only slot 0.
         onPrice:      { summary: 'Attestation callback fired by the indexer once the body settles; commits it to state (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },

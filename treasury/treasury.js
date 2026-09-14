@@ -334,7 +334,7 @@ module.exports = {
         // check and the emission (amm/vesting/crowdsale do the same): the indexer
         // HALF-UP re-normalises every emitted amount to its tick's decimals at
         // ledger-write time (its bcmath rounds half-up, NOT half-even: the mode
-        // is stated in xchain-indexer/src/xchainPrice.js and pinned by test,
+        // is stated in xchain-indexer/src/consensus/xchainPrice.js and pinned by test,
         // because a mis-read mode at the .5 boundary is a consensus fork), so an
         // off-grid rec.amount could round UP past what the
         // treasury holds, revert every retry, and wedge the poll-approved transfer
