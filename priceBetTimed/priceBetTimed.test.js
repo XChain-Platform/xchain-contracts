@@ -483,7 +483,7 @@ const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
             // The OTHER birth wedge, and the one a null-tip check cannot see. The two
             // accessor views are built from different queries: `prices` is each pair's
             // own MAX(round_number) with no floor comparison, while `roundFloor` is a
-            // GLOBAL floor over every pair's rounds (indexer db.js getOracleDataForVM).
+            // GLOBAL floor over every pair's rounds (indexer src/db/prices.js getOracleDataForVM).
             // So a pair that stops publishing while the rest of the fleet advances keeps
             // a perfectly readable getPrice() tip whose round is long below the floor.
             // `latest.roundNumber > 0` passes, the cursor anchors on an unreadable round,

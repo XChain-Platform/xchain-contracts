@@ -49,7 +49,7 @@ const ADDR   = 'C:BTC:1';
         // fund() reads itemTick's decimals to check the amount lands on its grid, and
         // the harness's decimals registry is balance-INDEPENDENT (MockLedger) while a
         // node's is not: the indexer builds balances and tokenInfo from ONE snapshot
-        // over SOURCE + the contract address (db.js buildVmBalancesAndTokenInfo), so a
+        // over SOURCE + the contract address (src/db/index.js buildVmBalancesAndTokenInfo), so a
         // tick the contract holds a just-DEPOSITed amount of always carries its info
         // in the same snapshot getBalance reads. Seeding the item tick models that
         // reachability; it is not the stableVault trap of seeding a tick nobody holds.
