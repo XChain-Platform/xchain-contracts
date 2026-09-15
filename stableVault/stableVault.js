@@ -330,7 +330,7 @@ module.exports = {
         // BEFORE the state writes and the emission. The indexer re-rounds every
         // emitted amount to the tick's decimals HALF-UP at ledger-write time
         // (the indexer's bcmath rounds half-up, NOT half-even: the mode is
-        // stated in xchain-indexer/src/consensus/xchainPrice.js and pinned by test,
+        // stated in xchain-indexer/src/consensus/xchain_price.js and pinned by test,
         // because a mis-read mode at the .5 boundary is a consensus fork);
         // an off-grid seize written exactly into trackedColl/vault books but
         // rounded UP on the wire would debit custody more than books, opening a

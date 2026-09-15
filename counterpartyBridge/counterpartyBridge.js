@@ -96,7 +96,7 @@ function isPlainDecimal(value) {
 // Quantise a computed amount DOWN to xchainTick's decimal grid before minting.
 // The indexer re-normalises every emitted amount to the tick's decimals at
 // ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
-// NOT half-even, the mode is stated in xchain-indexer/src/consensus/xchainPrice.js and
+// NOT half-even, the mode is stated in xchain-indexer/src/consensus/xchain_price.js and
 // pinned by test, because a mis-read mode at the .5 boundary is a consensus
 // fork), which can round a computed
 // quantity UP past maxSupply and revert the whole EXECUTE (see crowdsale.js
