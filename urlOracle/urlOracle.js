@@ -54,8 +54,8 @@ module.exports = {
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         requestPrice: { summary: 'Ask the network to GET url via the http_get attestation provider, returning the request id', params: [ { name: 'url', type: 'string' } ] },
-        // onPrice's params ARE the indexer's fixed attestation preamble (attest.js
-        // _injectCallbackExecute); requestPrice() registers an empty context array, so
+        // onPrice's params ARE the indexer's fixed attestation preamble (attest/index.js
+        // injectCallbackExecute); requestPrice() registers an empty context array, so
         // the wire is exactly those four slots even though the body reads only slot 0.
         onPrice:      { summary: 'Attestation callback fired by the indexer once the body settles; commits it to state (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },
         price:        { summary: 'Read the last settled body', params: [], view: true }
@@ -84,7 +84,7 @@ module.exports = {
     // Callback fired by the indexer after the off-chain GET has settled. Invoked as
     // onPrice(request_id, provider_id, status, response_payload, ...callbackParams):
     // the first four are the injector's fixed preamble (xchain-indexer's
-    // _injectCallbackExecute), and requestPrice() registers no extra context, so the
+    // injectCallbackExecute), and requestPrice() registers no extra context, so the
     // wire is those four slots. This body needs only slot 0 - the response itself is
     // read back through attestation.getResponse() rather than off slot 3 - but the
     // other three arrive regardless and the abi above declares them.

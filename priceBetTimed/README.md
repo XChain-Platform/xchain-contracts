@@ -72,8 +72,17 @@ pick a favorable moment. Instead:
   pages across calls without exhausting gas.
 
 The deciding round is a pure function of consensus history: any node, any
-caller, any time: same winner. Assumes round timestamps are non-decreasing in
-round number.
+caller, any time: same winner.
+
+**Round timestamps are not monotonic, and nothing here assumes they are.** A
+round's timestamp is its reference BTC block's time, and a Bitcoin block header
+only has to beat the median of the previous eleven, so round `N+1` can carry an
+earlier timestamp than round `N`. The tip therefore says nothing about the
+rounds below it: neither `settle()` nor `reclaim()` may conclude "no qualifying
+round exists" from the tip's timestamp, and both read the cursor-to-tip range
+instead. An earlier version read the tip alone and, on a `T+100 / T-100 / T+200`
+sequence, paid the wrong party and voided a bet whose deciding round was still
+readable.
 
 ## settle() return values
 
@@ -95,7 +104,7 @@ discard the cursor advance (state writes only commit on success).
 | `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair; anchors cursor + void deadline; status → `MATCHED`. |
 | `settle()` | anyone | See table above. |
 | `cancel()` | maker | Reclaims the stake while unmatched. |
-| `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match (O(1) guard: latest round's timestamp < `settleTime`). |
+| `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match. The guard reads the cursor-to-tip range, capped like `settle()`'s walk; if the cap stops it short it refuses and asks for a `settle()` call to page the cursor forward. |
 | `info()` | anyone | Terms + status + `settledRound` + winner. |
 
 ### Constructor term validation
@@ -152,10 +161,11 @@ translation adds its own surface:
 - **Legacy oracle accessor mis-settling.** A bare-string price carries no
   round metadata; `latestRound()` reverts loudly (`oracle accessor lacks
   round metadata`) rather than settling on unverifiable data.
-- **Dodging a loss via `reclaim()`.** The O(1) guard (latest round's
-  timestamp < `settleTime`) means reclaim is only possible while *no*
-  qualifying round exists anywhere; once one is finalized, `settle()` is the
-  only path. One case defeats the guard on nodes below the oracle stale-round
+- **Dodging a loss via `reclaim()`.** The guard walks the cursor-to-tip range
+  and voids only once every round in it has been *seen* to miss `settleTime`,
+  so reclaim is only possible while no qualifying round exists; once one is
+  finalized, `settle()` is the only path. Reading the tip's timestamp alone was
+  not enough, since a later round may carry an earlier timestamp. One case defeats the guard on nodes below the oracle stale-round
   visibility activation height, because there the newest round is hidden from
   `getPrice()` outright during a stall: see the deployer advisory at the top
   of this file.

@@ -314,7 +314,7 @@ module.exports = {
 // Price of the agreed settle round, normalized to a bignumber string, or null
 // if the round is not yet published. The production accessor returns a
 // { price, roundNumber, timestamp } object (indexer's getOracleDataForVM via
-// xchain-vm/src/readonly-accessors.js); older/mocked accessors may return the
+// xchain-vm/src/readonly_accessors.js); older/mocked accessors may return the
 // bare price string. Accept both.
 function roundPrice(xchain) {
     var r = readRound(xchain, xchain.state.get('coinPair'),
@@ -387,7 +387,7 @@ function refundBoth(xchain) {
 // Every OTHER template feeds floorToDecimals a value mathjs computed, and the VM's
 // math API formats every result in fixed notation (xchain-vm/src/math.js toFixed),
 // so fixed input is free there. Here `amount` and `strike` are raw maker-supplied
-// constructor text (deploy.js pipe-splits CONSTRUCTOR_PARAMS with no numeric
+// constructor text (deploy/index.js pipe-splits CONSTRUCTOR_PARAMS with no numeric
 // validation), and `xchain.math.gt(x, '0')` is no filter: mathjs accepts
 // exponential ('1.5e-8'), radix prefixes ('0x10'), numeric separators ('1_000'),
 // a leading '+', a bare leading dot, and 'Infinity'. Fed those, floorToDecimals

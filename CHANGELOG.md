@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- englishAuction's and dutchAuction's `cancel()` is now reachable from the pre-funded state and returns the contract's held item balance, so a seller whose `fund()` was rejected can reclaim the deposit instead of losing it.
+- Both auction templates' `fund()` comments and READMEs no longer claim batching avoids the stranded-deposit exposure; it does not, because a `BATCH` is not atomic.
+- priceBetTimed's `settle()` and `reclaim()` read the cursor-to-tip round range instead of the tip's timestamp, closing a payout flip and a false void when a round carries an earlier timestamp than the round before it.
+- The policy generator rejects a royalty leg address the chain cannot decode, instead of emitting a guard that denies every `ORDER_CREATE`/`SWAP_CREATE` for the token once bound.
+- `patterns/README.md` states that a `SWEEP` guard receives the sweep destination in `to`; only `AIRDROP` and `DIVIDEND` pass an empty recipient.
+- The pattern library and policy generator point at the current `xchain-documentation` filenames.
+- The pattern VM-coverage gate checks every helper rather than one per file, and the e2e suite now runs the seven helpers that had lint coverage only.
+
 ## [0.17.0] - 2026-09-10
 
 ### Added

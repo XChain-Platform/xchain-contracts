@@ -41,7 +41,7 @@ see Known limitations).
 | `initialize(seller, itemTick, itemAmount, bidTick, startPrice, endPrice, durationBlocks)` | deployer | Sets immutable terms (`startPrice > endPrice > 0`); status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; starts the price clock from **this** block; status → `ACTIVE`. |
 | `buy()` | anyone (BATCHed after DEPOSIT) | Must deposit ≥ the current asking price; item → buyer, price → seller, any excess → buyer, all in one call; status → `SOLD`. |
-| `cancel()` | seller, only before any purchase | Returns the item to the seller; status → `CANCELLED`. |
+| `cancel()` | seller, only before any purchase | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, currentPrice, startPrice, endPrice }`. |
 
 **Price spelling:** `startPrice` and `endPrice` must be plain fixed-notation
@@ -135,11 +135,14 @@ await sdk.batch()
   rather than flooring: the ledger re-quantises every emitted amount at write
   time, so an off-grid `itemAmount` would deliver less than advertised -
   nothing at all on a 0-decimal tick - while the buyer paid in full. **The cost
-  of that choice:** a seller who deposits the item in a standalone transaction
-  rather than the `BATCH(DEPOSIT, EXECUTE fund)` above, and is then rejected
-  here, has no in-contract path to reclaim the deposit (`cancel()` requires
-  `ACTIVE`). That is the same exposure the "insufficient item deposit" check
-  already carries. Deposit and fund in one BATCH.
+  of that choice:** the item deposit has already settled by the time `fund()`
+  rejects, and a `BATCH` is not atomic, so batching does *not* roll it back -
+  the item sits in the contract whether the seller deposited in the same `BATCH`
+  or in a standalone transaction. The recovery is `cancel()`, which is reachable
+  from the pre-funded state and returns the contract's held item balance to the
+  seller. The same applies to the "insufficient item deposit" rejection. Note
+  `cancel()` is terminal: a seller who was merely short and would rather retry
+  should deposit the remainder and call `fund()` again.
 
 ## Tests
 

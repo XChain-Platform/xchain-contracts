@@ -88,7 +88,7 @@ Solidity-to-XChain on-ramp tooling.
 
 For the full concept map (`msg.sender`, `msg.value`, `mapping`, `modifier`, and
 worked side-by-side examples), see **Solidity to XChain** in
-`xchain-documentation/developer-guide/Solidity_To_XChain.md`.
+`xchain-documentation/developer-guide/solidity-to-xchain.md`.
 
 ## You do NOT need a reentrancy guard
 
@@ -110,23 +110,35 @@ emit. The `state-machine` and `safe-transfer` patterns encode exactly that
 ordering. If any emitted action later fails validation, the whole execution
 (state changes *and* emissions) is rolled back atomically.
 
-## Writing a controller `guard`: bulk distributions are sender-side only
+## Writing a controller `guard`: bulk moves are invoked once per tick
 
 If your contract is a token controller (bound via `ISSUE` v6, see
-`xchain-documentation/protocol/Controller_Bound_Tokens.md`), remember that bulk
-distribution actions (`AIRDROP`, `DIVIDEND`, `SWEEP` balance moves) invoke your
-`guard` **once per controlled tick, on the sender's aggregate outbound move**:
-`from` is the distributor, `to` is empty, `amount` is the total leaving the
-sender. There is **no per-recipient invocation**; that is a deliberate protocol
-property (bounded VM work, no recipient-side griefing of a whole drop).
+`xchain-documentation/protocol/controller-bound-tokens.md`), remember that bulk
+distribution actions invoke your `guard` **once per controlled tick, on the
+sender's aggregate outbound move**, never once per recipient. That is a
+deliberate protocol property (bounded VM work, no recipient-side griefing of a
+whole drop).
 
-Do not write per-recipient allowlist logic into the bulk branch of a guard; it
-will never see individual recipients. Receive-side policy belongs in **transfer
-restrictions** instead: enforce holder eligibility in the `transfer` guard on the
-token's subsequent `SEND`s and listings (an unapproved holder's dropped balance
-is inert), or deny the aggregate to force individually guarded `SEND`s. Accounts
-that want to refuse unsolicited direct sends use an inbound `ADDRESS` `transfer`
-binding, which likewise does not gate bulk drops.
+The recipient slot differs by action, and the difference is what decides whether
+recipient-side policy is enforceable at all:
+
+- `AIRDROP` and `DIVIDEND` fan out to many holders, so `to` is **empty**: `from`
+  is the distributor and `amount` is the total leaving the sender.
+- A `SWEEP` has exactly ONE destination, so `to` is the sweep **destination**
+  (`from` is the sweep source, `amount` is the balance moving for that tick).
+  The synthetic `SWEEP_OWNERSHIP` invocation carries the same `from` and `to`
+  with an empty `amount`. A guard therefore CAN gate where a sweep sends a
+  controlled balance or hands over a deed. This is still one invocation per
+  tick, not per recipient: a sweep simply has a single recipient.
+
+Do not write per-recipient allowlist logic into the `AIRDROP` / `DIVIDEND`
+branch of a guard; it will never see individual recipients. Receive-side policy
+for those belongs in **transfer restrictions** instead: enforce holder
+eligibility in the `transfer` guard on the token's subsequent `SEND`s and
+listings (an unapproved holder's dropped balance is inert), or deny the
+aggregate to force individually guarded `SEND`s. Accounts that want to refuse
+unsolicited direct sends use an inbound `ADDRESS` `transfer` binding, which
+likewise does not gate bulk drops.
 
 ## License
 

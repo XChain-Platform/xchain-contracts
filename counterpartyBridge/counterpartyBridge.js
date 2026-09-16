@@ -96,7 +96,7 @@ function isPlainDecimal(value) {
 // Quantise a computed amount DOWN to xchainTick's decimal grid before minting.
 // The indexer re-normalises every emitted amount to the tick's decimals at
 // ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
-// NOT half-even, the mode is stated in xchain-indexer/src/xchainPrice.js and
+// NOT half-even, the mode is stated in xchain-indexer/src/consensus/xchain_price.js and
 // pinned by test, because a mis-read mode at the .5 boundary is a consensus
 // fork), which can round a computed
 // quantity UP past maxSupply and revert the whole EXECUTE (see crowdsale.js
@@ -175,7 +175,7 @@ module.exports = {
     abi: { version: 1, methods: {
         requestClaim: { summary: 'Ask the network to check for new burns of cpAsset the caller sent to BURN_ADDRESS', params: [] },
         // onClaim's first four params are the indexer's fixed attestation preamble
-        // (attest.js _injectCallbackExecute); requestClaim() appends [caller], so the
+        // (attest/index.js injectCallbackExecute); requestClaim() appends [caller], so the
         // credited address is slot 4 and the whole list is machine-supplied.
         onClaim:      { summary: 'Callback: mints the equivalent xchainTick for every newly-found burn transaction; the indexer supplies the attestation preamble and the credited address (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'json' }, { name: 'address', type: 'address' } ] },
         claimedTotal: { summary: 'Read how much an address has been credited in total so far', params: [ { name: 'address', type: 'address' } ], view: true },
@@ -267,7 +267,7 @@ module.exports = {
         // The indexer invokes attestation callbacks with the fixed preamble
         // [request_id, provider_id, status, response_payload] followed by
         // whatever custom context array was passed to attestation.request()
-        // (see xchain-indexer's _injectCallbackExecute). requestClaim() passed
+        // (see xchain-indexer's injectCallbackExecute). requestClaim() passed
         // [caller] as that context, so the address we asked about is param 4,
         // not param 1 - param 1 is the provider_id ('http_get').
         var requestId = xchain.getInputParam(0);

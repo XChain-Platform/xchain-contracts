@@ -19,9 +19,18 @@
 const OWNER = '1OwnerAddress';
 const NOTOWNER = '1SomebodyElse';
 
+// Royalty recipients are the ONE config value the chain re-validates: policy-gen
+// gates a leg "to" with a real base58check/bech32 decode, because the indexer
+// denies every trade-class action whose guard returns an undecodable leg. So
+// these two are real checksum-valid addresses (the well-known genesis P2PKH and
+// a P2SH), not the placeholder strings the owner/freeze/allowlist fixtures use -
+// those stay placeholders, since the guard only string-compares them.
+const CREATOR = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa';
+const MARKET  = '3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy';
+
 // A representative matrix: every feature alone, plus the whole stack together.
 const MATRIX = {
-    full: { name: 'Full', owner: OWNER, gates: ['transfer', 'trade'], pausable: true, freeze: ['1Frozen'], allowlist: ['1Good'], royalty: [{ to: '1Creator', bps: 250 }, { to: '1Market', bps: 100 }], maxTakeBps: 1000, permissions: ['SEND'] },
+    full: { name: 'Full', owner: OWNER, gates: ['transfer', 'trade'], pausable: true, freeze: ['1Frozen'], allowlist: ['1Good'], royalty: [{ to: CREATOR, bps: 250 }, { to: MARKET, bps: 100 }], maxTakeBps: 1000, permissions: ['SEND'] },
     pauseOnly: { name: 'PauseOnly', owner: OWNER, gates: ['transfer'], pausable: true },
     freezeOnly: { name: 'FreezeOnly', owner: OWNER, gates: ['transfer', 'trade'], freeze: ['1Frozen'] },
     allowOnly: { name: 'AllowOnly', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'] },
@@ -32,7 +41,7 @@ const MATRIX = {
     // The recipient-only shape: the guard declares `var to` in the allowlist branch
     // itself, since no freeze block is there to declare it.
     allowTo: { name: 'AllowTo', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'], allowlistDirection: 'to' },
-    royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: '1Creator', bps: 500 }] }
+    royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: CREATOR, bps: 500 }] }
 };
 
 // The whole stack with a two-sided allowlist: freeze AND a recipient allowlist both
@@ -40,4 +49,4 @@ const MATRIX = {
 // block for this combination. Derived from `full` so the two stay in lockstep.
 MATRIX.fullBoth = Object.assign({}, MATRIX.full, { name: 'FullBoth', allowlistDirection: 'both' });
 
-module.exports = { OWNER, NOTOWNER, MATRIX };
+module.exports = { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX };

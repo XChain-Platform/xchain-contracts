@@ -55,7 +55,7 @@ const UNIT  = '1';
         // draw() and info() count only DELIVERABLE copies, so they read each stocked
         // card's decimals. The harness's decimals registry is balance-INDEPENDENT
         // (MockLedger) while a node's is not: the indexer builds balances and
-        // tokenInfo from ONE snapshot over SOURCE + the contract address (db.js
+        // tokenInfo from ONE snapshot over SOURCE + the contract address (src/db/index.js
         // buildVmBalancesAndTokenInfo), so a card this contract holds always carries
         // its info in the same snapshot getBalance reads. Seeding the card ticks
         // models that reachability rather than papering over it.

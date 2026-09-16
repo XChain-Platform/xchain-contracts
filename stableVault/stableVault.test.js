@@ -400,7 +400,7 @@ const MAXAGE = '10';        // oracle freshness window, blocks
     //
     // xchain.getTokenInfo is a lookup into a snapshot the indexer builds only
     // from the pre-action balance rows of SOURCE and the contract address
-    // (xchain-indexer/src/db.js, buildVmBalancesAndTokenInfo). borrow() is the
+    // (xchain-indexer/src/db/index.js, buildVmBalancesAndTokenInfo). borrow() is the
     // only source of the stable in existence, and initialize() issues it with no
     // MINT_SUPPLY, so on a fresh deployment neither side holds it and
     // getTokenInfo(stableTick) is null. Every deploy above hides that by seeding

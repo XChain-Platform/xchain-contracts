@@ -106,7 +106,7 @@ npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
 ```
 
 > **On-chain deployment note.** `getBalance()`/`getTokenInfo()` are wired in
-> the live indexer: `xchain-indexer/src/actions/execute.js` builds a balance
+> the live indexer: `xchain-indexer/src/actions/execute/index.js` builds a balance
 > and token-info snapshot (scoped to the caller plus this contract's own
 > address) and passes it to the VM, gated on the `VM_BALANCE_TOKENINFO`
 > flag-day. The flag is active from genesis on testnet/regtest and since

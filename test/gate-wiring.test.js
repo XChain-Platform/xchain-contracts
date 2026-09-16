@@ -48,7 +48,7 @@ function discoverTestFiles(dir, out) {
 
 // Every shipped contract template, by the SAME predicate the two discovery sites
 // use: a directory holding <name>/<name>.js. bin/xchain-contracts.js listAvailable()
-// fans `lint` out over exactly this set, and ../xchain-vm/test/unit/lint-parity.test.js
+// fans `lint` out over exactly this set, and ../xchain-vm/test/unit/lint/lint_parity.test.js
 // runs exactly this set through the authoritative validateSyntax. `patterns`, `lib`,
 // `bin` and `test` drop out naturally because none of them holds <dir>/<dir>.js, so
 // this needs no allowlist that could drift from theirs.
@@ -63,7 +63,7 @@ function discoverTemplates() {
 }
 
 // The injector's fixed attestation preamble, mirroring xchain-indexer/src/actions/
-// attest.js _injectCallbackExecute():
+// attest/index.js injectCallbackExecute():
 //
 //   callbackArgs = [request_id, provider_id, status, response_payload, ...callback_params]
 //
@@ -419,14 +419,27 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'e2e vault silently runs whichever came last: ' + clashes.join(', '));
 
         const e2e = fs.readFileSync(path.join(dir, 'patterns.e2e.test.js'), 'utf8');
-        const offenders = files.filter(f => {
-            const fns = fnsOf(f);
-            return fns.length === 0 || !fns.some(fn => new RegExp('\\b' + fn + '\\s*\\(').test(e2e));
-        });
-        assert.deepStrictEqual(offenders, [],
-            'these pattern sources are listed, scaffolded and linted but no helper of theirs is ' +
-            'ever called in the vault patterns.e2e.test.js deploys, so their VM coverage is ' +
-            'imaginary: ' + offenders.join(', '));
+
+        // Per HELPER, not per file. A file-granular check passes as soon as ONE of a
+        // file's helpers is called, which is how seven shipped helpers - onlyRole,
+        // isOwner, isPaused, requireHeld, depositedSince, requireStatusIn, requireEnum,
+        // among them whole oz-aliases.json rows - carried lint and compile coverage
+        // only while every gate read green.
+        const empty = files.filter(f => fnsOf(f).length === 0);
+        assert.deepStrictEqual(empty, [],
+            'these pattern sources declare no top-level helper at all, so the extraction ' +
+            'predicate has drifted and this guard is inert for them: ' + empty.join(', '));
+
+        const uncalled = [];
+        for (const f of files) {
+            for (const fn of fnsOf(f)) {
+                if (!new RegExp('\\b' + fn + '\\s*\\(').test(e2e)) uncalled.push(f + ':' + fn);
+            }
+        }
+        assert.deepStrictEqual(uncalled, [],
+            'these pattern helpers are listed, scaffolded and linted but never called in any ' +
+            'contract patterns.e2e.test.js deploys, so their VM coverage is imaginary: ' +
+            uncalled.join(', '));
     });
 });
 
@@ -515,7 +528,7 @@ describe('attestation callbacks: arity is the injector\'s, not the contract\'s r
         }
         assert.deepStrictEqual(offenders, [],
             'the indexer sends every attestation callback [request_id, provider_id, status, ' +
-            'response_payload, ...context] (attest.js _injectCallbackExecute), so these declared ' +
+            'response_payload, ...context] (attest/index.js injectCallbackExecute), so these declared ' +
             'signatures are wrong on the wire and anyone reading the abi picks the wrong slot ' +
             'index: ' + offenders.join(', '));
     });

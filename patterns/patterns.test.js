@@ -12,9 +12,26 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
+// xchain-vm's layout pass renamed src/lint-core.js to src/lint_core.js and left
+// nothing behind at the old path, so an adjacent checkout sits on one side of
+// that move or the other. Pinning a single spelling leaves lintSource undefined
+// against the other side, which describe.skip()s this whole file while the suite
+// still reports green, so try the post-move spelling and fall back to the
+// pre-move one.
+const LINT_CORE_SPELLINGS = ['../../xchain-vm/src/lint_core.js',
+                             '../../xchain-vm/src/lint-core.js'];
 let lintSource;
-try { ({ lintSource } = require('../../xchain-vm/src/lint-core.js')); }
-catch (e) { console.log('Skipping pattern lint tests: xchain-vm linter not available (need adjacent xchain-vm install)'); }
+for (const spec of LINT_CORE_SPELLINGS) {
+    try { ({ lintSource } = require(spec)); break; }
+    catch (e) {
+        // Only an unresolvable module falls through: to the next spelling, or to
+        // the skip below when there is no adjacent xchain-vm (or no install in
+        // it) at all. A lint-core that is present and throws while loading is a
+        // real error and must not be swallowed here.
+        if (e.code !== 'MODULE_NOT_FOUND') throw e;
+    }
+}
+if (!lintSource) console.log('Skipping pattern lint tests: xchain-vm linter not available (need adjacent xchain-vm install)');
 
 const DIR = __dirname;
 const PATTERN_FILES = fs.readdirSync(DIR).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));

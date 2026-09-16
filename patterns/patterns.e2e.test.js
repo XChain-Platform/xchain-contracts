@@ -234,3 +234,140 @@ module.exports = {
         assert.strictEqual((await deployWith('0.000000015')).success, true);
     });
 });
+
+// The vault above calls one helper from every pattern file, which is the scope
+// of the file-granular guard in test/gate-wiring.test.js, and that scope leaves
+// seven shipped helpers with lint and compile coverage only, among them the whole
+// XChain answer for the AccessControl (onlyRole), SafeERC20 (requireHeld,
+// depositedSince) and Enumerable (requireEnum) rows of oz-aliases.json, i.e. the
+// first things a Solidity reader pastes. This companion exercises exactly those
+// seven on the isolate: isOwner, onlyRole, isPaused, requireHeld, depositedSince,
+// requireStatusIn, requireEnum. The guard is now per-HELPER, so a new helper that
+// never runs here reddens the gate instead of hiding behind a covered sibling.
+const ROLEVAULT = HELPERS + '\n' + `
+module.exports = {
+    initialize: function (xchain) {
+        var owner   = xchain.getInputParam(0);
+        var arbiter = xchain.getInputParam(1);
+        var tick    = xchain.getInputParam(2);
+        var mode    = xchain.getInputParam(3);
+        requireAddress(xchain, owner, 'owner');
+        requireAddress(xchain, arbiter, 'arbiter');
+        requireEnum(xchain, mode, ['STRICT', 'LENIENT'], 'mode');
+        xchain.state.set('owner', owner);
+        xchain.state.set('arbiter', arbiter);
+        xchain.state.set('tick', tick);
+        xchain.state.set('mode', mode);
+        xchain.state.set('paused', 'false');
+        setStatus(xchain, 'OPEN');
+        // 'reserve' is deliberately NOT seeded: settle()'s first call is what
+        // exercises depositedSince's reserve || '0' default on a null state read.
+    },
+    // The non-throwing branch forms, recorded so a test can read them back.
+    snapshot: function (xchain) {
+        xchain.state.set('sawOwner', isOwner(xchain) ? 'true' : 'false');
+        xchain.state.set('sawPaused', isPaused(xchain) ? 'true' : 'false');
+    },
+    pause: function (xchain) { onlyRole(xchain, 'arbiter'); setPaused(xchain, true); },
+    mark:  function (xchain) {
+        xchain.require(isOwner(xchain), 'owner only');
+        xchain.state.set('reserve', heldBalance(xchain, xchain.state.get('tick')));
+    },
+    hold:  function (xchain) { onlyRole(xchain, 'arbiter'); setStatus(xchain, 'HELD'); },
+    settle: function (xchain) {
+        onlyRole(xchain, 'arbiter');
+        whenNotPaused(xchain);
+        requireStatusIn(xchain, ['OPEN', 'HELD']);
+        var tick   = xchain.state.get('tick');
+        var amount = xchain.getInputParam(0);
+        requireHeld(xchain, tick, amount);
+        xchain.state.set('fresh', depositedSince(xchain, tick, xchain.state.get('reserve')));
+        setStatus(xchain, 'CLOSED');
+    }
+};`;
+
+const ARBITER = 'arbiter';
+
+(XChainVM ? describe : describe.skip)('Patterns: role vault (the branch-form and multi-state helpers)', function () {
+    this.timeout(0);
+    let h;
+
+    // `mode` is passed through verbatim, never defaulted with `||`: an empty mode is
+    // one of the cases under test, and a falsy default would quietly deploy 'STRICT'
+    // instead and turn that assertion into a test of nothing.
+    async function deployRoleVault(mode) {
+        h = new E2EHarness(XChainVM);
+        for (const a of [OWNER, ARBITER, STRANGER]) h.seedBalance(a, 'XCHAIN', '1000000');
+        h.seedBalance(OWNER, TICK, '1000');
+        return h.deploy({
+            code: ROLEVAULT, deployer: OWNER, contractAddress: ADDR,
+            params: [OWNER, ARBITER, TICK, mode === undefined ? 'STRICT' : mode]
+        });
+    }
+
+    it('requireEnum: a mode outside the allowed set is rejected at deploy', async function () {
+        assertSuccess(await deployRoleVault('STRICT'));
+        assertSuccess(await deployRoleVault('LENIENT'));
+        assert.strictEqual((await deployRoleVault('BOGUS')).success, false, 'BOGUS should not deploy');
+        assert.strictEqual((await deployRoleVault('')).success, false, 'an empty mode should not deploy');
+    });
+
+    it('isOwner / isPaused: the non-throwing forms report the caller and the flag', async function () {
+        await deployRoleVault();
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
+        assertContractState(h.ledger, ADDR, 'sawOwner', 'true');
+        assertContractState(h.ledger, ADDR, 'sawPaused', 'false');
+
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: STRANGER }));
+        assertContractState(h.ledger, ADDR, 'sawOwner', 'false');
+
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
+        assertContractState(h.ledger, ADDR, 'sawPaused', 'true');
+    });
+
+    it('onlyRole: the role holder passes and the owner does not inherit the role', async function () {
+        await deployRoleVault();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER }),
+            'not authorized (arbiter)');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: STRANGER }),
+            'not authorized (arbiter)');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
+    });
+
+    it('requireHeld: settling more than the contract holds reverts', async function () {
+        await deployRoleVault();
+        h.deposit(OWNER, ADDR, TICK, '400');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }),
+            'insufficient contract balance of ' + TICK);
+        assertContractState(h.ledger, ADDR, 'status', 'OPEN');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['400'], caller: ARBITER }));
+        assertContractState(h.ledger, ADDR, 'status', 'CLOSED');
+    });
+
+    it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', async function () {
+        await deployRoleVault();
+        h.deposit(OWNER, ADDR, TICK, '500');
+        // No reserve has ever been written, so the helper's `reserve || '0'`
+        // default is what makes this the full held balance.
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
+        assertContractState(h.ledger, ADDR, 'fresh', '500');
+
+        await deployRoleVault();
+        h.deposit(OWNER, ADDR, TICK, '200');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'mark', params: [], caller: OWNER }));
+        h.deposit(OWNER, ADDR, TICK, '300');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
+        assertContractState(h.ledger, ADDR, 'fresh', '300');
+    });
+
+    it('requireStatusIn: OPEN and HELD both settle, CLOSED does not', async function () {
+        await deployRoleVault();
+        h.deposit(OWNER, ADDR, TICK, '500');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'hold', params: [], caller: ARBITER }));
+        assertContractState(h.ledger, ADDR, 'status', 'HELD');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['1'], caller: ARBITER }),
+            'CLOSED not in [OPEN, HELD]');
+    });
+});
