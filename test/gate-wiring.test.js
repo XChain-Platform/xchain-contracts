@@ -48,7 +48,7 @@ function discoverTestFiles(dir, out) {
 
 // Every shipped contract template, by the SAME predicate the two discovery sites
 // use: a directory holding <name>/<name>.js. bin/xchain-contracts.js listAvailable()
-// fans `lint` out over exactly this set, and ../xchain-vm/test/unit/lint_parity.test.js
+// fans `lint` out over exactly this set, and ../xchain-vm/test/unit/lint/lint_parity.test.js
 // runs exactly this set through the authoritative validateSyntax. `patterns`, `lib`,
 // `bin` and `test` drop out naturally because none of them holds <dir>/<dir>.js, so
 // this needs no allowlist that could drift from theirs.
