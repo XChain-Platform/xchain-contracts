@@ -113,6 +113,22 @@ function blankComments(src) {
     return out;
 }
 
+// Return the contract sources an e2e suite deploys (its template literals), comments
+// blanked both outside and inside them, so prose naming a helper never reads as a call.
+function deployedContractCode(src) {
+    const re = /`([^`]*)`/g;
+    const clean = blankComments(src);
+    const bodies = [];
+    let m;
+    while ((m = re.exec(clean)) !== null) bodies.push(blankComments(m[1]));
+    return bodies.join('\n');
+}
+
+// Test whether `code` carries a call site for the top-level helper `fn`.
+function callsHelper(code, fn) {
+    return new RegExp('\\b' + fn + '\\s*\\(').test(code);
+}
+
 // Split a bracketed list at top level. `open` is the index of the opening bracket;
 // returns the trimmed source of each element, or null if the bracket never closes.
 function splitList(src, open) {
@@ -373,7 +389,7 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
         for (const name of discoverTemplates()) {
             const spec = path.join(REPO_DIR, name, name + '.test.js');
             if (!fs.existsSync(spec)) continue;   // named by the previous test
-            const src = fs.readFileSync(spec, 'utf8');
+            const src = blankComments(fs.readFileSync(spec, 'utf8'));
             const bootsVm = /E2EHarness/.test(src) || /e2e[\/\\]helpers[\/\\]harness/.test(src);
             const deploys = /\.deploy\s*\(/.test(src);
             if (!bootsVm || !deploys) offenders.push(name);
@@ -419,7 +435,7 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
             'these helper names are declared in more than one pattern file, so the composed ' +
             'e2e vault silently runs whichever came last: ' + clashes.join(', '));
 
-        const e2e = fs.readFileSync(path.join(dir, 'patterns.e2e.test.js'), 'utf8');
+        const e2e = deployedContractCode(fs.readFileSync(path.join(dir, 'patterns.e2e.test.js'), 'utf8'));
 
         // Per HELPER, not per file. A file-granular check passes as soon as ONE of a
         // file's helpers is called, which is how seven shipped helpers - onlyRole,
@@ -434,13 +450,25 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
         const uncalled = [];
         for (const f of files) {
             for (const fn of fnsOf(f)) {
-                if (!new RegExp('\\b' + fn + '\\s*\\(').test(e2e)) uncalled.push(f + ':' + fn);
+                if (!callsHelper(e2e, fn)) uncalled.push(f + ':' + fn);
             }
         }
         assert.deepStrictEqual(uncalled, [],
             'these pattern helpers are listed, scaffolded and linted but never called in any ' +
             'contract patterns.e2e.test.js deploys, so their VM coverage is imaginary: ' +
             uncalled.join(', '));
+    });
+
+    // Guard the helper scan itself: a helper named only in prose, in the test code or in
+    // a deployed contract's own comments, must stay uncalled.
+    it('a helper named only in a comment does not read as called', function () {
+        const contract = (body) => '// see requireFoo(xchain) below\n' +
+            'const C = HELPERS + `\nmodule.exports = { m: function (xchain) {\n' +
+            '    // requireFoo(xchain) runs here\n    /* requireFoo(xchain) */\n' + body + '} };`;\n';
+        assert.strictEqual(callsHelper(deployedContractCode(contract('')), 'requireFoo'), false,
+            'a comment-only mention of requireFoo read as a call site');
+        assert.strictEqual(callsHelper(deployedContractCode(contract('    requireFoo(xchain);\n')), 'requireFoo'), true,
+            'a real requireFoo call inside the deployed contract was not found');
     });
 });
 
