@@ -103,7 +103,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
