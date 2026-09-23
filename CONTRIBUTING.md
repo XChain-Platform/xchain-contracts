@@ -130,7 +130,7 @@ Rules:
 - **Any edit to a template's source bumps `meta.version`** in the same commit: patch for a comment or doc-only change, minor for new behaviour, major for a change that breaks an existing deployment's assumptions. Deployed copies are immutable, so the version is the only thing that tells a reader which revision of the template a given contract was deployed from.
 - Generated guards get their `meta` from `lib/policy-gen.js`, which defaults `name` from the policy config's `name`, `description` to a sentence naming the gated action classes and the enforced rules, and `version` to `1.0.0`; a caller-supplied `meta` overrides those field by field.
 
-Template source is vendored base64 into the SDK (`xchain-sdk/src/contract/templates.js`, sha256-pinned by its `template-parity` test), so run the SDK's `npm run sync:templates` in the same commit as any template edit.
+The SDK vendors part of this library base64 into `xchain-sdk/src/contract/templates.js`, sha256-pinned by its `template-parity` test: every file in `patterns/`, plus only the templates named by `TEMPLATE_NAMES` in `xchain-sdk/scripts/sync-templates.js`. Run the SDK's `npm run sync:templates` in the same change as any edit to one of those files. A template outside that list is not in the SDK, so `sdk.scaffold()` cannot return it and no SDK check sees its edits.
 
 ---
 
