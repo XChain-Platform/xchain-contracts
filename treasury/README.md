@@ -101,7 +101,12 @@ conventions, then (guardian mode) asks the guardian to bind it:
 - `TICK` = the governance token, spelled exactly as `govTick` was at deploy.
   `arm()` compares the two as strings and reverts on any other electorate.
 - `OPTIONS`: the approval option **first**. `arm()` rejects any winner other
-  than option 0, so multi-option and "reject" polls cannot move funds.
+  than option 0, so multi-option and "reject" polls cannot move funds. The
+  protocol breaks an exact weight tie toward the lowest option index, so a
+  tied poll reports option 0 as its winner and **arms**; `executeProposal()`
+  then refuses to pay unless option 0 strictly outweighs every other option.
+  Only a strict plurality is enforced: a community that wants more must
+  express it through the poll's `QUORUM` and option design.
 - Set `QUORUM` and `MIN_VOTERS`. The protocol reports both gates as met when
   they were never configured, so the callback's gate check cannot distinguish
   "met" from "absent"; the guardian checks they are real before binding.
@@ -168,6 +173,11 @@ conventions, then (guardian mode) asks the guardian to bind it:
 - **No quorum introspection.** The contract sees only met/not-met flags, which
   read "met" when the poll set no gates at all. Poll hygiene is the guardian's
   job (guardian mode) or the community's (open mode).
+- **A tied poll still arms.** The finalization callback carries only the
+  winning option's index, not per-option weights, so `arm()` cannot see a tie;
+  `executeProposal()` catches it from the poll snapshot and never pays out.
+  Until then the proposal reads `ARMED` for the whole timelock: the guardian
+  can veto it, and otherwise it expires with the execution window.
 
 ## Tests
 

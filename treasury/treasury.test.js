@@ -73,7 +73,8 @@ function passedPoll() {
     // Simulate the VOTE finalization callback: a system-injected EXECUTE whose
     // SOURCE is the callback contract itself (VOTE spec, Binding polls). The
     // argument order is the post-VOTE_POLL_TICK_VISIBLE one the indexer builds
-    // in xchain-indexer/src/actions/vote.js: the electorate tick is inserted
+    // in xchain-indexer/src/actions/vote/binding_callback.js
+    // (buildCallbackParams): the electorate tick is inserted
     // after min_voters_met, ahead of the developer CALLBACK_PARAMS.
     function pollCallback(proposalId, overrides) {
         const o = overrides || {};
@@ -308,6 +309,49 @@ function passedPoll() {
             h.ledger.seedPollResult(POLL, { ...passedPoll(), tick: 'JUNK' });
             assertReverted(await call('executeProposal', ['1'], HOLDER), 'poll electorate is not the governance token');
             assert.strictEqual(await proposalStatus(), 'ARMED');
+        });
+
+        it('an exact weight tie arms (lowest-index tie-break) but cannot pay out', async function () {
+            await proposeAndArm();
+            assert.strictEqual(await proposalStatus(), 'ARMED');
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '4000', voters: 12 }] });
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertReverted(r, 'did not strictly outweigh every other option');
+            assertBalance(h.ledger, PAYEE, PAY, '0');
+            assert.strictEqual(await proposalStatus(), 'ARMED');
+        });
+
+        it('a tie on a later option also blocks the payout', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '10', voters: 1 },
+                { index: 2, weight: '4000', voters: 9 }] });
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'did not strictly outweigh every other option');
+        });
+
+        it('a strict win by the smallest margin still pays out', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '3999.999999999999999999', voters: 11 }] });
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: PAYEE, tick: PAY, quantity: '400' } }]);
+            assert.strictEqual(await proposalStatus(), 'EXECUTED');
+        });
+
+        it('a snapshot without the approval option row cannot pay out', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [] });
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'did not strictly outweigh every other option');
         });
 
         it('an underfunded treasury reverts instead of part-paying', async function () {

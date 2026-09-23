@@ -282,7 +282,8 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
 
     // Guard the param SHAPE the check above does not reach (the fail-closed readers drop
     // a whole method entry, summary and view included, on one malformed params element).
-    // ABI_PARAM_TYPES mirrors xchain-sdk/src/contract/abi-core.js:40, the source of truth.
+    // ABI_PARAM_TYPES copies the type table in xchain-documentation/protocol/contract-abi.md,
+    // the source of truth; the platform root's param-type parity gate reads this literal, so keep it inline.
     it('every abi method declares its params as { name, type } object literals', function () {
         const ABI_PARAM_TYPES = ['string', 'number', 'amount', 'address', 'tick', 'bool', 'json'];
         const offenders = [];
