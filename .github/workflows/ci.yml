@@ -57,6 +57,16 @@ jobs:
           ssh-key: ${{ secrets.XCHAIN_VM_DEPLOY_KEY }}
           path: xchain-vm
 
+      # Required, not optional: test/poll-callback-wiring.test.js pins treasury.arm
+      # to the poll callback wire the indexer declares, and fails when it is absent.
+      # Read as source only (builtins-only module), so it needs no install step.
+      - name: Check out the xchain-indexer sibling
+        uses: actions/checkout@v4
+        with:
+          repository: XChain-Platform/xchain-indexer
+          ref: ${{ github.ref == 'refs/heads/master' && 'master' || 'develop' }}
+          path: xchain-indexer
+
       # Node 22 exactly. The VM's consensus runtime pins the Node ABI to 127, so
       # results taken on another major are not the fleet's, and a VM that fails
       # to load makes these suites SKIP rather than fail (see bin/ci-preflight.js).

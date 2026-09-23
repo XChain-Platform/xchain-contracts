@@ -15,3 +15,7 @@
 # and the assertions helper bin/ci-preflight.js proves loadable before CI runs
 # a single test.
 xchain-vm
+# The binding-poll callback wire declaration test/poll-callback-wiring.test.js
+# pins treasury.arm to. Its builder module loads with Node builtins only, so no
+# build step is needed; the test fails, never skips, when this is absent.
+xchain-indexer

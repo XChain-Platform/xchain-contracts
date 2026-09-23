@@ -590,7 +590,8 @@ describe('attestation callbacks: arity is the injector\'s, not the contract\'s r
 
     // The inverse direction, keyed on behaviour rather than on the word "callback" in a
     // summary (treasury.arm is a POLL finalization callback with a different, longer
-    // wire). A method that reads an attestation response is one the injector fires, so
+    // wire, pinned to the indexer's declaration in test/poll-callback-wiring.test.js).
+    // A method that reads an attestation response is one the injector fires, so
     // if no attestation.request() in the same template registers it, nothing anywhere
     // pins its declared arity to the preamble - which is the state every callback in
     // this repo was in until the check above existed.
