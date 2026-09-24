@@ -40,16 +40,19 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 SIB="$(cd .. && pwd)"
 
 FAILED=""
+# >>> ci-tier timer (generated block; re-run the tier wirer to update) >>>
 run_tier() {
   local name="$1"; shift
+  local __ci_tier_t0=$SECONDS
   echo; echo "ci:full ===== $name ====="
   if "$@"; then
-    echo "ci:full ----- $name PASS"
+    echo "ci:full ----- $name PASS ($(( SECONDS - __ci_tier_t0 ))s)"
   else
     FAILED="$FAILED [$name]"
-    echo "ci:full ----- $name FAIL"
+    echo "ci:full ----- $name FAIL ($(( SECONDS - __ci_tier_t0 ))s)"
   fi
 }
+# <<< ci-tier timer <<<
 need_sib() {
   local s
   for s in "$@"; do
