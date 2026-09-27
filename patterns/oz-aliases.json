@@ -66,7 +66,7 @@
       "oz": "ERC2981 (royalties)",
       "file": null,
       "helpers": [],
-      "note": "Use a controller-bound token (ISSUE v6 binding a guard contract): the royalty/transfer rule is enforced by the protocol on every transfer and cannot be bypassed by a marketplace."
+      "note": "Use a controller-bound token (ISSUE v6 binding a guard contract): the royalty/transfer rule is enforced by the protocol on every transfer and cannot be bypassed by a marketplace. A DEPOSIT into and a WITHDRAW out of contract custody run the `transfer` guard only from the `CONTROLLER_CUSTODY_GUARD` flag day."
     },
     {
       "oz": "Enumerable / EnumerableSet",
