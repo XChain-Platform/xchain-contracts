@@ -521,12 +521,23 @@ function exceedsExactly(xchain, a, b) {
     return false;
 }
 
-function loadProposal(xchain, id) {
-    xchain.require(id && xchain.math.gt(id, '0') &&
-        xchain.math.lte(id, xchain.state.get('proposal_count')), 'unknown proposal');
-    return JSON.parse(xchain.state.get('proposal:' + parseInt(id)));
+// Return the storage key for a proposal id, reverting unless it is the exact decimal
+// string propose() returned, in [1, proposal_count]. A mathjs range check and a parseInt
+// key disagree on '1e1' or '1.9', so the check and the record could name different proposals.
+function proposalKey(xchain, id) {
+    var s = (id === null || id === undefined) ? '' : String(id);
+    var n = parseInt(s, 10);
+    xchain.require(String(n) === s && n >= 1 &&
+        n <= parseInt(xchain.state.get('proposal_count'), 10), 'unknown proposal');
+    return 'proposal:' + s;
 }
 
+// Read a proposal record by its canonical id.
+function loadProposal(xchain, id) {
+    return JSON.parse(xchain.state.get(proposalKey(xchain, id)));
+}
+
+// Write a proposal record by its canonical id.
 function saveProposal(xchain, id, rec) {
-    xchain.state.set('proposal:' + parseInt(id), JSON.stringify(rec));
+    xchain.state.set(proposalKey(xchain, id), JSON.stringify(rec));
 }

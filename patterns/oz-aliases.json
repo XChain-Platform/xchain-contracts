@@ -66,7 +66,7 @@
       "oz": "ERC2981 (royalties)",
       "file": null,
       "helpers": [],
-      "note": "Use a controller-bound token (ISSUE v6 binding a guard contract): the royalty/transfer rule is enforced by the protocol on every transfer and cannot be bypassed by a marketplace. A DEPOSIT into and a WITHDRAW out of contract custody run the `transfer` guard only from the `CONTROLLER_CUSTODY_GUARD` flag day."
+      "note": "Use a controller-bound token (ISSUE v6 binding a guard contract). The royalty split (the guard's payoutLegs) applies only to the on-ledger proceeds of ORDER_CREATE and SWAP_CREATE listings, recorded at listing and applied at match; a plain SEND has no proceeds, so no royalty is taken on it (the guard can still revert it). Known gaps: dispensers pay no split, because DISPENSER_CREATE honours only a revert and discards the legs, so a guard that means to enforce a cut must revert on DISPENSER_CREATE, and a dispenser opened before the bind is never guarded; native-coin (COINPay) proceeds are off-ledger and never split, and a trade guard can revert to forbid such listings. A royalty-bearing cross-chain listing is not a way around the split: it is denied at create until the CROSS_CHAIN_ROYALTY flag day, and after it every leg must re-encode to the proceeds chain. See xchain-documentation/protocol/controller-bound-tokens.md. A DEPOSIT into and a WITHDRAW out of contract custody run the `transfer` guard only from the `CONTROLLER_CUSTODY_GUARD` flag day."
     },
     {
       "oz": "Enumerable / EnumerableSet",

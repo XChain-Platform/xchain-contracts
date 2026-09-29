@@ -65,7 +65,8 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
 
 - **Caller lies about the deposit.** `fund()` ignores any amount in the call and
   reads the on-chain balance via `getBalance(self, tick)`. An underfunded escrow
-  cannot be armed.
+  cannot be armed. The custody check is exact, not tolerance-based, so a deposit
+  even one base unit short of `amount` is rejected.
 - **Unauthorized settlement.** `release`/`refund`/`timeout` check
   `getSourceAddress()` against the stored roles. A stranger - or the wrong party
   (seller calling `release`, buyer calling `refund`) - is rejected.

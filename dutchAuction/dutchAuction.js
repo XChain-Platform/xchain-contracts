@@ -217,8 +217,9 @@ module.exports = {
         var held    = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
 
         // Refuse a price the grid floored to nothing (the constructor gates endPrice's
-        // notation, never the grid). Same guard as treasury.js:339, and without it
-        // gte(held, '0') hands the item to a caller who deposited nothing.
+        // notation, never the grid). Same guard as treasury.js executeProposal()'s
+        // below-one-unit check, and without it gte(held, '0') hands the item to a
+        // caller who deposited nothing.
         xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
 
         xchain.require(xchain.math.gte(held, price), 'insufficient payment for the current price (' + price + ')');

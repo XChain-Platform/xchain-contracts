@@ -95,7 +95,7 @@ module.exports = {
         repay:     { summary: 'Burn up to the vault\'s debt and refund any excess (BATCH after a stable DEPOSIT)', params: [] },
         withdraw:  { summary: 'Return collateral to the vault owner, refused below the minimum ratio; oracle-free when the debt is 0', params: [ { name: 'amount', type: 'amount' } ] },
         liquidate: { summary: 'Burn an under-water vault\'s debt and take its collateral plus the bonus (BATCH after a stable DEPOSIT covering the debt)', params: [ { name: 'vaultOwner', type: 'address' } ] },
-        vault:     { summary: 'Read one address\'s collateral, debt and ratio', params: [ { name: 'addr', type: 'address' } ], view: true },
+        vault:     { summary: 'Read one address\'s collateral and debt', params: [ { name: 'addr', type: 'address' } ], view: true },
         info:      { summary: 'Read the vault system configuration and totals', params: [], view: true }
     } },
 

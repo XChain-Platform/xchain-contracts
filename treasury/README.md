@@ -90,6 +90,13 @@ would have armed a 1-block one, defense #3 would collapse, and the pending
 transfer every holder is meant to see coming would be executable almost
 immediately.
 
+Every `proposalId` argument, including the poll's `CALLBACK_PARAMS =
+[proposalId]`, must be the canonical decimal id exactly as `propose()` returned
+it (for example `"10"`). Any other spelling (`"1e1"`, `"010"`, `"10.0"`, `"+10"`)
+reverts with `unknown proposal` instead of resolving to some other proposal, so
+a guardian's `approvePoll` and a poll's visible id always bind the proposal they
+name.
+
 Funding needs no method call: `DEPOSIT` any tick to the contract address at any
 time.
 

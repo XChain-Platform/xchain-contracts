@@ -118,6 +118,36 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             await deploy();
             assertReverted(await claim(), 'vesting not active');
         });
+
+        // Pin the exact custody check: a tolerant gte (relTol 1e-12) admits a deposit up
+        // to 100 base units short of a 1,000,000 total, and the final claim then reverts.
+        describe('fund() custody check is exact (no mathjs tolerance)', function () {
+            const BIG = '1000000';
+            async function deployBig() {
+                await deploy('false', BIG);
+                h.seedBalance(GRANTOR, TICK, '2000000');
+            }
+
+            it('rejects a deposit one base unit short of total', async function () {
+                await deployBig();
+                assertReverted(await fund('999999.99999999'), 'insufficient deposit');
+            });
+
+            it('rejects a deposit 100 base units short (the top of the old tolerance band)', async function () {
+                await deployBig();
+                assertReverted(await fund('999999.999999'), 'insufficient deposit');
+            });
+
+            it('accepts exactly total, and the final claim drains custody to zero', async function () {
+                await deployBig();
+                assertSuccess(await fund(BIG));
+                atElapsed(DURATION);
+                const r = await claim();
+                assertSuccess(r);
+                assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: BIG } }]);
+                assertContractBalance(h.ledger, ADDR, TICK, '0');
+            });
+        });
     });
 
     describe('revocation', function () {

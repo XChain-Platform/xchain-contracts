@@ -100,7 +100,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -163,7 +163,9 @@ module.exports = {
         var tick  = xchain.state.get('tick');
         var total = xchain.state.get('total');
         var held  = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
-        xchain.require(xchain.math.gte(held, total), 'insufficient deposit');
+        // Require custody of the full total, compared exactly: a grant armed short
+        // of `total` makes the final claim's SEND exceed custody and revert.
+        xchain.require(isAtLeastExact(xchain, held, total), 'insufficient deposit');
 
         xchain.state.set('start', String(xchain.getBlockHeight()));
         xchain.state.set('status', 'ACTIVE');
@@ -300,4 +302,17 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte treats values within a 1e-12 relative tolerance as equal, so it
+// cannot guard custody. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
 }

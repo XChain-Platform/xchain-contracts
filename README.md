@@ -104,6 +104,12 @@ class, so the guard runs when a holder opens a dispenser, but the dispenser path
 honours only a revert; the legs are discarded and dispenser sales pay no split.
 A holder can therefore sell a royalty-bearing token through a dispenser
 royalty-free, and a dispenser opened before the bind is never guarded at all.
+A cross-chain `ORDER_CREATE` or `SWAP_CREATE` (proceeds on another chain) of a
+royalty-bearing token is denied while the network's `CROSS_CHAIN_ROYALTY`
+protocol change is inactive; once it is active, every leg `to` must also be
+payable on the proceeds chain (re-encodable to its address format), or the
+listing is denied. The generator cannot check this, because the proceeds chain
+is chosen per listing.
 The generated header and the printed bind hints repeat this whenever a
 `royalty` is configured.
 

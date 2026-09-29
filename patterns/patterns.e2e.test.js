@@ -274,6 +274,10 @@ module.exports = {
         xchain.state.set('reserve', heldBalance(xchain, xchain.state.get('tick')));
     },
     hold:  function (xchain) { onlyRole(xchain, 'arbiter'); setStatus(xchain, 'HELD'); },
+    // Record isAtLeastExact's verdict on two amounts so a test can read it back.
+    atLeast: function (xchain) {
+        xchain.state.set('atLeast', isAtLeastExact(xchain, xchain.getInputParam(0), xchain.getInputParam(1)) ? 'true' : 'false');
+    },
     settle: function (xchain) {
         onlyRole(xchain, 'arbiter');
         whenNotPaused(xchain);
@@ -345,6 +349,23 @@ const ARBITER = 'arbiter';
         assertContractState(h.ledger, ADDR, 'status', 'CLOSED');
     });
 
+    // A tolerant gte reads 100000 as covering 100000.00000001 (1e-12 relative), so
+    // pin that isAtLeastExact and requireHeld decide by the exact sign, per base unit.
+    it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', async function () {
+        await deployRoleVault();
+        const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
+            ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true']];
+        for (const [a, b, want] of CASES) {
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'atLeast', params: [a, b], caller: OWNER }));
+            assertContractState(h.ledger, ADDR, 'atLeast', want);
+        }
+        h.seedBalance(OWNER, TICK, '200000');
+        h.deposit(OWNER, ADDR, TICK, '100000');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000.00000001'], caller: ARBITER }),
+            'insufficient contract balance of ' + TICK);
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000'], caller: ARBITER }));
+    });
+
     it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', async function () {
         await deployRoleVault();
         h.deposit(OWNER, ADDR, TICK, '500');
@@ -371,3 +392,4 @@ const ARBITER = 'arbiter';
             'CLOSED not in [OPEN, HELD]');
     });
 });
+

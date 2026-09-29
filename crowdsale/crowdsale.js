@@ -113,6 +113,19 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(n >= min && n <= max, msg);
 }
 
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte/lte treat values within a 1e-12 relative tolerance as equal, so they
+// cannot guard the caps. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -121,7 +134,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues its own sale token at deploy and mints it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -153,7 +166,8 @@ module.exports = {
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
         xchain.require(rate && xchain.math.gt(rate, '0'), 'rate must be positive');
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
-        xchain.require(hardCap && xchain.math.gte(hardCap, softCap), 'hardCap must be >= softCap');
+        // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
+        xchain.require(hardCap && isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
         // Shape-check the window, do NOT parseInt-then-range-check it. This is the
         // same discipline saleDecimals gets nine lines below, and for the same
         // reason: durationBlocks is raw deployer text measured in the same deploy
@@ -216,7 +230,9 @@ module.exports = {
 
         var raised = xchain.state.get('raised');
         var newRaised = xchain.math.add(raised, contributed);
-        xchain.require(xchain.math.lte(newRaised, xchain.state.get('hardCap')), 'hard cap exceeded');
+        // Refuse a raise past hardCap, compared exactly: a tolerant gate lets the claims
+        // sum past the token's exact MAX_SUPPLY and strands the last claimer.
+        xchain.require(isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised), 'hard cap exceeded');
 
         var caller = xchain.getSourceAddress();
         var prior  = xchain.state.get('c:' + caller) || '0';
@@ -230,12 +246,14 @@ module.exports = {
     finalize: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'already finalized');
         var raised  = xchain.state.get('raised');
-        var atCap   = xchain.math.gte(raised, xchain.state.get('hardCap'));
+        // Allow an early close only once the hard cap is met exactly.
+        var atCap   = isAtLeastExact(xchain, raised, xchain.state.get('hardCap'));
         var expired = xchain.getBlockHeight() >= parseInt(xchain.state.get('deadline'));
         xchain.require(atCap || expired, 'sale still open');
 
+        // Succeed only when the soft cap is met exactly; one base unit short refunds.
         xchain.state.set('status',
-            xchain.math.gte(raised, xchain.state.get('softCap')) ? 'SUCCESS' : 'FAILED');
+            isAtLeastExact(xchain, raised, xchain.state.get('softCap')) ? 'SUCCESS' : 'FAILED');
     },
 
     // claim(): buyer mints their purchased sale tokens (successful sale only).
