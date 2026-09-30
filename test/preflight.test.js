@@ -36,9 +36,64 @@
 'use strict';
 
 const assert = require('assert');
+const fs     = require('fs');
+const os     = require('os');
 const path   = require('path');
+const { execFileSync } = require('child_process');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
+const ROOT   = path.join(__dirname, '..');
+
+// A suite file that registers no test at all reads green: mocha loads it, has
+// nothing to run, and exits 0. Registration is counted by loading each file into
+// a private Mocha instance in a child process (a same-process load would leave
+// the files in the require cache and starve the real run), so every way a file
+// can end up empty is caught by what it registers, not by how it is written.
+const COUNT_SCRIPT = [
+    "const loaded = require(process.env.PREFLIGHT_MOCHA);",
+    "const Mocha = loaded.Mocha || loaded;",
+    "const out = {};",
+    "const count = (s) => s.tests.length + s.suites.reduce((n, c) => n + count(c), 0);",
+    "const load = (file) => new Promise((resolve) => {",
+    "  const m = new Mocha();",
+    "  m.addFile(file);",
+    "  m.loadFiles();",
+    "  resolve({ count: count(m.suite) });",
+    "}).then((r) => r, (e) => ({ error: String(e && e.message || e).split('\\n')[0] }));",
+    "(async () => {",
+    "  for (const file of process.argv.slice(1)) out[file] = await load(file);",
+    "  process.stdout.write(JSON.stringify(out));",
+    "})();"
+].join('\n');
+
+function mochaEntry() {
+    return require.resolve('mocha', {
+        paths: [ROOT, path.dirname(fs.realpathSync(process.argv[1]))]
+    });
+}
+
+function registrationProblems(files) {
+    const raw = execFileSync(process.execPath, ['-e', COUNT_SCRIPT, '--'].concat(files), {
+        cwd: ROOT, env: Object.assign({}, process.env, { PREFLIGHT_MOCHA: mochaEntry() }), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024
+    });
+    const found = JSON.parse(raw);
+    const problems = [];
+    for (const file of files) {
+        const r = found[file];
+        if (!r) problems.push(file + ': not reported');
+        else if (r.error) problems.push(file + ': failed to load (' + r.error + ')');
+        else if (r.count < 1) problems.push(file + ': registers zero tests');
+    }
+    return problems;
+}
+
+function listedSuiteFiles() {
+    const spec = require(path.join(ROOT, 'package.json')).scripts.test;
+    return spec.split(/\s+/)
+        .filter(function (t) { return /\.js$/.test(t); })
+        .filter(function (t) { return path.resolve(ROOT, t) !== __filename; })
+        .map(function (t) { return path.resolve(ROOT, t); });
+}
 
 // A raw ERR_DLOPEN_FAILED stack says the binding did not load; it does not say
 // that the rest of the report is meaningless. The banner does, and it is
@@ -127,5 +182,54 @@ describe('Preflight: the xchain-vm harness must be usable', function () {
             'trivial contract failed to execute: ' + r.error);
         assert.strictEqual(JSON.parse(r.returnValue), 'ok');
         harnessUsable = true;
+    });
+});
+
+describe('Preflight: no listed suite may register zero tests', function () {
+    this.timeout(0);
+
+    it('every suite wired into `npm test` registers at least one test', function () {
+        const files = listedSuiteFiles();
+        assert.ok(files.length > 0, 'no suite files found in scripts.test');
+        assert.deepStrictEqual(registrationProblems(files), [],
+            'a suite that registers nothing reports green while proving nothing');
+    });
+
+    describe('the registration check', function () {
+        const CATCH = 'catch';
+        const SHAPES = {
+            'empty file':            '',
+            'early return':          "describe('x', function () { return; it('a', function () {}); });",
+            'test after a return':   "describe('x', function () { function f() { return 1; it('a', function () {}); } f(); });",
+            'uninvoked callback':    "function later() { describe('x', function () { it('a', function () {}); }); }",
+            'catch-only test':       "describe('x', function () { try { 1; } " + CATCH + " (e) { it('a', function () {}); } });"
+        };
+        let dir;
+        before(function () { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-shapes-')); });
+        after(function () { fs.rmSync(dir, { recursive: true, force: true }); });
+
+        function write(name, body) {
+            const file = path.join(dir, name.replace(/\s+/g, '_') + '.test.js');
+            fs.writeFileSync(file, body);
+            return file;
+        }
+
+        Object.keys(SHAPES).forEach(function (name) {
+            it('fails ' + name, function () {
+                const problems = registrationProblems([write(name, SHAPES[name])]);
+                assert.strictEqual(problems.length, 1);
+                assert.ok(/registers zero tests/.test(problems[0]), problems[0]);
+            });
+        });
+
+        it('fails a file that throws while loading', function () {
+            const problems = registrationProblems([write('throws', "throw new Error('boom');")]);
+            assert.ok(/failed to load/.test(problems[0]), String(problems[0]));
+        });
+
+        it('passes one real, invoked test', function () {
+            const file = write('real', "describe('x', function () { it('a', function () {}); });");
+            assert.deepStrictEqual(registrationProblems([file]), []);
+        });
     });
 });

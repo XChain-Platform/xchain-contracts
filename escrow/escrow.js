@@ -64,7 +64,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: a buyer deposits tokens for a seller, and the funds are released, refunded, or reclaimed after a deadline only on an authorized instruction from the buyer, the seller, or the arbiter.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -136,7 +136,9 @@ module.exports = {
         var amount = xchain.state.get('amount');
         var held   = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
 
-        xchain.require(xchain.math.gte(held, amount), 'insufficient deposit');
+        // Require custody of the full amount, compared exactly, so the payee is never
+        // settled a dust margin short of the agreed terms.
+        xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient deposit');
 
         xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
         xchain.state.set('status', 'FUNDED');
@@ -223,4 +225,17 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte treats values within a 1e-12 relative tolerance as equal, so it
+// cannot guard custody. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
 }

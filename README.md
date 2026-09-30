@@ -50,10 +50,11 @@ npx xchain-contracts lint my-escrow.js
 #    sdk.deploy({ CODE: fs.readFileSync('my-escrow.js','utf8'), GAS_LIMIT: '200000' }, encoder)
 ```
 
-Prefer to stay in JS? The SDK exposes the same library: `sdk.scaffold('escrow')`
-returns the source, `sdk.validateContract(source)` runs the advisory linter (no
-Node-22 requirement), and `sdk.deploy(..., { lint })` blocks a guaranteed-to-fail
-deploy. See the [developer guide](https://docs.xchain.io).
+Prefer to stay in JS? The SDK embeds every pattern and a subset of the
+templates, the ones `sdk.listTemplates()` names (the rest are CLI-only):
+`sdk.scaffold('escrow')` returns the source, `sdk.validateContract(source)` runs
+the advisory linter (no Node-22 requirement), and `sdk.deploy(..., { lint })`
+blocks a guaranteed-to-fail deploy. See the [developer guide](https://docs.xchain.io).
 
 Reusable building blocks (access control, pausable, safe-transfer, input
 validation, state machines) live in [`patterns/`](./patterns/README.md); paste
@@ -103,6 +104,12 @@ class, so the guard runs when a holder opens a dispenser, but the dispenser path
 honours only a revert; the legs are discarded and dispenser sales pay no split.
 A holder can therefore sell a royalty-bearing token through a dispenser
 royalty-free, and a dispenser opened before the bind is never guarded at all.
+A cross-chain `ORDER_CREATE` or `SWAP_CREATE` (proceeds on another chain) of a
+royalty-bearing token is denied while the network's `CROSS_CHAIN_ROYALTY`
+protocol change is inactive; once it is active, every leg `to` must also be
+payable on the proceeds chain (re-encodable to its address format), or the
+listing is denied. The generator cannot check this, because the proceeds chain
+is chosen per listing.
 The generated header and the printed bind hints repeat this whenever a
 `royalty` is configured.
 
@@ -188,9 +195,16 @@ follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 ## Linting
 
 `xchain-contracts lint` runs each contract through the VM's full deploy-time
-validation (V8 syntax, the acorn metering pass, reserved identifiers, banned
-`Math.*`, banned `BigInt`/`RegExp` literals) plus the logic-level advisories
-(crossCallable integrity, unbounded loops, unchecked `state.get`, …). A clean
+validation: V8 syntax, the `code-size` cap (65,536 bytes of UTF-8 source, the
+64 KiB deploy ceiling), and every deploy-blocking rule in `CONSENSUS_RULES`
+(`xchain-vm/src/lint_core.js`, the authoritative list): `invalid-type`,
+`unsupported-syntax` (the acorn metering pass), `reserved-identifier`,
+`banned-math` (`Math.*` outside the deterministic subset), `banned-literal`
+(`BigInt`/`RegExp` literals), `banned-async` (`async`/`await`, `Promise`),
+`banned-generator` (`function*`, `yield`), `banned-wasm` (any `WebAssembly`
+reference) and `banned-rest` (rest parameters and the other unmetered rest
+positions). It adds the logic-level advisories (crossCallable integrity,
+unbounded loops, unchecked `state.get`, …). A clean
 result is a conservative preflight, **not** exact deploy parity: the rule set is a
 superset of the live deploy gate (future and mainnet-gated rules are enforced
 immediately, and a malformed `crossCallable` is a linter error the chain itself

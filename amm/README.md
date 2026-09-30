@@ -77,6 +77,14 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   so an unbalanced deposit can't mint extra shares; the surplus enriches the pool.
 - **Double / unauthorized settlement.** Each path keys off the caller and the
   balance delta within one atomic execution; emissions and state commit together.
+- **Owner draining the pool with WITHDRAW.** From the `OWNER_WITHDRAW_OPT_IN` flag
+  day this template omits `ownerWithdraw` from its meta, so the deployer's own raw
+  WITHDRAW action is refused; tokens leave the pool only through `swap` /
+  `removeLiquidity`'s own emitted sends. A pool deployed before the flag day still
+  lets its deployer WITHDRAW, and WITHDRAW never runs contract code, so it drains
+  custody while `reserveA` / `reserveB` stay put: the pool then owes more than it
+  holds, the next deposit is short by the gap, and a payout can fail. Such pools
+  should be redeployed.
 - **A reverted call's DEPOSIT is not rolled back.** BATCH sub-actions are not
   all-or-nothing, so when the EXECUTE reverts the DEPOSIT batched ahead of it has
   already settled and stays in pool custody with reserves unchanged. Every

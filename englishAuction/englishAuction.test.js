@@ -170,6 +170,14 @@ const ADDR   = 'C:BTC:1';
             assertContractState(h.ledger, ADDR, 'highBid', '0');
         });
 
+        it('a bid exactly equal to the minimum is accepted (minBid is inclusive)', async function () {
+            await deployAuction();
+            await depositAndFund();
+            assertSuccess(await bid('alice', '50'));
+            assertContractState(h.ledger, ADDR, 'highBid', '50');
+            assertContractState(h.ledger, ADDR, 'highBidder', 'alice');
+        });
+
         it('a bid that does not exceed the current high bid is rejected', async function () {
             await deployAuction();
             await depositAndFund();

@@ -49,9 +49,15 @@ code ceiling.
 |---|---|---|
 | [access-control.js](./access-control.js) | `onlyOwner` · `isOwner` · `onlyRole` | gate methods to the owner or a named role |
 | [pausable.js](./pausable.js) | `whenNotPaused` · `isPaused` · `setPaused` | an owner-controlled circuit breaker |
-| [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` | size transfers from real holdings, never caller input |
-| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front |
+| [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` | size transfers from real holdings, never caller input (`requireHeld` needs `isAtLeastExact` pasted too) |
+| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `isAtLeastExact` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front; compare amounts exactly |
 | [state-machine.js](./state-machine.js) | `requireStatus` · `requireStatusIn` · `setStatus` | an explicit `status` lifecycle with guarded transitions |
+
+`xchain.math.gt` / `gte` / `lt` / `lte` / `eq` / `compare` treat two values within
+`max(1e-12 × larger magnitude, 1e-15)` as equal. That is fine for a positivity check
+against `'0'`, but a custody, cap or payment guard must use `isAtLeastExact`: a
+tolerant `gte(held, total)` arms a contract that holds a few base units less than
+it has promised to pay.
 
 Every helper here passes `xchain-lint` clean (no banned APIs, no float math, ES2020).
 Run the linter on your finished contract before deploying:

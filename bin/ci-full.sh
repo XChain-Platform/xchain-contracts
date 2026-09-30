@@ -40,16 +40,19 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 SIB="$(cd .. && pwd)"
 
 FAILED=""
+# >>> ci-tier timer (generated block; re-run the tier wirer to update) >>>
 run_tier() {
   local name="$1"; shift
+  local __ci_tier_t0=$SECONDS
   echo; echo "ci:full ===== $name ====="
   if "$@"; then
-    echo "ci:full ----- $name PASS"
+    echo "ci:full ----- $name PASS ($(( SECONDS - __ci_tier_t0 ))s)"
   else
     FAILED="$FAILED [$name]"
-    echo "ci:full ----- $name FAIL"
+    echo "ci:full ----- $name FAIL ($(( SECONDS - __ci_tier_t0 ))s)"
   fi
 }
+# <<< ci-tier timer <<<
 need_sib() {
   local s
   for s in "$@"; do
@@ -63,10 +66,10 @@ need_sib() {
   done
 }
 
-need_sib xchain-vm
+need_sib xchain-vm xchain-indexer
 
 # --- job: ci -----------------------------------------------------------
-# The workflow's single job: checkout xchain-vm, install its deps, install
+# The workflow's single job: checkout xchain-vm and xchain-indexer, install the vm's deps, install
 # this repo's deps, then `npm run ci` (ci-preflight.js && npm test && npm run
 # lint). The install steps map to .ci-siblings on the venue.
 run_tier "ci (ci-preflight + test + lint)" npm run ci

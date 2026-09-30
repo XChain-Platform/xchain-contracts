@@ -133,6 +133,22 @@ const TICK    = 'TEST';
         });
     });
 
+    // The custody check is exact: a tolerant gte admits up to 1e-12 relative short,
+    // which on a 1,000,000 amount is 100 base units the payee would never receive.
+    describe('fund() custody check is exact (no mathjs tolerance)', function () {
+        it('fund() rejects a deposit one base unit short of a large amount', async function () {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(BUYER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, TICK, '2000000');
+            assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+                params: [BUYER, SELLER, ARBITER, TICK, '1000000', '3'] }));
+            assertReverted(await depositAndFund('999999.99999999'), 'insufficient deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            assertSuccess(await depositAndFund('0.00000001'));
+            assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
+        });
+    });
+
     describe('attacks we considered', function () {
         it('fund() rejects an underfunded deposit (no trust in caller-supplied amount)', async function () {
             await deployEscrow();

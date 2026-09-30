@@ -73,7 +73,8 @@ function passedPoll() {
     // Simulate the VOTE finalization callback: a system-injected EXECUTE whose
     // SOURCE is the callback contract itself (VOTE spec, Binding polls). The
     // argument order is the post-VOTE_POLL_TICK_VISIBLE one the indexer builds
-    // in xchain-indexer/src/actions/vote.js: the electorate tick is inserted
+    // in xchain-indexer/src/actions/vote/binding_callback.js
+    // (buildCallbackParams): the electorate tick is inserted
     // after min_voters_met, ahead of the developer CALLBACK_PARAMS.
     function pollCallback(proposalId, overrides) {
         const o = overrides || {};
@@ -310,6 +311,49 @@ function passedPoll() {
             assert.strictEqual(await proposalStatus(), 'ARMED');
         });
 
+        it('an exact weight tie arms (lowest-index tie-break) but cannot pay out', async function () {
+            await proposeAndArm();
+            assert.strictEqual(await proposalStatus(), 'ARMED');
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '4000', voters: 12 }] });
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertReverted(r, 'did not strictly outweigh every other option');
+            assertBalance(h.ledger, PAYEE, PAY, '0');
+            assert.strictEqual(await proposalStatus(), 'ARMED');
+        });
+
+        it('a tie on a later option also blocks the payout', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '10', voters: 1 },
+                { index: 2, weight: '4000', voters: 9 }] });
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'did not strictly outweigh every other option');
+        });
+
+        it('a strict win by the smallest margin still pays out', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [
+                { index: 0, weight: '4000', voters: 12 }, { index: 1, weight: '3999.999999999999999999', voters: 11 }] });
+            const r = await call('executeProposal', ['1'], HOLDER);
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: PAYEE, tick: PAY, quantity: '400' } }]);
+            assert.strictEqual(await proposalStatus(), 'EXECUTED');
+        });
+
+        it('a snapshot without the approval option row cannot pay out', async function () {
+            await proposeAndArm();
+            h.deposit(HOLDER, ADDR, PAY, '1000');
+            readyToExecute();
+            h.ledger.seedPollResult(POLL, { ...passedPoll(), options: [] });
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'did not strictly outweigh every other option');
+        });
+
         it('an underfunded treasury reverts instead of part-paying', async function () {
             await proposeAndArm();
             h.deposit(HOLDER, ADDR, PAY, '399');
@@ -514,6 +558,53 @@ function passedPoll() {
             assertReverted(await call('proposalInfo', ['7'], HOLDER), 'unknown proposal');
             assertReverted(await call('veto', ['7'], GUARDIAN), 'unknown proposal');
             assertReverted(await call('executeProposal', ['7'], HOLDER), 'unknown proposal');
+        });
+    });
+
+    // A mathjs range check read '1e1' as 10 while the parseInt storage key read it
+    // as 1, so a non-canonical id bound, armed, vetoed or cancelled another proposal.
+    describe('non-canonical proposal ids are rejected', function () {
+        async function deployWith(mode, count) {
+            await deploy(mode);
+            for (let i = 0; i < count; i++) assertSuccess(await propose());
+        }
+        async function expectedPoll(id) {
+            const r = await call('proposalInfo', [id], HOLDER);
+            assertSuccess(r);
+            return JSON.parse(JSON.parse(r.returnValue)).expected_poll;
+        }
+
+        it('guardian mode: approvePoll("1e1") binds nothing with ten proposals', async function () {
+            await deployWith('guardian', 10);
+            assertReverted(await call('approvePoll', ['1e1', POLL], GUARDIAN), 'unknown proposal');
+            assert.strictEqual(await expectedPoll('1'), null);
+            assert.strictEqual(await expectedPoll('10'), null);
+        });
+
+        it('open mode: a poll naming "1e1" arms nothing with ten proposals', async function () {
+            await deployWith('open', 10);
+            assertReverted(await pollCallback('1e1'), 'unknown proposal');
+            assert.strictEqual(await proposalStatus('1'), 'PROPOSED');
+            assert.strictEqual(await proposalStatus('10'), 'PROPOSED');
+        });
+
+        it('every other non-canonical spelling of id 1 reverts on read, veto and cancel', async function () {
+            await deployWith('guardian', 2);
+            for (const bad of ['1.9', '01', '+1', '-1', ' 1', '1 ', '0x1', '1.0', '1abc', '0', '3']) {
+                assertReverted(await call('proposalInfo', [bad], HOLDER), 'unknown proposal');
+                assertReverted(await call('veto', [bad], GUARDIAN), 'unknown proposal');
+                assertReverted(await call('cancel', [bad], HOLDER), 'unknown proposal');
+            }
+            assert.strictEqual(await proposalStatus('1'), 'PROPOSED');
+            assert.strictEqual(await proposalStatus('2'), 'PROPOSED');
+        });
+
+        it('the canonical id still binds and arms exactly its own proposal', async function () {
+            await deployWith('guardian', 10);
+            assertSuccess(await call('approvePoll', ['10', POLL], GUARDIAN));
+            assertSuccess(await pollCallback('10'));
+            assert.strictEqual(await proposalStatus('10'), 'ARMED');
+            assert.strictEqual(await proposalStatus('1'), 'PROPOSED');
         });
     });
 });

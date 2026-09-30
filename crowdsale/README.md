@@ -69,7 +69,9 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
   in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
 - **Whole-payment caps.** A contribution that would exceed the hard cap is rejected
-  outright (no partial accept + change). Buyers size their own deposits.
+  outright (no partial accept + change). Buyers size their own deposits. Both
+  caps compare exactly, not within a tolerance, so `raised` can never pass the
+  hard cap by even one base unit and outrun the sale token's `maxSupply`.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
 

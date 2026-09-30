@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -222,8 +222,8 @@ module.exports = {
         // publishing while the rest of the fleet advances keeps a perfectly readable tip
         // whose round is long evicted. Either way settle() then reverts on its first read
         // for the life of the bet while reclaim() refuses once a qualifying round exists:
-        // both stakes locked with no action either party can take. Sibling priceBet.js:190
-        // refuses the same state at the same seam.
+        // both stakes locked with no action either party can take. Sibling priceBet.js
+        // accept() refuses the same state at the same seam (its settleRoundOutsideWindow guard).
         var latest = latestRound(xchain);
         xchain.require(latest !== null && latest.roundNumber > 0, 'no oracle data for pair yet');
         xchain.require(

@@ -24,9 +24,10 @@ function heldBalance(xchain, tick) {
     return xchain.getBalance(xchain.getContractAddress(), tick) || '0';
 }
 
-// Throw unless the contract holds at least `amount` of `tick`.
+// Throw unless the contract holds at least `amount` of `tick`, compared exactly.
+// Paste isAtLeastExact from validation.js alongside (xchain.math.gte is tolerant).
 function requireHeld(xchain, tick, amount) {
-    xchain.require(xchain.math.gte(heldBalance(xchain, tick), amount),
+    xchain.require(isAtLeastExact(xchain, heldBalance(xchain, tick), amount),
         'insufficient contract balance of ' + tick);
 }
 

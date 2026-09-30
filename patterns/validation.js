@@ -35,6 +35,19 @@ function requirePositive(xchain, amount, name) {
     xchain.require(amount && xchain.math.gt(amount, '0'), name + ' must be positive');
 }
 
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gt/gte/lt/lte/eq/compare treat values within max(1e-12 relative, 1e-15) as
+// equal, so custody, cap and payment guards use this; `a <= b` is isAtLeastExact(xchain, b, a).
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
+}
+
 // Throw unless `value` is a plain fixed-notation decimal: digits, with at most
 // one decimal point that has digits on both sides. The notation gate that
 // `requirePositive` above is not.

@@ -53,7 +53,8 @@ claimable, and is released with a later claim (fully, once the grant vests).
 ## Attacks we considered
 
 - **Caller lies about the deposit.** `fund()` reads the on-chain balance; an
-  underfunded grant cannot be activated.
+  underfunded grant cannot be activated. The custody check is exact, not
+  tolerance-based, so a deposit even one base unit short of `total` is rejected.
 - **Unauthorized claim.** `claim()` checks `getSourceAddress()` against the stored
   beneficiary - no one else can claim.
 - **Over-claim / double-claim.** Each claim pays `vested - claimed` and advances

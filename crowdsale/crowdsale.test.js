@@ -168,6 +168,52 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         });
     });
 
+    // Pin exact caps: a tolerant lte (relTol 1e-12) lets a buy pass a 100000 cap by up
+    // to 10 base units, so the claims exceed the exact MAX_SUPPLY and the last is stranded.
+    describe('exact cap comparisons (no mathjs tolerance)', function () {
+        async function deployBig(soft, hard) {
+            assertSuccess(await deploy({ rate: '1', soft, hard }));
+            for (const a of [B1, B2]) h.seedBalance(a, PAY, '300000');
+        }
+
+        it('rejects a buy that overshoots the hard cap by less than one tolerance band', async function () {
+            await deployBig('1', '100000');
+            assertReverted(await buy(B1, '100000.00000005'), 'hard cap exceeded');
+        });
+
+        it('still accepts a buy that lands exactly on the hard cap, and finalizes early', async function () {
+            await deployBig('1', '100000');
+            assertSuccess(await buy(B1, '100000'));
+            assertSuccess(await call('finalize', B1));
+        });
+
+        it('one base unit short of the hard cap does not allow an early finalize', async function () {
+            await deployBig('1', '100000');
+            assertSuccess(await buy(B1, '99999.99999999'));
+            assertReverted(await call('finalize', B1), 'sale still open');
+        });
+
+        it('one base unit short of the soft cap finalizes FAILED and refunds in full', async function () {
+            await deployBig('100000', '200000');
+            assertSuccess(await buy(B1, '99999.99999999'));
+            close();
+            assertSuccess(await call('finalize', B1));
+            assertReverted(await call('claim', B1), 'sale not successful');
+            const r = await call('refund', B1);
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '99999.99999999' } }]);
+        });
+
+        it('initialize rejects a hardCap one base unit below softCap', async function () {
+            const b = new E2EHarness(XChainVM);
+            b.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                params: [OWNER, PAY, SALE, '1', '100000', '99999.99999999', '50', '8'] });
+            assert.strictEqual(res.success, false);
+            assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
+        });
+    });
+
     describe('deploy-time validation', function () {
         async function bad(params) {
             const b = new E2EHarness(XChainVM);

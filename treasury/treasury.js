@@ -66,6 +66,11 @@
 //     with, spelled identically; arm() compares the two as exact strings.
 //   - options[0] is the approval option ("approve"); arm() rejects any other
 //     winner, so "reject" polls and multi-option polls cannot move funds.
+//   - The protocol breaks an exact weight tie toward the lowest option index,
+//     so a tied poll reports option 0 as its winner and arm() arms it.
+//     executeProposal() then refuses to pay unless option 0 strictly outweighs
+//     every other option. Only a strict plurality is enforced; anything
+//     stronger has to come from the poll's QUORUM and option design.
 //   - Set QUORUM and MIN_VOTERS on the poll. The protocol reports both gates
 //     as met when they were never configured, so arm()'s gate check cannot
 //     tell "met" from "absent"; the guardian verifies them before binding.
@@ -100,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -110,8 +115,9 @@ module.exports = {
         propose:         { summary: 'Governance-token holder records a spend proposal (recipient, tick, amount, memo)', params: [ { name: 'recipient', type: 'address' }, { name: 'tick', type: 'tick' }, { name: 'amount', type: 'amount' }, { name: 'memo', type: 'string' } ] },
         approvePoll:     { summary: 'Guardian binds a verified poll to a proposal (guardian mode only)', params: [ { name: 'proposalId', type: 'number' }, { name: 'pollIndex', type: 'number' } ] },
         // arm's nine params are the VOTE finalization signature the indexer injects,
-        // not user inputs (vote.js builds them); declaring them keeps the metadata
-        // honest about an arity arm() pins and reverts on.
+        // not user inputs (buildCallbackParams in xchain-indexer's
+        // src/actions/vote/binding_callback.js builds them); declaring them keeps
+        // the metadata honest about an arity arm() pins and reverts on.
         arm:             { summary: 'Poll finalization callback: arms the proposal and starts the timelock (set as the binding poll\'s CALLBACK_METHOD; not user-callable)', params: [ { name: 'pollIndex', type: 'number' }, { name: 'status', type: 'string' }, { name: 'winningOption', type: 'number' }, { name: 'totalWeight', type: 'amount' }, { name: 'totalVoters', type: 'number' }, { name: 'quorumMet', type: 'number' }, { name: 'minVotersMet', type: 'number' }, { name: 'tick', type: 'tick' }, { name: 'proposalId', type: 'number' } ] },
         veto:            { summary: 'Guardian kills a proposed or armed proposal', params: [ { name: 'proposalId', type: 'number' } ] },
         cancel:          { summary: 'Proposer withdraws their own not-yet-armed proposal', params: [ { name: 'proposalId', type: 'number' } ] },
@@ -330,6 +336,20 @@ module.exports = {
         xchain.require(poll.tick === xchain.state.get('gov_tick'),
             'poll electorate is not the governance token');
 
+        // Require a strict plurality for option 0. The tally breaks an exact
+        // weight tie toward the lowest option index, and arm()'s callback wire
+        // carries no per-option weights, so a tie is only detectable here.
+        var options  = poll.options || [];
+        var approval = null;
+        for (var i = 0; i < options.length; i++)
+            if (String(options[i].index) === '0') approval = options[i].weight;
+        xchain.require(approval !== null,
+            'approval option did not strictly outweigh every other option');
+        for (var j = 0; j < options.length; j++)
+            if (String(options[j].index) !== '0')
+                xchain.require(exceedsExactly(xchain, approval, options[j].weight),
+                    'approval option did not strictly outweigh every other option');
+
         // Floor the payout onto the tick's decimal grid before both the custody
         // check and the emission (amm/vesting/crowdsale do the same): the indexer
         // HALF-UP re-normalises every emitted amount to its tick's decimals at
@@ -488,12 +508,36 @@ function tickDecimals(xchain, tick) {
     return info.DECIMALS;
 }
 
-function loadProposal(xchain, id) {
-    xchain.require(id && xchain.math.gt(id, '0') &&
-        xchain.math.lte(id, xchain.state.get('proposal_count')), 'unknown proposal');
-    return JSON.parse(xchain.state.get('proposal:' + parseInt(id)));
+// True when a is strictly greater than b, compared exactly. xchain.math.gt
+// compares within a relative tolerance, so two poll weights a dust margin apart
+// would read as equal; the exact subtract's sign is what the tally's bcgt sees.
+function exceedsExactly(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) === '-') return false;
+    for (var i = 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+    }
+    return false;
 }
 
+// Return the storage key for a proposal id, reverting unless it is the exact decimal
+// string propose() returned, in [1, proposal_count]. A mathjs range check and a parseInt
+// key disagree on '1e1' or '1.9', so the check and the record could name different proposals.
+function proposalKey(xchain, id) {
+    var s = (id === null || id === undefined) ? '' : String(id);
+    var n = parseInt(s, 10);
+    xchain.require(String(n) === s && n >= 1 &&
+        n <= parseInt(xchain.state.get('proposal_count'), 10), 'unknown proposal');
+    return 'proposal:' + s;
+}
+
+// Read a proposal record by its canonical id.
+function loadProposal(xchain, id) {
+    return JSON.parse(xchain.state.get(proposalKey(xchain, id)));
+}
+
+// Write a proposal record by its canonical id.
 function saveProposal(xchain, id, rec) {
-    xchain.state.set('proposal:' + parseInt(id), JSON.stringify(rec));
+    xchain.state.set(proposalKey(xchain, id), JSON.stringify(rec));
 }

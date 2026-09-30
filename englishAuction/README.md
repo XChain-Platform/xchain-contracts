@@ -38,7 +38,7 @@ considered](#attacks-we-considered).
 |---|---|---|
 | `initialize(seller, itemTick, itemAmount, bidTick, minBid, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; anchors the bidding deadline from **this** block; status → `ACTIVE`. |
-| `bid()` | anyone except the current leader (BATCHed after DEPOSIT) | Must exceed both `minBid` and the current high bid; refunds the previous leader in the same call. |
+| `bid()` | anyone except the current leader (BATCHed after DEPOSIT) | Must be at least `minBid` and strictly exceed the current high bid; refunds the previous leader in the same call. |
 | `settle()` | anyone, after the deadline | Item → high bidder, winning bid → seller (status → `SOLD`); or item → seller if nobody bid (status → `UNSOLD`). |
 | `cancel()` | seller, only before any bid | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, highBid, highBidder, minBid, deadline }`. |
@@ -73,7 +73,8 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
 - **Caller lies about the deposit.** `fund()` and `bid()` both read the
   contract's own balance via `getBalance`, never a caller-supplied amount.
 - **Bid that doesn't actually beat the leader.** `bid()` requires the deposit
-  delta to strictly exceed both `minBid` and the current `highBid`.
+  delta to be at least `minBid` and strictly greater than the current
+  `highBid`.
 - **Front-run/underbid griefing.** Every bid that gets superseded is refunded
   in the *same* execution that supersedes it - a bidder is never at risk of
   their funds sitting locked behind a later, unrelated bid.
@@ -122,7 +123,8 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   are not recoverable by this template.
 - **No reserve price beyond `minBid`.** There is no "no sale unless X" floor
   distinct from the minimum bid - if you need one, treat `minBid` as the
-  reserve.
+  reserve. It is inclusive: a bid exactly equal to `minBid` is accepted and
+  can win the item at that price.
 - **No bid increment schedule.** Any bid that clears `minBid` and exceeds the
   current high bid is accepted, however small the margin.
 - **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,

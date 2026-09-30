@@ -86,3 +86,19 @@ describe('oz-aliases.json integrity', function () {
     });
 
 });
+
+// Pin the ERC2981 royalty claim to the generator's royalty-scope disclosure
+// (lib/policy-gen.js royaltyScopeNotes), since Solidity readers land on this row first.
+describe('oz-aliases.json ERC2981 royalty note', function () {
+
+    it('the ERC2981 note scopes the royalty to ORDER/SWAP and names the dispenser gap', function () {
+        const row = ALIASES.aliases.find(a => a.oz.startsWith('ERC2981'));
+        assert.ok(row, 'oz-aliases.json has no ERC2981 alias');
+        assert.ok(!/every transfer|cannot be bypassed/i.test(row.note),
+            'ERC2981 note overclaims: the split covers ORDER/SWAP proceeds only and dispensers route around it');
+        for (const needle of ['ORDER_CREATE', 'SWAP_CREATE', 'DISPENSER_CREATE', 'CROSS_CHAIN_ROYALTY', 'controller-bound-tokens.md']) {
+            assert.ok(row.note.includes(needle), 'ERC2981 note must mention ' + needle);
+        }
+    });
+
+});

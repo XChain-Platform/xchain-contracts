@@ -1,4 +1,9 @@
 {
+  "meta": {
+    "name": "Example Token Policy",
+    "description": "Example controller guard for token transfers and trades.",
+    "version": "1.0.0"
+  },
   "name": "ExampleTokenPolicy",
   "owner": "DExampleOwnerAddressReplaceMe",
   "gates": ["transfer", "trade"],
@@ -6,8 +11,8 @@
   "freeze": [],
   "allowlist": ["DExampleAllowedAddressReplaceMe"],
   "royalty": [
-    { "to": "DExampleCreatorAddressReplaceMe", "bps": 250 },
-    { "to": "DExampleMarketAddressReplaceMe", "bps": 100 }
+    { "to": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "bps": 250 },
+    { "to": "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", "bps": 100 }
   ],
   "maxTakeBps": 1000,
   "permissions": []
