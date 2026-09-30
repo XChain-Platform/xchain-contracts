@@ -191,7 +191,7 @@ module.exports = {
         requirePlainDecimal(xchain, amount, 'amount');
 
         var held = xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0';
-        xchain.require(xchain.math.gte(held, xchain.state.get('min_propose')),
+        xchain.require(isAtLeastExact(xchain, held, xchain.state.get('min_propose')),
             'insufficient governance holdings to propose');
 
         var id = String(parseInt(xchain.state.get('proposal_count')) + 1);
@@ -369,7 +369,8 @@ module.exports = {
             'amount is below one unit of the tick');
 
         var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
-        xchain.require(xchain.math.gte(held, amount), 'insufficient treasury balance');
+        // Compare exactly: a tolerant gte passes a treasury up to 1e-12 relative short of the payout.
+        xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
 
         // State guard: EXECUTED is committed in the same atomic scope as the
         // send, so a second executeProposal can never double-pay.
@@ -506,6 +507,18 @@ function tickDecimals(xchain, tick) {
     xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
         'token decimals unavailable: ' + tick);
     return info.DECIMALS;
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
 }
 
 // True when a is strictly greater than b, compared exactly. xchain.math.gt

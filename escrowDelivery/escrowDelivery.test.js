@@ -150,6 +150,32 @@ const TRACKING_URL = 'https://carrier.example.com/track/1Z999';
         });
     });
 
+    // The custody check is exact: a tolerant gte admits up to 1e-12 relative short,
+    // which on a 1,000,000 amount is 100 base units the payee would never receive.
+    describe('fund() custody check is exact (no mathjs tolerance)', function () {
+        async function deployAmount(amount) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(BUYER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, TICK, '2000000');
+            return h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+                params: [BUYER, SELLER, ARBITER, TICK, amount, '3', MARKER] });
+        }
+
+        it('fund() rejects a deposit one base unit short of a large amount', async function () {
+            assertSuccess(await deployAmount('1000000'));
+            assertReverted(await depositAndFund('999999.99999999'), 'insufficient deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            assertSuccess(await depositAndFund('0.00000001'));
+            assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
+        });
+
+        it('fund() never arms against a non-finite amount', async function () {
+            assertSuccess(await deployAmount('Infinity'));
+            assertReverted(await depositAndFund('200'), 'insufficient deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
+    });
+
     describe('attacks we considered', function () {
         it('onDelivery rejects a request_id that is not the outstanding one (no stale-response replay)', async function () {
             await deployEscrow();

@@ -173,6 +173,24 @@ describe('Template: amm abi', function () {
             assertReverted(await swap(T1, A, '100', '95'), 'slippage');
         });
 
+        // Output above 1e4 units puts one 8-dp base unit inside the tolerant gte band.
+        it('enforces minOut to the base unit on a large swap', async function () {
+            await deploy(); await addLiq(LP1, '1000000', '1000000');
+            const out = emitted(await swap(T1, A, '100000', '0'), 'SEND', B).params.quantity;
+            const over = math.format(math.add(bn(out), bn('0.00000001')), { notation: 'fixed' });
+            await deploy(); await addLiq(LP1, '1000000', '1000000');
+            assertReverted(await swap(T1, A, '100000', over), 'slippage');
+            await deploy(); await addLiq(LP1, '1000000', '1000000');
+            assertSuccess(await swap(T1, A, '100000', out));
+        });
+
+        it('a non-finite minOut still reverts', async function () {
+            for (const bad of ['NaN', 'Infinity']) {
+                await deploy(); await addLiq(LP1, '1000', '1000');
+                assertReverted(await swap(T1, A, '100', bad), 'slippage');
+            }
+        });
+
         // Pins the documented COST of reverting on minOut (amm.js "CUSTODY MODEL",
         // README "A reverted call's DEPOSIT is not rolled back"). BATCH is not
         // all-or-nothing, so the deposit batched ahead of a reverting swap() settles

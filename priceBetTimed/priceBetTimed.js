@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -189,7 +189,8 @@ module.exports = {
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'bet not awaiting funds');
         xchain.require(xchain.getSourceAddress() === xchain.state.get('maker'), 'only the maker funds');
-        xchain.require(xchain.math.gte(heldBalance(xchain), xchain.state.get('amount')), 'insufficient deposit');
+        // Compare exactly: a tolerant gte arms the bet up to 1e-12 relative short of the stake.
+        xchain.require(isAtLeastExact(xchain, heldBalance(xchain), xchain.state.get('amount')), 'insufficient deposit');
         xchain.state.set('status', 'OPEN');
     },
 
@@ -210,7 +211,7 @@ module.exports = {
         );
 
         var needed = xchain.math.multiply(xchain.state.get('amount'), '2');
-        xchain.require(xchain.math.gte(heldBalance(xchain), needed), 'insufficient deposit');
+        xchain.require(isAtLeastExact(xchain, heldBalance(xchain), needed), 'insufficient deposit');
 
         // Refuse the match unless the pair has a tip the scan can actually start from.
         // Two ways that fails and both wedge the pot identically: the pair may have no
@@ -470,6 +471,18 @@ function latestRound(xchain) {
 // custody; caller-supplied amounts are never trusted.
 function heldBalance(xchain) {
     return xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0';
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
 }
 
 // Return each party's stake. The maker gets their stake floored onto the tick's

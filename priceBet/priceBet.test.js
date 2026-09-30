@@ -332,6 +332,22 @@ const ROUND    = 7;
             assertContractState(h.ledger, ADDR, 'status', 'OPEN');
         });
 
+        // A 1,000,000 stake puts one 8-dp base unit inside the tolerant gte band.
+        it('fund() and accept() are exact to the base unit on a large stake', async function () {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '1000000');
+            h.seedBalance(TAKER, TICK, '1000000');
+            h.ledger.setTokenDecimals(TICK, 8);
+            assertSuccess(await h.deploy({ code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, '1000000', String(ROUND), '5'] }));
+            assertReverted(await depositAnd(MAKER, 'fund', '999999.99999999'), 'insufficient deposit');
+            assertSuccess(await depositAnd(MAKER, 'fund', '0.00000001'));
+            assertReverted(await depositAnd(TAKER, 'accept', '999999.99999999'), 'insufficient deposit');
+            assertSuccess(await depositAnd(TAKER, 'accept', '0.00000001'));
+            assertContractState(h.ledger, ADDR, 'status', 'MATCHED');
+        });
+
         it('the maker cannot take their own bet', async function () {
             await deployBet('OVER');
             h.seedBalance(MAKER, TICK, '300');

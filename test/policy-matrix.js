@@ -41,7 +41,9 @@ const MATRIX = {
     // The recipient-only shape: the guard declares `var to` in the allowlist branch
     // itself, since no freeze block is there to declare it.
     allowTo: { name: 'AllowTo', owner: OWNER, gates: ['all'], allowlist: ['1Good', '1AlsoGood'], allowlistDirection: 'to' },
-    royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: CREATOR, bps: 500 }] }
+    royaltyOnly: { name: 'RoyaltyOnly', gates: ['trade'], royalty: [{ to: CREATOR, bps: 500 }] },
+    // An owner given where no admin method exists: accepted, and nothing emitted for it.
+    royaltyOwned: { name: 'RoyaltyOwned', owner: OWNER, gates: ['trade'], royalty: [{ to: CREATOR, bps: 500 }] }
 };
 
 // The whole stack with a two-sided allowlist: freeze AND a recipient allowlist both
