@@ -361,6 +361,32 @@ function passedPoll() {
             assertReverted(await call('executeProposal', ['1'], HOLDER), 'insufficient treasury balance');
         });
 
+        // At 1,000,000 units the 1e-12 tolerance spans 100 base units, so one short must still revert.
+        it('a treasury one base unit short of a large payout reverts and stays armed', async function () {
+            await deploy();
+            h.seedBalance(HOLDER, PAY, '2000000');
+            assertSuccess(await call('propose', [PAYEE, PAY, '1000000', 'large grant'], HOLDER));
+            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+            assertSuccess(await pollCallback('1'));
+            h.deposit(HOLDER, ADDR, PAY, '999999.99999999');
+            readyToExecute();
+            assertReverted(await call('executeProposal', ['1'], HOLDER), 'insufficient treasury balance');
+            assert.strictEqual(await proposalStatus(), 'ARMED');
+            h.deposit(HOLDER, ADDR, PAY, '0.00000001');
+            assertSuccess(await call('executeProposal', ['1'], HOLDER));
+        });
+
+        it('a holder one base unit short of a large threshold cannot propose', async function () {
+            h = new E2EHarness(XChainVM);
+            for (const who of [GUARDIAN, HOLDER]) h.seedBalance(who, 'XCHAIN', '1000000');
+            h.seedBalance(HOLDER, GOV, '999999.99999999');
+            await h.deploy({ code: CODE, deployer: GUARDIAN, contractAddress: ADDR,
+                params: [GUARDIAN, GOV, String(TIMELOCK), String(WINDOW), '1000000', 'guardian'] });
+            assertReverted(await propose(), 'insufficient governance holdings to propose');
+            h.seedBalance(HOLDER, GOV, '1000000');
+            assertSuccess(await propose());
+        });
+
         it('a proposal cannot be executed twice', async function () {
             await proposeAndArm();
             h.deposit(HOLDER, ADDR, PAY, '1000');

@@ -117,6 +117,18 @@ function tickDecimals(xchain, tick) {
     return info.DECIMALS;
 }
 
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -125,7 +137,7 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -264,7 +276,10 @@ module.exports = {
         ), tickDecimals(xchain, tokenOut));
         xchain.require(xchain.math.gt(amountOut, '0'), 'insufficient output');
         xchain.require(xchain.math.lt(amountOut, reserveOut), 'output exceeds reserves');
-        xchain.require(xchain.math.gte(amountOut, minOut), 'slippage: output below minOut');
+        // Enforce minOut to the base unit; the gte term keeps a non-finite minOut
+        // reverting, since isAtLeastExact reads 'NaN' and 'Infinity' as satisfied.
+        xchain.require(xchain.math.gte(amountOut, minOut) && isAtLeastExact(xchain, amountOut, minOut),
+            'slippage: output below minOut');
 
         var newIn  = xchain.math.add(reserveIn, amountIn);
         var newOut = xchain.math.subtract(reserveOut, amountOut);

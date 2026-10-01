@@ -73,7 +73,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.0.1'
+        version:     '1.1.0'
     },
 
     abi: { version: 1, methods: {
@@ -131,8 +131,8 @@ module.exports = {
         xchain.state.set('status', 'INIT');
     },
 
-    // fund(): identical to `escrow`. Arms the escrow off the on-chain balance
-    // (never a caller-supplied amount) and anchors the reclaim deadline here,
+    // fund(): arms off the on-chain balance with the exact custody check `escrow`
+    // uses (never a caller-supplied amount) and anchors the reclaim deadline here,
     // at the block custody is actually taken.
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'escrow not awaiting funds');
@@ -141,7 +141,9 @@ module.exports = {
         var amount = xchain.state.get('amount');
         var held   = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
 
-        xchain.require(xchain.math.gte(held, amount), 'insufficient deposit');
+        // Require the full amount exactly; the gte term stops a non-finite amount from
+        // arming, since isAtLeastExact reads 'Infinity' as satisfied.
+        xchain.require(xchain.math.gte(held, amount) && isAtLeastExact(xchain, held, amount), 'insufficient deposit');
 
         xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
         xchain.state.set('status', 'FUNDED');
@@ -251,6 +253,18 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) !== '-') return true;
+    for (var i = 1; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return false;
+    }
+    return true;
 }
 
 // payout(xchain, payeeRole, terminalStatus): the shared settlement action -
