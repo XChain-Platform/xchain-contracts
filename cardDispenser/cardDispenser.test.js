@@ -274,6 +274,60 @@ const UNIT  = '1';
         });
     });
 
+    // The payment guard and the weighted pick compare exactly: a tolerant gte/lt reads
+    // values within 1e-12 relative as equal.
+    describe('payment and pick comparisons are exact (no mathjs tolerance)', function () {
+        async function deploySingle(price, copies) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(OWNER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, PAY, '200000');
+            h.ledger.setTokenDecimals(PAY, 8);
+            h.ledger.setTokenDecimals(A, 0);
+            await h.deploy({ code: CODE, deployer: OWNER, contractAddress: ADDR, params: [PAY, price, UNIT, A] });
+            h.ledger.creditContractBalance(ADDR, A, copies);
+        }
+
+        async function payAndDraw(amount) {
+            h.deposit(BUYER, ADDR, PAY, amount);
+            return h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
+        }
+
+        // BigInt replica of the template's fold(): Horner base 131 over charCodes, mod 1e38.
+        function foldBig(s) {
+            let acc = 0n;
+            for (let i = 0; i < s.length; i++) acc = (acc * 131n + BigInt(s.charCodeAt(i))) % (10n ** 38n);
+            return acc;
+        }
+
+        it('draw() rejects a payment one base unit short of a large price', async function () {
+            await deploySingle('100000', '5');
+            assertReverted(await payAndDraw('99999.99999999'), 'underpaid');
+            assertContractState(h.ledger, ADDR, 'nonce', '0');
+            assertSuccess(await payAndDraw('0.00000001'));
+            assertContractState(h.ledger, ADDR, 'nonce', '1');
+        });
+
+        // Build a string whose fold() is exactly v: its base-131 digits as char codes.
+        function stringWithFold(v) {
+            const digits = [];
+            for (; v > 0n; v /= 131n) digits.unshift(Number(v % 131n));
+            return String.fromCharCode(...digits);
+        }
+
+        it('a pick of r = total - 1 on a large total delivers instead of reverting', async function () {
+            // total 1e14 puts total - 1 inside lt's 1e-12 band, and a mix 1e20 times larger
+            // keeps mod() exact (its tolerant floor snaps only on a small quotient).
+            const T = 10n ** 14n;
+            await deploySingle('1', String(T));
+            // nonce 0: mix = fold(blockHash) + fold(buyer) * 1000000007, so seed it to land on T - 1.
+            const resid = ((T - 1n - foldBig(BUYER) * 1000000007n) % T + T) % T;
+            h.ledger.blockHash = stringWithFold(10n ** 20n * T + resid);
+            const r = await payAndDraw('1');
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: UNIT } }]);
+        });
+    });
+
     describe('deploy-time validation', function () {
         it('rejects a deploy with no card ticks', async function () {
             const bad = new E2EHarness(XChainVM);

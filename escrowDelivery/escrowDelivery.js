@@ -73,7 +73,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     abi: { version: 1, methods: {
@@ -141,9 +141,8 @@ module.exports = {
         var amount = xchain.state.get('amount');
         var held   = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
 
-        // Require the full amount exactly; the gte term stops a non-finite amount from
-        // arming, since isAtLeastExact reads 'Infinity' as satisfied.
-        xchain.require(xchain.math.gte(held, amount) && isAtLeastExact(xchain, held, amount), 'insufficient deposit');
+        // Require the full amount exactly; isAtLeastExact fails closed on a non-finite amount.
+        xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient deposit');
 
         xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
         xchain.state.set('status', 'FUNDED');
@@ -259,12 +258,14 @@ function requireIntInRange(xchain, v, min, max, name) {
 // xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
 function isAtLeastExact(xchain, a, b) {
     var diff = String(xchain.math.subtract(a, b));
-    if (diff.charAt(0) !== '-') return true;
-    for (var i = 1; i < diff.length; i++) {
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
         var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') return false;
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
     }
-    return true;
+    return !(neg && nonzero);
 }
 
 // payout(xchain, payeeRole, terminalStatus): the shared settlement action -

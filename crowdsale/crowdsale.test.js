@@ -212,6 +212,18 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             assert.strictEqual(res.success, false);
             assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
         });
+
+        // A softCap of 'Infinity' would otherwise finalize SUCCESS for any raise and strand every refund.
+        it('initialize rejects a non-finite softCap or hardCap', async function () {
+            for (const [soft, hard] of [['Infinity', '100'], ['100', 'Infinity'], ['100', 'NaN']]) {
+                const b = new E2EHarness(XChainVM);
+                b.seedBalance(OWNER, 'XCHAIN', '1000000');
+                const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                    params: [OWNER, PAY, SALE, '1', soft, hard, '50', '8'] });
+                assert.strictEqual(res.success, false, 'softCap ' + soft + ' / hardCap ' + hard + ' deployed');
+                assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
+            }
+        });
     });
 
     describe('deploy-time validation', function () {

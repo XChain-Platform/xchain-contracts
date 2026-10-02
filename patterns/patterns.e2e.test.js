@@ -354,7 +354,8 @@ const ARBITER = 'arbiter';
     it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', async function () {
         await deployRoleVault();
         const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
-            ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true']];
+            ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true'],
+            ['0', 'Infinity', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false'], ['0', 'NaN', 'false']];
         for (const [a, b, want] of CASES) {
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'atLeast', params: [a, b], caller: OWNER }));
             assertContractState(h.ledger, ADDR, 'atLeast', want);

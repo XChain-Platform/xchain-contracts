@@ -38,14 +38,17 @@ function requirePositive(xchain, amount, name) {
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
 // xchain.math.gt/gte/lt/lte/eq/compare treat values within max(1e-12 relative, 1e-15) as
 // equal, so custody, cap and payment guards use this; `a <= b` is isAtLeastExact(xchain, b, a).
+// A non-finite difference ('Infinity', '-Infinity', 'NaN') returns false, so the guard fails closed.
 function isAtLeastExact(xchain, a, b) {
     var diff = String(xchain.math.subtract(a, b));
-    if (diff.charAt(0) !== '-') return true;
-    for (var i = 1; i < diff.length; i++) {
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
         var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') return false;
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
     }
-    return true;
+    return !(neg && nonzero);
 }
 
 // Throw unless `value` is a plain fixed-notation decimal: digits, with at most

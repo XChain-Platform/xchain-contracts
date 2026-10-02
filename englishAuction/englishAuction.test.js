@@ -344,6 +344,49 @@ const ADDR   = 'C:BTC:1';
         });
     });
 
+    // Custody and reserve compare exactly: a tolerant gte admits up to 1e-12 relative
+    // short, one base unit of an 8-decimal tick at 10000.
+    describe('custody and minimum-bid checks are exact (no mathjs tolerance)', function () {
+        async function deployExact(itemAmount, minBid) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(SELLER, 'XCHAIN', '1000000');
+            h.seedBalance(SELLER, ITEM, '20000');
+            h.ledger.setTokenDecimals(ITEM, 8);
+            h.ledger.setTokenDecimals(BID, 8);
+            return h.deploy({ code: CODE, deployer: SELLER, contractAddress: ADDR,
+                params: [SELLER, ITEM, itemAmount, BID, minBid, '3'] });
+        }
+
+        it('fund() rejects an item deposit one base unit short, and a top-up then settles exactly', async function () {
+            assertSuccess(await deployExact('10000', '1'));
+            assertReverted(await depositAndFund('9999.99999999'), 'insufficient item deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            assertSuccess(await depositAndFund('0.00000001'));
+            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
+            assertSuccess(await bid('alice', '5'));
+            h.mineBlock(); h.mineBlock(); h.mineBlock();
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }));
+            assertBalance(h.ledger, 'alice', ITEM, '10000');
+        });
+
+        it('bid() rejects a bid one base unit under a large minBid', async function () {
+            assertSuccess(await deployExact('10', '10000'));
+            assertSuccess(await depositAndFund('10'));
+            assertReverted(await bid('alice', '9999.99999999'), 'bid below the minimum');
+            assertContractState(h.ledger, ADDR, 'highBidder', null);
+            // The rejected DEPOSIT stays in custody, so one more base unit makes exactly minBid.
+            assertSuccess(await bid('bob', '0.00000001'));
+            assertContractState(h.ledger, ADDR, 'highBid', '10000');
+            assertContractState(h.ledger, ADDR, 'highBidder', 'bob');
+        });
+
+        it('an Infinity minBid never accepts a bid', async function () {
+            assertSuccess(await deployExact('10', 'Infinity'));
+            assertSuccess(await depositAndFund('10'));
+            assertReverted(await bid('alice', '100'), 'bid below the minimum');
+        });
+    });
+
     describe('deploy-time validation', function () {
         it('rejects itemTick === bidTick', async function () {
             const bad = new E2EHarness(XChainVM);

@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -165,7 +165,9 @@ module.exports = {
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
         var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
-        xchain.require(xchain.math.gte(held, itemAmount), 'insufficient item deposit');
+        // Require the full itemAmount exactly: settle() emits it verbatim, so a dust-short
+        // custody arms an auction whose every settle() reverts with the winning bid held.
+        xchain.require(isAtLeastExact(xchain, held, itemAmount), 'insufficient item deposit');
 
         // itemAmount is emitted VERBATIM by settle() and cancel(), and the indexer
         // re-quantises every emitted amount onto the tick's grid at ledger-write time
@@ -210,7 +212,10 @@ module.exports = {
         var newBid   = xchain.math.subtract(held, highBid);
 
         xchain.require(xchain.math.gt(newBid, '0'), 'no bid received (DEPOSIT in the same BATCH)');
-        xchain.require(xchain.math.gte(newBid, xchain.state.get('minBid')), 'bid below the minimum');
+        // Compare the reserve exactly; the gte term independently keeps a non-finite
+        // minBid (only checked > 0 at deploy) unreachable.
+        var minBid = xchain.state.get('minBid');
+        xchain.require(xchain.math.gte(newBid, minBid) && isAtLeastExact(xchain, newBid, minBid), 'bid below the minimum');
         xchain.require(xchain.math.gt(newBid, highBid), 'bid must exceed the current high bid');
 
         if (prevBidder) {
@@ -339,4 +344,19 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte treats values within a 1e-12 relative tolerance as equal, so it
+// cannot guard custody. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
 }

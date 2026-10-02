@@ -105,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -513,12 +513,14 @@ function tickDecimals(xchain, tick) {
 // xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
 function isAtLeastExact(xchain, a, b) {
     var diff = String(xchain.math.subtract(a, b));
-    if (diff.charAt(0) !== '-') return true;
-    for (var i = 1; i < diff.length; i++) {
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
         var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') return false;
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
     }
-    return true;
+    return !(neg && nonzero);
 }
 
 // True when a is strictly greater than b, compared exactly. xchain.math.gt
