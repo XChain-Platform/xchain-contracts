@@ -128,7 +128,10 @@ module.exports = {
 
         xchain.require(grantor && beneficiary, 'grantor, beneficiary required');
         xchain.require(tick, 'tick required');
-        xchain.require(total && xchain.math.gt(total, '0'), 'total must be positive');
+        // Refuse 'Infinity', 'NaN' and exponent text: no deposit can ever fund such a grant,
+        // so every DEPOSIT sent to it would sit unrecoverable in custody.
+        requirePlainDecimal(xchain, total, 'total');
+        xchain.require(xchain.math.gt(total, '0'), 'total must be positive');
         // Shape-check the schedule terms, do NOT parseInt-then-range-check them. A
         // radix-less parseInt blesses spellings that mean something else entirely
         // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and both
@@ -302,6 +305,26 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
 }
 
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).

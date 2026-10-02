@@ -83,7 +83,7 @@ Solidity-to-XChain on-ramp tooling.
 | `Ownable2Step` | `onlyOwner` to offer, `onlyRole` on a `pendingOwner` state key to accept (no native two-step helper) | [access-control.js](./access-control.js) |
 | `AccessControl` | `onlyRole` | [access-control.js](./access-control.js) |
 | `Pausable` | `whenNotPaused` / `isPaused` / `setPaused` (or token-wide `SLEEP`) | [pausable.js](./pausable.js) |
-| `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) |
+| `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) (+ `isAtLeastExact` from [validation.js](./validation.js)) |
 | `Address` | `requireAddress` | [validation.js](./validation.js) |
 | `Enumerable` / `EnumerableSet` | `requireEnum` (compose keys in the flat state store; no set type) | [validation.js](./validation.js) |
 | `ReentrancyGuard` | **not needed** - deferred emissions (see below) | - |

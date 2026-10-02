@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable OpenZeppelin -> XChain pattern-helper map. Lets tooling (docs, scaffolders, AI on-ramp) resolve a name a Solidity dev already knows to the paste-in helper(s) that cover it. Each helper MUST be a top-level function in the referenced file; patterns/oz-aliases.test.js enforces that. This is a naming index, not a drop-in shim: XChain contracts are single-file, import-free JS, so you paste the helpers, you do not import an OZ package.",
+  "$comment": "Machine-readable OpenZeppelin -> XChain pattern-helper map. Lets tooling (docs, scaffolders, AI on-ramp) resolve a name a Solidity dev already knows to the paste-in helper(s) that cover it. Each helper MUST be a top-level function in the referenced file; patterns/oz-aliases.test.js enforces that. An optional `requires` array lists, as {file, helpers}, the helpers from OTHER pattern files that a row's helpers call and that must be pasted too; the same test derives those calls from source and fails on a missing or stale entry. This is a naming index, not a drop-in shim: XChain contracts are single-file, import-free JS, so you paste the helpers, you do not import an OZ package.",
   "version": "1.0.0",
   "aliases": [
     {
@@ -36,7 +36,8 @@
       "oz": "SafeERC20",
       "file": "safe-transfer.js",
       "helpers": ["heldBalance", "requireHeld", "depositedSince"],
-      "note": "Size transfers from the contract's real holdings (getBalance), never from caller-supplied amounts; emit.send moves tokens via the audited protocol handler."
+      "requires": [{ "file": "validation.js", "helpers": ["isAtLeastExact"] }],
+      "note": "Size transfers from the contract's real holdings (getBalance), never from caller-supplied amounts; emit.send moves tokens via the audited protocol handler. requireHeld also needs isAtLeastExact from validation.js pasted alongside, because custody must be compared exactly and xchain.math.gte is tolerant."
     },
     {
       "oz": "SafeMath",
