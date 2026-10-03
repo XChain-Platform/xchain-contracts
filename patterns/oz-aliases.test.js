@@ -87,6 +87,66 @@ describe('oz-aliases.json integrity', function () {
 
 });
 
+// A row's helpers can call helpers defined in OTHER pattern files, and a single-file
+// paste of the row alone then throws a ReferenceError at run time. Derive those calls.
+describe('oz-aliases.json cross-file requires', function () {
+
+    const HOME = new Map();
+    for (const f of fs.readdirSync(DIR).filter(n => n.endsWith('.js') && !n.endsWith('.test.js')))
+        for (const fn of topLevelFns(f)) HOME.set(fn, f);
+
+    // Body of a top-level helper through its column-0 closing brace, line comments removed.
+    function helperBody(file, name) {
+        const src = fs.readFileSync(path.join(DIR, file), 'utf8');
+        const start = src.indexOf('\nfunction ' + name + '(');
+        const end = src.indexOf('\n}\n', start);
+        assert.ok(start !== -1 && end !== -1, name + ' has no top-level body in ' + file);
+        return src.slice(start + 1, end + 3).replace(/\/\/.*$/gm, '');
+    }
+
+    // Collect every 'file:helper' outside the row's file reachable from its helpers.
+    function derivedRequires(row) {
+        const seen = new Set(row.helpers.map(h => row.file + ':' + h));
+        const queue = row.helpers.map(h => [row.file, h]);
+        const out = new Set();
+        while (queue.length > 0) {
+            const [file, name] = queue.shift();
+            const body = helperBody(file, name);
+            for (const [callee, home] of HOME) {
+                if (callee === name || !new RegExp('\\b' + callee + '\\s*\\(').test(body)) continue;
+                const key = home + ':' + callee;
+                if (home !== row.file) out.add(key);
+                if (!seen.has(key)) { seen.add(key); queue.push([home, callee]); }
+            }
+        }
+        return [...out].sort();
+    }
+
+    it('every requires entry names real helpers in another existing pattern file', function () {
+        for (const a of ALIASES.aliases) {
+            if (a.requires === undefined) continue;
+            assert.notStrictEqual(a.file, null, a.oz + ': a null-file row cannot require helpers');
+            assert.ok(Array.isArray(a.requires), a.oz + ': requires must be an array');
+            for (const r of a.requires) {
+                assert.ok(typeof r.file === 'string' && r.file !== a.file, a.oz + ': requires must name another file');
+                assert.ok(fs.existsSync(path.join(DIR, r.file)), a.oz + ' requires missing file ' + r.file);
+                assert.ok(Array.isArray(r.helpers) && r.helpers.length > 0, a.oz + ': requires.helpers must be non-empty');
+                for (const h of r.helpers) assert.ok(topLevelFns(r.file).has(h), a.oz + ' requires unknown ' + r.file + ':' + h);
+            }
+        }
+    });
+
+    it('every row declares exactly the cross-file helpers its helpers call', function () {
+        for (const a of ALIASES.aliases) {
+            if (a.file === null) continue;
+            const declared = [];
+            for (const r of a.requires || []) for (const h of r.helpers) declared.push(r.file + ':' + h);
+            assert.deepStrictEqual(declared.sort(), derivedRequires(a),
+                a.oz + ': requires differs from the cross-file calls in its helpers (missing or stale entry)');
+        }
+    });
+});
+
 // Pin the ERC2981 royalty claim to the generator's royalty-scope disclosure
 // (lib/policy-gen.js royaltyScopeNotes), since Solidity readers land on this row first.
 describe('oz-aliases.json ERC2981 royalty note', function () {

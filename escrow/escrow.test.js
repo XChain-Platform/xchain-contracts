@@ -147,6 +147,19 @@ const TICK    = 'TEST';
             assertSuccess(await depositAndFund('0.00000001'));
             assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
         });
+
+        it('fund() never arms against a non-finite amount', async function () {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(BUYER, 'XCHAIN', '1000000');
+            h.seedBalance(BUYER, TICK, '2000000');
+            assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+                params: [BUYER, SELLER, ARBITER, TICK, 'Infinity', '3'] }));
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER }),
+                'insufficient deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+            assertReverted(await depositAndFund('200'), 'insufficient deposit');
+            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
     });
 
     describe('attacks we considered', function () {

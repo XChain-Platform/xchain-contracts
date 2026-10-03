@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -477,12 +477,14 @@ function heldBalance(xchain) {
 // xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
 function isAtLeastExact(xchain, a, b) {
     var diff = String(xchain.math.subtract(a, b));
-    if (diff.charAt(0) !== '-') return true;
-    for (var i = 1; i < diff.length; i++) {
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
         var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') return false;
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
     }
-    return true;
+    return !(neg && nonzero);
 }
 
 // Return each party's stake. The maker gets their stake floored onto the tick's

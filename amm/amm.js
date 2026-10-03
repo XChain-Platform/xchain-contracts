@@ -121,12 +121,14 @@ function tickDecimals(xchain, tick) {
 // xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
 function isAtLeastExact(xchain, a, b) {
     var diff = String(xchain.math.subtract(a, b));
-    if (diff.charAt(0) !== '-') return true;
-    for (var i = 1; i < diff.length; i++) {
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
         var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') return false;
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
     }
-    return true;
+    return !(neg && nonzero);
 }
 
 module.exports = {
@@ -137,7 +139,7 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -276,10 +278,8 @@ module.exports = {
         ), tickDecimals(xchain, tokenOut));
         xchain.require(xchain.math.gt(amountOut, '0'), 'insufficient output');
         xchain.require(xchain.math.lt(amountOut, reserveOut), 'output exceeds reserves');
-        // Enforce minOut to the base unit; the gte term keeps a non-finite minOut
-        // reverting, since isAtLeastExact reads 'NaN' and 'Infinity' as satisfied.
-        xchain.require(xchain.math.gte(amountOut, minOut) && isAtLeastExact(xchain, amountOut, minOut),
-            'slippage: output below minOut');
+        // Enforce minOut to the base unit; isAtLeastExact fails closed on a non-finite minOut.
+        xchain.require(isAtLeastExact(xchain, amountOut, minOut), 'slippage: output below minOut');
 
         var newIn  = xchain.math.add(reserveIn, amountIn);
         var newOut = xchain.math.subtract(reserveOut, amountOut);

@@ -103,7 +103,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -183,7 +183,9 @@ module.exports = {
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
         var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
-        xchain.require(xchain.math.gte(held, itemAmount), 'insufficient item deposit');
+        // Require the full itemAmount exactly: buy() and cancel() emit it verbatim, so a
+        // dust-short custody arms an auction whose every buy() reverts on the item SEND.
+        xchain.require(isAtLeastExact(xchain, held, itemAmount), 'insufficient item deposit');
 
         // buy() already floors the PRICE leg onto bidTick's grid; the ITEM leg was
         // never checked at all. itemAmount is emitted verbatim, and the indexer
@@ -218,11 +220,12 @@ module.exports = {
 
         // Refuse a price the grid floored to nothing (the constructor gates endPrice's
         // notation, never the grid). Same guard as treasury.js executeProposal()'s
-        // below-one-unit check, and without it gte(held, '0') hands the item to a
-        // caller who deposited nothing.
+        // below-one-unit check, and without it the payment check below passes on a
+        // zero price and hands the item to a caller who deposited nothing.
         xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
 
-        xchain.require(xchain.math.gte(held, price), 'insufficient payment for the current price (' + price + ')');
+        // Compare the payment exactly, so a dust-short one fails here and not on the seller SEND.
+        xchain.require(isAtLeastExact(xchain, held, price), 'insufficient payment for the current price (' + price + ')');
 
         var caller = xchain.getSourceAddress();
         var excess = xchain.math.subtract(held, price);
@@ -357,4 +360,19 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte treats values within a 1e-12 relative tolerance as equal, so it
+// cannot guard custody. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
 }

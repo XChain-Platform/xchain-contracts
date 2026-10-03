@@ -104,7 +104,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.0.0'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -172,7 +172,9 @@ module.exports = {
         // --- Payment: delta of the contract's payTick balance since last draw ---
         var curPay = xchain.getBalance(self, payTick) || '0';
         var paid   = xchain.math.subtract(curPay, xchain.state.get('acctPay'));
-        xchain.require(xchain.math.gte(paid, price), 'underpaid');
+        // Compare the payment exactly; the gte term independently keeps a non-finite
+        // price (only checked > 0 at deploy) unpayable.
+        xchain.require(xchain.math.gte(paid, price) && isAtLeastExact(xchain, paid, price), 'underpaid');
 
         // --- Build the in-stock weighted inventory: copies = floor(balance / unit) ---
         var cards   = xchain.state.get('cards').split('|');
@@ -203,7 +205,8 @@ module.exports = {
         var chosen = null;
         for (var j = 0; j < cards.length; j++) {
             acc = xchain.math.add(acc, weights[j]);
-            if (xchain.math.lt(r, acc)) { chosen = cards[j]; break; }
+            // Exact r < acc: a tolerant lt reads r = total - 1 as equal on a large total.
+            if (!isAtLeastExact(xchain, r, acc)) { chosen = cards[j]; break; }
         }
         xchain.require(chosen !== null, 'selection failed'); // unreachable: r < total
 
@@ -296,6 +299,21 @@ function pick(xchain, buyer, total) {
         )
     );
     return xchain.math.mod(mix, total);
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte/lt treat values within a 1e-12 relative tolerance as equal, so they
+// cannot guard a payment. Same helper as patterns/validation.js:isAtLeastExact.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
 }
 
 // Horner fold of a string into a bounded big integer in [0, MOD).

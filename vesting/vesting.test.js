@@ -193,6 +193,20 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
         it('rejects total <= 0', async function () {
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '0', '10', '100', 'false'])).success, false);
         });
+        // 'Infinity' passed the magnitude check, and no finite deposit can ever fund
+        // it, so a DEPOSIT sent ahead of fund() in its BATCH stayed stranded in custody.
+        it('rejects a total that is not a plain decimal, and still deploys plain ones', async function () {
+            const BAD = ['Infinity', '-Infinity', 'NaN', '1e3', '1.5e-8', '0x10', '+1000', '.5', '5.',
+                         '1_000', ' 1000', '1000 ', '-5', '', 'abc'];
+            for (const v of BAD) {
+                assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, v, '10', '100', 'false'])).success, false,
+                    `total ${JSON.stringify(v)} must not deploy`);
+            }
+            for (const v of ['1000.5', '0.00000001']) {
+                assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, v, '10', '100', 'false'])).success, true,
+                    `total ${JSON.stringify(v)} must still deploy`);
+            }
+        });
         it('rejects cliff > duration', async function () {
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '200', '100', 'false'])).success, false);
         });
