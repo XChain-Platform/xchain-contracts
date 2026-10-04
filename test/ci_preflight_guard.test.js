@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// ci-preflight-guard.test.js: bin/ci-preflight.js must run clean and keep its scope.
+// ci_preflight_guard.test.js: bin/ci-preflight.js must run clean and keep its scope.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
