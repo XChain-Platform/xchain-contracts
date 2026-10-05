@@ -57,10 +57,9 @@ module.exports = function registerDeployValidationTests(tests) {
             assertContractState(ok.ledger, 'C:BTC:4', 'window', '1000');
         });
 
-        // itemAmount is stored verbatim and fed to floorToDecimals at fund(), which
-        // is string surgery presupposing fixed notation: on '2.5e-2' it returns the
-        // string unchanged, so the grid check would pass an amount the ledger reads
-        // as 0.025. The notation gate has to run before either.
+        // itemAmount is stored verbatim and floorToDecimals assumes fixed notation,
+        // so '2.5e-2' would pass the grid check yet read as 0.025 on the ledger.
+        // The notation gate must run before either.
         it('rejects an itemAmount that is not a plain fixed-notation decimal', async function () {
             const BAD = ['2.5e-2', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
                          '1.2.3', '', ' 10', 'abc', '-10'];
