@@ -249,6 +249,13 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         it('rejects rate <= 0', async function () {
             assert.strictEqual((await bad([OWNER, PAY, SALE, '0', SOFT, HARD, '50', '8'])).success, false);
         });
+        it('rejects a non-finite rate', async function () {
+            for (const rate of ['Infinity', '-Infinity', 'NaN', '1e3']) {
+                const res = await bad([OWNER, PAY, SALE, rate, SOFT, HARD, '50', '8']);
+                assert.strictEqual(res.success, false, 'rate ' + rate + ' deployed');
+                assert(String(res.error).includes('rate must be a plain decimal'), 'got: ' + res.error);
+            }
+        });
         // saleDecimals validation (finding 2705): it feeds both the permanent
         // emit.issue grid and claim()'s floor; a malformed value must fail the
         // deploy instead of desyncing the two.

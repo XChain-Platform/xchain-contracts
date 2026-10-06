@@ -128,6 +128,26 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
+// Reject non-decimal notation ('Infinity', 'NaN', exponents) before it reaches the issued supply.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
+
 // Decimals of the pay tick, read from the ledger snapshot. buy() reads it only after a
 // DEPOSIT landed, so the contract holds the tick and its token info is present.
 function tickDecimals(xchain, tick) {
@@ -183,7 +203,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues its own sale token at deploy and mints it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.3.0'
+        version:     '1.3.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -213,7 +233,9 @@ module.exports = {
 
         xchain.require(owner && payTick && saleTick, 'owner, payTick, saleTick required');
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
-        xchain.require(rate && xchain.math.gt(rate, '0'), 'rate must be positive');
+        xchain.require(rate, 'rate must be positive');
+        requirePlainDecimal(xchain, rate, 'rate');
+        xchain.require(xchain.math.gt(rate, '0'), 'rate must be positive');
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
         // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
         xchain.require(hardCap && isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
