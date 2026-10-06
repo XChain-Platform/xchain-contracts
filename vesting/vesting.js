@@ -40,10 +40,11 @@
 //
 // A BATCH is NOT atomic: its sub-actions settle independently, so a fund() that
 // reverts ('vesting not awaiting funds', 'insufficient deposit') leaves the
-// DEPOSIT ahead of it standing in the contract's custody.
+// DEPOSIT ahead of it standing in the contract's custody. While the grant is
+// still INIT, the grantor takes that deposit back with cancel().
 //
-// fund() verifies the contract actually holds `total` (via getBalance) and starts
-// the vesting clock from that block. The contract never trusts a caller-supplied
+// fund() verifies the contract actually holds `total` (via getBalance), that `total`
+// fits the tick's decimal grid, and starts the vesting clock from that block. The contract never trusts a caller-supplied
 // amount. Deposit EXACTLY `total` of the configured tick; surplus, or any other
 // tick, is not recoverable by this template.
 // ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -109,6 +110,7 @@ module.exports = {
     abi: { version: 1, methods: {
         fund:   { summary: 'Confirm custody and start the vesting clock (BATCH after a DEPOSIT)', params: [] },
         claim:  { summary: 'Beneficiary withdraws everything vested but unclaimed', params: [] },
+        cancel: { summary: 'Grantor reclaims the held deposit before the grant is funded, e.g. after fund() refused it', params: [] },
         revoke: { summary: 'Grantor reclaims the unvested portion (revocable grants only)', params: [] },
         info:   { summary: 'Read the vesting schedule and progress', params: [], view: true }
     } },
@@ -169,9 +171,32 @@ module.exports = {
         // Require custody of the full total, compared exactly: a grant armed short
         // of `total` makes the final claim's SEND exceed custody and revert.
         xchain.require(isAtLeastExact(xchain, held, total), 'insufficient deposit');
+        // Refuse a total the tick's grid cannot represent: payouts floor onto the grid, so
+        // one tick unit would stay in custody for good. Readable only once custody exists.
+        var grid = tickDecimals(xchain, tick);
+        xchain.require(isAtLeastExact(xchain, floorToDecimals(total, grid), total),
+            'total is not representable at tick decimals (' + grid + ')');
 
         xchain.state.set('start', String(xchain.getBlockHeight()));
         xchain.state.set('status', 'ACTIVE');
+    },
+
+    // cancel(): grantor reclaims the whole held deposit while the grant is INIT, e.g.
+    // after fund() refused it (a revert does not undo a batched DEPOSIT). Terminal: a
+    // grantor who was only short tops up and calls fund() again instead.
+    cancel: function (xchain) {
+        xchain.require(xchain.state.get('status') === 'INIT', 'vesting not cancellable');
+        xchain.require(xchain.getSourceAddress() === xchain.state.get('grantor'),
+            'only the grantor can cancel');
+
+        var tick = xchain.state.get('tick');
+        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        // Refuse an empty cancel so it cannot burn the INIT state for nothing.
+        xchain.require(xchain.math.gt(held, '0'), 'nothing to reclaim');
+
+        xchain.state.set('status', 'CANCELLED');
+        xchain.emit.send({ destination: xchain.state.get('grantor'), tick: tick, quantity: held });
+        return held;
     },
 
     // claim(): beneficiary withdraws everything vested-but-unclaimed so far.
@@ -250,7 +275,8 @@ module.exports = {
             status: xchain.state.get('status'),
             total: xchain.state.get('total'),
             claimed: xchain.state.get('claimed'),
-            claimable: xchain.state.get('status') === 'INIT'
+            // No schedule has started in INIT or CANCELLED, so nothing is claimable.
+            claimable: (xchain.state.get('status') === 'INIT' || xchain.state.get('status') === 'CANCELLED')
                 ? '0'
                 : xchain.math.subtract(vestedAmount(xchain), xchain.state.get('claimed'))
         });

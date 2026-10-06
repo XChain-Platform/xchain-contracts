@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -312,14 +312,20 @@ module.exports = {
 
         var strike = xchain.state.get('strike');
 
+        // Compare exactly: math.eq/gt treat values within 1e-12 relative as equal,
+        // so a price one base unit off a large strike would otherwise settle as a push.
+        var atOrAbove = isAtLeastExact(xchain, found.price, strike);
+        var atOrBelow = isAtLeastExact(xchain, strike, found.price);
+
         // Exactly at the strike: a push. Both stakes go back.
-        if (xchain.math.eq(found.price, strike)) {
+        if (atOrAbove && atOrBelow) {
             xchain.state.set('status', 'PUSH');
             refundBoth(xchain);
             return 'PUSH';
         }
 
-        var overWon = xchain.math.gt(found.price, strike);
+        // Strictly above the strike -> OVER wins; strictly below -> UNDER.
+        var overWon = atOrAbove;
         var makerIsOver = xchain.state.get('side') === 'OVER';
         var winner = (overWon === makerIsOver) ? xchain.state.get('maker') : xchain.state.get('taker');
         var pot = heldBalance(xchain);

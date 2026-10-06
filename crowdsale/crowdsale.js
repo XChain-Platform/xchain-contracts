@@ -128,6 +128,73 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
+// Reject non-decimal notation ('Infinity', 'NaN', exponents) before it reaches the issued supply.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
+
+// Decimals of the pay tick, read from the ledger snapshot. buy() reads it only after a
+// DEPOSIT landed, so the contract holds the tick and its token info is present.
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
+}
+
+// Return one base unit of a `decimals`-place grid as a fixed-notation string.
+function gridUnit(decimals) {
+    var s = '1';
+    for (var i = 0; i < decimals; i++) s = (i === decimals - 1) ? '0.' + s : '0' + s;
+    return s;
+}
+
+// True when paying `a` mints at least `tokens`, by the same floor claim() applies.
+function buysUnits(xchain, a, rate, saleDec, tokens) {
+    return isAtLeastExact(xchain, floorToDecimals(xchain.math.multiply(a, rate), saleDec), tokens);
+}
+
+// Return the smallest pay-grid amount, at most `total`, that mints what `total` mints,
+// or '0' below one sale unit. An exact on-grid total returns at once, reading no token
+// info. The estimate is walked at most two units each way (the divide rounds at 64 digits).
+function acceptedFor(xchain, total) {
+    var rate = xchain.state.get('rate');
+    var saleDec = parseInt(xchain.state.get('saleDecimals') || '8', 10);
+    var product = xchain.math.multiply(total, rate);
+    var tokens = floorToDecimals(product, saleDec);
+    if (isAtLeastExact(xchain, tokens, product)) return total;
+    if (xchain.math.isZero(tokens)) return '0';
+    var payDec = tickDecimals(xchain, xchain.state.get('payTick'));
+    var unit = gridUnit(payDec);
+    var est = xchain.math.divide(tokens, rate);
+    var a = floorToDecimals(est, payDec);
+    if (!isAtLeastExact(xchain, a, est)) a = xchain.math.add(a, unit);
+    for (var i = 0; i < 2 && !buysUnits(xchain, a, rate, saleDec, tokens); i++) a = xchain.math.add(a, unit);
+    for (var j = 0; j < 2; j++) {
+        var less = xchain.math.subtract(a, unit);
+        if (!xchain.math.gt(less, '0') || !buysUnits(xchain, less, rate, saleDec, tokens)) break;
+        a = less;
+    }
+    xchain.require(buysUnits(xchain, a, rate, saleDec, tokens) && isAtLeastExact(xchain, total, a),
+        'payment cannot be priced on the pay grid');
+    return a;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -136,14 +203,14 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues its own sale token at deploy and mints it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.2.0'
+        version:     '1.3.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
-        buy:      { summary: 'Attribute the deposited payment to the sale (BATCH after a DEPOSIT)', params: [] },
+        buy:      { summary: 'Attribute the deposited payment to the sale, returning change past whole sale units (BATCH after a DEPOSIT)', params: [] },
         finalize: { summary: 'Lock in the outcome after the deadline or hard cap', params: [] },
         claim:    { summary: 'Buyer mints purchased tokens (successful sale only)', params: [] },
         refund:   { summary: 'Buyer reclaims their payment (failed sale only)', params: [] },
@@ -166,7 +233,9 @@ module.exports = {
 
         xchain.require(owner && payTick && saleTick, 'owner, payTick, saleTick required');
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
-        xchain.require(rate && xchain.math.gt(rate, '0'), 'rate must be positive');
+        xchain.require(rate, 'rate must be positive');
+        requirePlainDecimal(xchain, rate, 'rate');
+        xchain.require(xchain.math.gt(rate, '0'), 'rate must be positive');
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
         // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
         xchain.require(hardCap && isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
@@ -219,7 +288,8 @@ module.exports = {
     },
 
     // buy(): attribute the caller's deposit. BATCH after a DEPOSIT of payTick.
-    // No tokens are delivered yet (claim later).
+    // No tokens are delivered yet (claim later). Change past whole sale units is
+    // returned at once, and a payment worth less than one unit comes back in full.
     buy: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'sale not open');
         xchain.require(xchain.getBlockHeight() < parseInt(xchain.state.get('deadline')), 'sale closed (deadline passed)');
@@ -230,17 +300,28 @@ module.exports = {
         var contributed  = xchain.math.subtract(balance, accountedPay);
         xchain.require(xchain.math.gt(contributed, '0'), 'no payment received (DEPOSIT in the same BATCH)');
 
+        var caller = xchain.getSourceAddress();
+        var prior  = xchain.state.get('c:' + caller) || '0';
+        var total  = xchain.math.add(prior, contributed);
+        // Keep only what buys whole sale units and return the rest now, so every stored
+        // contribution mints exactly and no payment reaches the owner without tokens.
+        var accepted = acceptedFor(xchain, total);
+        xchain.require(isAtLeastExact(xchain, accepted, prior), 'accepted amount below the prior contribution');
+        var change = xchain.math.subtract(total, accepted);
+        var delta  = xchain.math.isZero(change) ? contributed : xchain.math.subtract(accepted, prior);
+
         var raised = xchain.state.get('raised');
-        var newRaised = xchain.math.add(raised, contributed);
+        var newRaised = xchain.math.add(raised, delta);
         // Refuse a raise past hardCap, compared exactly: a tolerant gate lets the claims
         // sum past the token's exact MAX_SUPPLY and strands the last claimer.
         xchain.require(isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised), 'hard cap exceeded');
 
-        var caller = xchain.getSourceAddress();
-        var prior  = xchain.state.get('c:' + caller) || '0';
-        xchain.state.set('c:' + caller, xchain.math.add(prior, contributed));
-        xchain.state.set('accountedPay', balance);
+        if (!xchain.math.isZero(accepted)) xchain.state.set('c:' + caller, accepted);
+        // The change leaves custody through the SEND below, so it is not accounted pay.
+        xchain.state.set('accountedPay', xchain.math.subtract(balance, change));
         xchain.state.set('raised', newRaised);
+        if (xchain.math.gt(change, '0'))
+            xchain.emit.send({ destination: caller, tick: payTick, quantity: change });
     },
 
     // finalize(): lock in the outcome. Callable once the deadline passes, or
@@ -272,11 +353,9 @@ module.exports = {
         // saleDecimals key; default to the 8dp the issue used so old contracts still claim.
         var saleDecimals = parseInt(xchain.state.get('saleDecimals') || '8', 10);
         var tokens = floorToDecimals(xchain.math.multiply(paid, xchain.state.get('rate')), saleDecimals);
-        // A sub-grid contribution (fractional rate + low saleDecimals) can floor to '0';
-        // guard before deleting the record so the payment is never silently destroyed
-        // (sibling templates guard every emitted quantity: amm 'insufficient liquidity
-        // minted', vesting 'nothing to claim'). Leaves c:<caller> intact so the failure
-        // is visible rather than burning the buyer's stake into an AMOUNT=0 no-op mint.
+        // Defence in depth (buy() records only amounts that mint whole units): a mint that
+        // floors to '0' reverts before the record is deleted, so a payment is never silently
+        // destroyed into an AMOUNT=0 no-op mint, as amm and vesting guard their emissions.
         xchain.require(xchain.math.gt(tokens, '0'), 'contribution below one sale-token unit');
         xchain.state.delete('c:' + caller); // zero out first (no double claim)
 

@@ -153,6 +153,7 @@ CI is the full `npm test` + `npm run lint` gate. Before opening a PR:
 1. Run `npm test` and `npm run lint` and confirm both pass.
 2. Make sure `git status` is clean apart from intended changes (no `node_modules/`, no editor leftovers).
 3. Open the PR with a clear title and a description of what changed and why.
+4. Sign the Contributor License Agreement when the CLA Assistant bot links it on your first PR. The bot records your signature once for every XChain Platform repository, and its `license/cla` check must pass before the PR can merge.
 
 For non-security bugs, open an issue at <https://github.com/XChain-Platform/xchain-contracts/issues/new>. For security bugs, see [`SECURITY.md`](./SECURITY.md).
 
