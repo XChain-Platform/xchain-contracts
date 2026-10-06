@@ -83,7 +83,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.0.0'
+        version:     '1.0.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -278,7 +278,7 @@ module.exports = {
         xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
 
         var coll = getVault(xchain, addr, 'coll');
-        xchain.require(xchain.math.gte(coll, amount), 'insufficient collateral');
+        xchain.require(isAtLeastExact(xchain, coll, amount), 'insufficient collateral');
         var left = xchain.math.subtract(coll, amount);
 
         var debt = getVault(xchain, addr, 'debt');
@@ -317,7 +317,7 @@ module.exports = {
         xchain.require(!ratioOk(xchain, coll, debt, price), 'vault is healthy');
 
         var received = stableDelta(xchain);
-        xchain.require(xchain.math.gte(received, debt), 'must cover the full debt');
+        xchain.require(isAtLeastExact(xchain, received, debt), 'must cover the full debt');
         var excess = xchain.math.subtract(received, debt);
 
         // Collateral owed to the liquidator: debt * (100 + bonus) / (price * 100),
@@ -388,6 +388,20 @@ module.exports = {
 };
 
 // --- helpers -------------------------------------------------------------
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as amm.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
+}
 
 // Per-vault state, namespaced by address. Missing keys read as '0'.
 function getVault(xchain, addr, field) {

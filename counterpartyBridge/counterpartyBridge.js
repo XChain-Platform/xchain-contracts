@@ -116,6 +116,20 @@ function floorToDecimals(value, decimals) {
     return neg ? '-' + out : out;
 }
 
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as amm.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
+}
+
 // Pull every Counterparty "Send" of `asset` FROM `source` out of a
 // tokenscan.io GET /api/sends/{destination}/{page}/{limit} body:
 //   { "data": [ { "asset": "...", "source": "...", "destination": "...",
@@ -169,7 +183,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then mints the migrated tokens one for one.',
-        version:     '1.0.0'
+        version:     '1.0.1'
     },
 
     abi: { version: 1, methods: {
@@ -311,7 +325,7 @@ module.exports = {
         }
 
         var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), totalNew);
-        xchain.require(xchain.math.lte(newTotalClaimed, xchain.state.get('maxSupply')),
+        xchain.require(isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed),
             'bridge maxSupply exhausted');
 
         // Mark every burn tx credited BEFORE emitting, so a defense-in-depth
