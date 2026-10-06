@@ -14,6 +14,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerOffGridTotalTests = require('./vesting_test/off_grid_total');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -316,5 +317,10 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assertContractBalance(h.ledger, ADDR, TICK, '1');
             assertReverted(await claim(), 'nothing to claim');
         });
+    });
+
+    registerOffGridTotalTests({
+        GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions, assertBalance, assertContractBalance
     });
 });

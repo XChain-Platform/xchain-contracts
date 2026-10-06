@@ -21,6 +21,7 @@ const registerAttackTests = require('./stable_vault_test/attacks');
 const registerFixedNotationAmountTests = require('./stable_vault_test/fixed_notation_amounts');
 const registerDeployValidationTests = require('./stable_vault_test/deploy_validation');
 const registerEmptyTokenInfoTests = require('./stable_vault_test/empty_token_info');
+const registerExactCustodyTests = require('./stable_vault_test/exact_custody');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
@@ -104,4 +105,5 @@ const MAXAGE = '10';        // oracle freshness window, blocks
     registerFixedNotationAmountTests(ctx);
     registerDeployValidationTests(ctx);
     registerEmptyTokenInfoTests(ctx);
+    registerExactCustodyTests(ctx);
 });
