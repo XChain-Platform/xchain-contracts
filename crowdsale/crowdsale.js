@@ -128,9 +128,13 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
-// Return true when v is a plain decimal string (digits with at most one '.'), so a
-// rate of 'Infinity', 'NaN' or exponent notation cannot reach the issued supply.
-function isPlainDecimal(v) {
+// Require v to be a plain decimal string (digits with at most one '.'), so a rate of
+// 'Infinity', 'NaN' or exponent notation cannot reach the issued supply.
+function requirePlainDecimal(xchain, v, message) {
+    xchain.require(isPlainDecimalString(v), message);
+}
+
+function isPlainDecimalString(v) {
     if (typeof v !== 'string' || v.length === 0) return false;
     var dots = 0, digits = 0;
     for (var i = 0; i < v.length; i++) {
@@ -180,7 +184,8 @@ module.exports = {
 
         xchain.require(owner && payTick && saleTick, 'owner, payTick, saleTick required');
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
-        xchain.require(isPlainDecimal(rate) && xchain.math.gt(rate, '0'), 'rate must be positive');
+        requirePlainDecimal(xchain, rate, 'rate must be positive');
+        xchain.require(xchain.math.gt(rate, '0'), 'rate must be positive');
         xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
         // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
         xchain.require(hardCap && isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
