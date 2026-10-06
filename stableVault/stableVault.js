@@ -83,7 +83,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.0.1'
+        version:     '1.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -278,6 +278,7 @@ module.exports = {
         xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
 
         var coll = getVault(xchain, addr, 'coll');
+        // Compare exactly: a tolerant gte would let a debt-free vault overdraw the shared pool.
         xchain.require(isAtLeastExact(xchain, coll, amount), 'insufficient collateral');
         var left = xchain.math.subtract(coll, amount);
 
@@ -317,6 +318,7 @@ module.exports = {
         xchain.require(!ratioOk(xchain, coll, debt, price), 'vault is healthy');
 
         var received = stableDelta(xchain);
+        // Compare exactly, as withdraw() does: the full debt is burned below.
         xchain.require(isAtLeastExact(xchain, received, debt), 'must cover the full debt');
         var excess = xchain.math.subtract(received, debt);
 
@@ -388,20 +390,6 @@ module.exports = {
 };
 
 // --- helpers -------------------------------------------------------------
-
-// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
-// xchain.math.gte is tolerant (1e-12 relative). Same helper as amm.js.
-function isAtLeastExact(xchain, a, b) {
-    var diff = String(xchain.math.subtract(a, b));
-    var neg = diff.charAt(0) === '-';
-    var nonzero = false;
-    for (var i = neg ? 1 : 0; i < diff.length; i++) {
-        var c = diff.charAt(i);
-        if (c >= '1' && c <= '9') nonzero = true;
-        else if (c !== '0' && c !== '.') return false;
-    }
-    return !(neg && nonzero);
-}
 
 // Per-vault state, namespaced by address. Missing keys read as '0'.
 function getVault(xchain, addr, field) {
@@ -555,6 +543,20 @@ function stableGridOf(xchain) {
     var d = parseInt(xchain.state.get('stableDecimals'), 10);
     xchain.require(d >= 0 && d <= 18, 'stableDecimals unavailable');
     return d;
+}
+
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as patterns/validation.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
 }
 
 // Collateralization check without division:

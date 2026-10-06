@@ -24,6 +24,7 @@ const registerVetoCancelTests = require('./treasury_test/veto_cancel');
 const registerAmountValidationTests = require('./treasury_test/amount_validation');
 const registerDeployValidationTests = require('./treasury_test/deploy_validation');
 const registerProposalIdTests = require('./treasury_test/proposal_ids');
+const registerPollIndexTests = require('./treasury_test/poll_index');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
@@ -147,4 +148,5 @@ function passedPoll() {
     registerAmountValidationTests(context);
     registerDeployValidationTests(context);
     registerProposalIdTests(context);
+    registerPollIndexTests(context);
 });
