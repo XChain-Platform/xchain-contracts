@@ -105,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -222,7 +222,9 @@ module.exports = {
             'poll approval is only used in guardian mode');
         xchain.require(xchain.getSourceAddress() === xchain.state.get('guardian'),
             'only the guardian can approve a poll');
-        xchain.require(poll && xchain.math.gt(poll, '0'), 'pollIndex required');
+        // Bind only the canonical spelling: arm() matches it with === against the
+        // indexer's decimal poll index, so '0501' or '5.01e2' could never arm.
+        requireCanonicalIndex(xchain, poll, 'pollIndex');
 
         var rec = loadProposal(xchain, id);
         xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
@@ -534,6 +536,18 @@ function exceedsExactly(xchain, a, b) {
         if (c >= '1' && c <= '9') return true;
     }
     return false;
+}
+
+// Revert unless `v` is a positive decimal integer in canonical form: digits only, no
+// leading zero. A digit walk, not parseInt, so no magnitude limit and no RegExp.
+function requireCanonicalIndex(xchain, v, name) {
+    var s = (typeof v === 'string') ? v : '';
+    var ok = s.length > 0 && s.charAt(0) !== '0';
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c < '0' || c > '9') ok = false;
+    }
+    xchain.require(ok, name + ' must be a canonical positive integer (e.g. "10")');
 }
 
 // Return the storage key for a proposal id, reverting unless it is the exact decimal

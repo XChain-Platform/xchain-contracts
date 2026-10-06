@@ -71,7 +71,7 @@ const ROUND    = 7;
     // Publish the settle round at `price` (current price is irrelevant to the
     // bet). Seeds the PRODUCTION accessor shape -- getPriceAtRound returns a
     // { price, roundNumber, timestamp } object, not a bare string (see the
-    // indexer's getOracleDataForVM + xchain-vm/src/readonly_accessors.js).
+    // indexer's getOracleDataForVM + xchain-vm/src/readonly-accessors.js).
     function publishRound(price) {
         const rounds = {};
         rounds[ROUND] = { price: price, roundNumber: ROUND, timestamp: 1750000000 };
@@ -186,6 +186,46 @@ const ROUND    = 7;
             assertBalance(h.ledger, MAKER, TICK, '100');
             assertBalance(h.ledger, TAKER, TICK, '100');
             assertContractState(h.ledger, ADDR, 'status', 'VOID');
+        });
+    });
+
+    // A tolerant math.eq read a price one base unit off a 60000 strike as equal (1e-12 relative).
+    describe('near-strike settlement is exact', function () {
+        async function settleAt(side, price) {
+            await deployBet(side);
+            await depositAnd(MAKER, 'fund');
+            await depositAnd(TAKER, 'accept');
+            publishRound(price);
+            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: STRANGER });
+            assertSuccess(r);
+            return r;
+        }
+
+        it('one base unit above the strike: OVER maker wins, no push', async function () {
+            await settleAt('OVER', '60000.00000001');
+            assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertContractState(h.ledger, ADDR, 'winner', MAKER);
+            assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
+        it('one base unit below the strike: OVER maker loses to the taker', async function () {
+            await settleAt('OVER', '59999.99999999');
+            assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
+            assertContractState(h.ledger, ADDR, 'winner', TAKER);
+            assertBalance(h.ledger, TAKER, TICK, '200');
+        });
+
+        it('one base unit below the strike: UNDER maker wins', async function () {
+            await settleAt('UNDER', '59999.99999999');
+            assertContractState(h.ledger, ADDR, 'winner', MAKER);
+            assertBalance(h.ledger, MAKER, TICK, '200');
+        });
+
+        it('a differently spelled equal price still pushes', async function () {
+            await settleAt('OVER', '60000.000');
+            assertContractState(h.ledger, ADDR, 'status', 'PUSH');
+            assertBalance(h.ledger, MAKER, TICK, '100');
+            assertBalance(h.ledger, TAKER, TICK, '100');
         });
     });
 

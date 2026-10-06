@@ -20,13 +20,15 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerOffGridPaymentTests = require('./crowdsale_test/off_grid_payments');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
-let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance;
+let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
+    assertContractBalance;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
-    ({ assertSuccess, assertReverted, assertEmittedActions, assertBalance }
+    ({ assertSuccess, assertReverted, assertEmittedActions, assertBalance, assertContractBalance }
        = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
 } catch (e) { XChainVM = null; console.log('Skipping crowdsale tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
 
@@ -45,6 +47,8 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         over = over || {};
         h = new E2EHarness(XChainVM);
         for (const a of [OWNER, B1, B2]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
+        // A held tick always carries token info on a real node; buy() reads it for change.
+        h.ledger.setTokenDecimals(PAY, 8);
         return h.deploy({
             code: CODE, deployer: OWNER, contractAddress: ADDR,
             params: [OWNER, PAY, SALE, over.rate || RATE, over.soft || SOFT, over.hard || HARD,
@@ -152,11 +156,15 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             // and eventually past maxMint. The contract must EMIT the floored '101'.
             h = new E2EHarness(XChainVM);
             for (const a of [OWNER, B1]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
+            h.ledger.setTokenDecimals(PAY, 8);
             assertSuccess(await h.deploy({
                 code: CODE, deployer: OWNER, contractAddress: ADDR,
                 params: [OWNER, PAY, SALE, '10', '1', '200', String(DURATION), '0'] // rate 10, soft 1, hard 200, saleDecimals 0
             }));
-            assertSuccess(await buy(B1, '10.15')); // paid 10.15 -> tokens 101.5
+            // paid 10.15 -> 101.5 tokens: buy() keeps 10.1 (101 whole tokens) and returns 0.05.
+            const b = await buy(B1, '10.15');
+            assertSuccess(b);
+            assertEmittedActions(b, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '0.05' } }]);
             close();
             assertSuccess(await call('finalize', B1));
 
@@ -245,7 +253,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             for (const rate of ['Infinity', '-Infinity', 'NaN', '1e3']) {
                 const res = await bad([OWNER, PAY, SALE, rate, SOFT, HARD, '50', '8']);
                 assert.strictEqual(res.success, false, 'rate ' + rate + ' deployed');
-                assert(String(res.error).includes('rate must be positive'), 'got: ' + res.error);
+                assert(String(res.error).includes('rate must be a plain decimal'), 'got: ' + res.error);
             }
         });
         // saleDecimals validation (finding 2705): it feeds both the permanent
@@ -311,5 +319,10 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             assert.strictEqual(r.success, true);
             assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'), '1001');
         });
+    });
+
+    registerOffGridPaymentTests({
+        OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions, assertBalance, assertContractBalance
     });
 });

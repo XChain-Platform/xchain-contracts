@@ -37,7 +37,7 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues the sale token (max supply `hardCap*rate`, contract-owned); opens the sale. |
-| `buy()` | buyer (BATCHed after DEPOSIT) | Records the caller's contribution; reverts past the deadline or hard cap. |
+| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
 | `claim()` | buyer (SUCCESS) | Mints `contribution * rate` sale tokens to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
@@ -63,15 +63,28 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 - **Token supply.** The sale token is issued with `maxSupply = maxMint =
   hardCap*rate`, so total mintable can never exceed what the sale could sell.
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
+  `claim()` floors `contribution * rate` onto the sale token's grid, so a
+  payment off that grid would buy fewer tokens than it paid for, with the
+  difference going to the owner at `withdraw()`. `buy()` therefore keeps only
+  the smallest pay-tick amount that buys the same whole units, computed on the
+  running total for top-ups, and sends the rest back to the buyer at once;
+  every recorded contribution mints exactly. It returns change rather than
+  reverting because a reverted `buy()` would leave the whole deposit behind.
 
 ## Known limitations (teaching baseline)
 
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
   in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
-- **Whole-payment caps.** A contribution that would exceed the hard cap is rejected
-  outright (no partial accept + change). Buyers size their own deposits. Both
+- **Whole-payment caps.** A contribution whose accepted part would exceed the
+  hard cap is rejected outright (only grid change is returned, never a partial
+  fill of the cap). Buyers size their own deposits. Both
   caps compare exactly, not within a tolerance, so `raised` can never pass the
   hard cap by even one base unit and outrun the sale token's `maxSupply`.
+- **Sub-base-unit overpay.** When `rate` times one pay-tick base unit does not
+  land on the sale token's grid, the accepted amount can exceed the exact
+  price by less than one pay-tick base unit per buyer, and that goes to the
+  owner. For the same reason `raised` may never land exactly on the hard cap,
+  in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
 

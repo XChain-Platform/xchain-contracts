@@ -22,7 +22,13 @@ BATCH( DEPOSIT(vesting, TICK, TOTAL), EXECUTE(vesting, "fund") )
 `fund()` verifies the contract holds `total` (via `getBalance`) and starts the
 vesting clock from that block - so there's no claimable gap before the grant is
 actually in custody. Deposit **exactly** `total` of the configured tick; surplus
-or other ticks are not recoverable by this template.
+or other ticks are not recoverable by this template once the grant is funded.
+
+`total` must fit the tick's decimal grid (for example no `1.5` on a 0-decimal
+tick). `fund()` is the first point where the contract can read the tick's
+decimals, so it refuses an off-grid `total` there. While the grant is still
+`INIT`, the grantor can take back whatever deposit the contract holds with
+`cancel()`, whether `fund()` refused the terms or the deposit was short.
 
 ## Lifecycle
 
@@ -30,6 +36,7 @@ or other ticks are not recoverable by this template.
 |---|---|---|
 | `initialize(grantor, beneficiary, tick, total, cliffBlocks, durationBlocks, revocable)` | deployer | Sets terms; `revocable` is the string `"true"`/`"false"`; status → `INIT`. |
 | `fund()` | grantor (BATCHed after DEPOSIT) | Verifies custody ≥ `total`; starts the clock; status → `ACTIVE`. |
+| `cancel()` | grantor (`INIT` only) | Returns the whole held deposit to the grantor; status → `CANCELLED`. |
 | `claim()` | beneficiary | Sends vested-but-unclaimed tokens to the beneficiary. |
 | `revoke()` | grantor (revocable grants only) | Returns the unvested portion to the grantor; freezes the vested cap; status → `REVOKED`. |
 | `info()` | anyone (read-only) | `{ status, total, claimed, claimable }`. |
@@ -55,6 +62,13 @@ claimable, and is released with a later claim (fully, once the grant vests).
 - **Caller lies about the deposit.** `fund()` reads the on-chain balance; an
   underfunded grant cannot be activated. The custody check is exact, not
   tolerance-based, so a deposit even one base unit short of `total` is rejected.
+- **A total the tick cannot pay out.** Payouts are floored onto the tick's
+  grid, so a `total` with more decimal places than the tick (`1.5` on a
+  0-decimal tick) needed a deposit of the next grid step up while the
+  beneficiary could only ever claim the step below, leaving a whole tick unit
+  in custody for good. `fund()` refuses such a `total`, and `cancel()` returns
+  the deposit. `cancel()` works only from `INIT`, so it can never pull back a
+  funded grant, revocable or not.
 - **Unauthorized claim.** `claim()` checks `getSourceAddress()` against the stored
   beneficiary - no one else can claim.
 - **Over-claim / double-claim.** Each claim pays `vested - claimed` and advances
@@ -88,7 +102,9 @@ claimable, and is released with a later claim (fully, once the grant vests).
 ## Known limitations (teaching baseline)
 
 - **Single tick, exact funding.** Like escrow: deposit exactly `total` of the
-  configured tick; surplus/other ticks are not recoverable.
+  configured tick; once funded, surplus/other ticks are not recoverable.
+  Before funding, `cancel()` returns everything the contract holds of the
+  configured tick to the grantor, including tokens anyone else sent.
 - **One beneficiary.** For team grants, deploy one vesting contract per grantee
   (cheap) rather than generalizing to a list.
 - **Grantor trust on revocable grants.** A revocable grant lets the grantor cut

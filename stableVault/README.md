@@ -123,6 +123,12 @@ that one.
   cover the *full* debt (burned), and caps the seizure at the vault's actual
   collateral. Excess stable is returned to the liquidator; leftover
   collateral stays credited to the owner.
+- **Overdrawing the shared pool by a tolerance band.** `xchain.math.gte`
+  treats values within 1e-12 relative of each other as equal, which at a
+  1,000,000 balance is 100 base units of an 8-decimal tick. `withdraw()`'s
+  collateral check and `liquidate()`'s full-debt check therefore compare
+  exactly (`isAtLeastExact`), so a debt-free vault cannot take collateral
+  that belongs to other vaults.
 - **Self-liquidation for the bonus.** `liquidate()` rejects
   `liquidator === vaultOwner`.
 - **Rounding shortfall drains other vaults.** Every amount-bearing method
