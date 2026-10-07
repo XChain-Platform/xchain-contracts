@@ -48,8 +48,8 @@ DEPOSIT is not rolled back" under [Attacks we considered](#attacks-we-considered
 
 | Method | BATCH with | Effect |
 |---|---|---|
-| `initialize(tokenA, tokenB, lpTick)` | - (deploy) | Empty pool; issues `lpTick` (contract-owned). |
-| `addLiquidity()` | DEPOSIT A + DEPOSIT B | Mints LP shares (`sqrt(a*b)` less `MINIMUM_LIQUIDITY` first, else proportional to the scarcer side). |
+| `initialize(tokenA, tokenB, lpTick)` | - (deploy) | Empty pool; issues the full `lpTick` supply into locked contract custody. |
+| `addLiquidity()` | DEPOSIT A + DEPOSIT B | Sends LP shares from custody (`sqrt(a*b)` less `MINIMUM_LIQUIDITY` first, else proportional to the scarcer side). |
 | `removeLiquidity()` | DEPOSIT LP shares | Burns them; returns a proportional slice of both reserves. |
 | `swap(tokenIn, minOut)` | DEPOSIT tokenIn | Trades at the constant-product price minus 0.3%; reverts below `minOut`. |
 | `info()` | - | `{ tokenA, tokenB, lpTick, reserveA, reserveB, totalShares }`. |
@@ -79,6 +79,10 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   (0.001 LP) in `totalShares` without minting it, so a one-unit first position plus a
   donation cannot round a later depositor to zero, and the pool always keeps a sliver
   of both reserves. A first deposit must exceed it or the call reverts.
+- **Public LP minting.** XChain `MINT` is not issuer-gated. The pool therefore
+  pre-mints the entire LP cap into its own custody with `LOCK_MINT` and
+  `LOCK_MINT_SUPPLY`, then distributes earned shares by `SEND`. An outsider
+  cannot create unearned LP shares and redeem them against the reserves.
 - **Double / unauthorized settlement.** Each path keys off the caller and the
   balance delta within one atomic execution; emissions and state commit together.
 - **Owner draining the pool with WITHDRAW.** From the `OWNER_WITHDRAW_OPT_IN` flag
@@ -116,6 +120,9 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   pool attributes tokens by anonymous balance delta and nothing records who sent
   them. A fork that needs real recovery attributes deposits per sender in state (a
   credit ledger plus a withdraw entrypoint) instead of relying on the delta.
+- **Pools deployed before version 1.3.0 remain publicly mintable.** Contract code
+  and token locks are immutable. Redeploy the pool with a new LP tick and migrate
+  liquidity rather than continuing to use an older instance.
 
 ## Tests
 
@@ -123,9 +130,9 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
 cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/amm/amm.test.js
 ```
 
-LP delivery is asserted via the emitted MINT action (the E2E mock indexer doesn't
-credit mint `destination`); swap/withdraw token movements are asserted via balances
-and reserve-consistency, and k via exact bignumber comparison.
+LP delivery is asserted through custody-backed `SEND` actions; swap/withdraw token
+movements are asserted via balances and reserve-consistency, and k via exact
+bignumber comparison.
 
 ## License
 
