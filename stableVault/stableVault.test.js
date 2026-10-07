@@ -45,7 +45,7 @@ const STABLE = 'DUSD';      // the stable this contract mints
 const PAIR   = 'GOLD/USD';
 const RATIO  = '150';       // 150% minimum collateralization
 const BONUS  = '10';        // 10% liquidation bonus
-const MAXAGE = '10';        // oracle freshness window, blocks
+const MAXAGE = '10';        // oracle freshness window, seconds
 
 (XChainVM ? describe : describe.skip)('Template: stableVault (mini-MakerDAO)', function () {
     this.timeout(0);
