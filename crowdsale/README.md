@@ -7,9 +7,10 @@ the owner withdraws the proceeds. If it misses the soft cap by the deadline it
 fails - every buyer refunds in full.
 
 This is the first template where **the contract creates and distributes a token**:
-it `emit.issue`s the sale token at deploy (becoming its owner) and `emit.mint`s to
-each buyer on claim. Pick a `saleTick` name that isn't already taken - ticks are a
-global namespace, and the deploy's constructor issue fails on a name collision.
+it `emit.issue`s and pre-mints the full sale supply into contract custody at deploy,
+locks further minting, and `emit.send`s each buyer's allocation on claim. Pick a
+`saleTick` name that isn't already taken - ticks are a global namespace, and the
+deploy's constructor issue fails on a name collision.
 
 ## Custody model - note the footgun
 
@@ -36,10 +37,10 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues the sale token (max supply `hardCap*rate`, contract-owned); opens the sale. |
+| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`) into contract custody, locks minting, and opens the sale. |
 | `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
-| `claim()` | buyer (SUCCESS) | Mints `contribution * rate` sale tokens to the buyer. |
+| `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
 | `withdraw()` | owner (SUCCESS, once) | Sends the raised proceeds to the owner. |
 | `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline }`. |
@@ -60,16 +61,19 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   SUCCESS-only, `refund()` is FAILED-only.
 - **Unauthorized or repeated withdrawal.** `withdraw()` is owner-only and guarded
   by a `withdrawn` flag.
-- **Token supply.** The sale token is issued with `maxSupply = maxMint =
-  hardCap*rate`, so total mintable can never exceed what the sale could sell.
+- **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
+  custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
+  `MINT` cannot consume the cap or create unbacked supply, and claims only send
+  tokens from the fixed inventory.
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
   `claim()` floors `contribution * rate` onto the sale token's grid, so a
   payment off that grid would buy fewer tokens than it paid for, with the
   difference going to the owner at `withdraw()`. `buy()` therefore keeps only
   the smallest pay-tick amount that buys the same whole units, computed on the
   running total for top-ups, and sends the rest back to the buyer at once;
-  every recorded contribution mints exactly. It returns change rather than
-  reverting because a reverted `buy()` would leave the whole deposit behind.
+  every recorded contribution receives exactly its purchased tokens. It returns
+  change rather than reverting because a reverted `buy()` would leave the whole
+  deposit behind.
 
 ## Known limitations (teaching baseline)
 
@@ -94,9 +98,9 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/crowdsale/crowdsale.test.js
 ```
 
-The E2E MockIndexer applies `SEND` against balances but treats `MINT`/`ISSUE`
-loosely, so token delivery is asserted via the emitted `MINT` action and payment
-movements via resulting balances.
+The E2E MockIndexer applies `SEND` against balances but treats `ISSUE` loosely.
+The suite mirrors the production indexer's initial `mintSupply` custody credit,
+then asserts token delivery and payment movements via resulting balances.
 
 ## License
 
