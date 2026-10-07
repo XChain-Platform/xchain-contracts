@@ -196,15 +196,15 @@ function pageTxHashes(page) {
     } catch (e) { return []; }
 }
 
-// Check the mint itself: exactly one MINT of the floored sum, never above the raw burn.
+// Check the payout itself: exactly one SEND from custody of the floored sum, never above the raw burn.
 function checkMint(cb, expected, decimals, where) {
     if (expected.units === 0n) {
         assert.strictEqual(cb.emittedActions.length, 0, where + ': nothing to credit, yet actions were emitted');
         return;
     }
-    assert.strictEqual(cb.emittedActions.length, 1, where + ': expected exactly one MINT');
+    assert.strictEqual(cb.emittedActions.length, 1, where + ': expected exactly one SEND');
     const mint = cb.emittedActions[0];
-    assert.strictEqual(mint.action, 'MINT', where + ': emitted ' + mint.action + ' instead of MINT');
+    assert.strictEqual(mint.action, 'SEND', where + ': emitted ' + mint.action + ' instead of SEND');
     assert.strictEqual(mint.params.tick, XC_TICK, where + ': minted the wrong tick');
     assert.strictEqual(mint.params.destination, HOLDER, where + ': minted to the wrong address');
     const qty = String(mint.params.quantity);
@@ -266,6 +266,8 @@ const stats = { page: 0, corrupt: 0, failed: 0, mints: 0, droppedRows: 0, nullif
         it('decimals ' + decimals + ': ' + ROUNDS_PER_DEPLOY + ' random claim rounds hold every property (seed ' + SEED + ')', async function () {
             const h = new E2EHarness(XChainVM);
             await h.deploy({ code: CODE, deployer: HOLDER, contractAddress: ADDR, params: [CP_ASSET, XC_TICK, MAX_SUPPLY, decimals] });
+            // Mirror the indexer crediting the ISSUE's mintSupply to the contract (the MockIndexer ignores ISSUE).
+            h.ledger.creditContractBalance(ADDR, XC_TICK, MAX_SUPPLY);
             const run = { round: 0, txCounter: deployIndex * 1000, credited: new Set(), seenUncredited: new Set(), totalScaled: 0n, stats };
             for (run.round = 0; run.round < ROUNDS_PER_DEPLOY; run.round++) {
                 await runRound(h, rng, run, Number(decimals), 'seed ' + SEED + ' deploy ' + deployIndex + ' round ' + run.round);

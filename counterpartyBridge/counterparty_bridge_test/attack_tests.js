@@ -92,12 +92,12 @@ function registerDoubleCreditAttacks(context) {
 
 function registerSupplyCapAttack(context) {
     const {
-        ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
+        ADDR, HOLDER, OTHER, XC_TICK, CODE, assert, assertSuccess, assertReverted, assertEmittedActions,
         assertContractState, deployBridge, getHarness, seedSendsResponse,
         sendsPayload, nextTxHash
     } = context;
 
-    it('minting is capped at maxSupply across all claimants', async function () {
+    it('claims are capped at maxSupply across all claimants, before any SEND is emitted', async function () {
         await deployBridge('50', '8');
         const h = getHarness();
         const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
@@ -105,5 +105,23 @@ function registerSupplyCapAttack(context) {
         seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '100' }]));
         const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
         assertReverted(cb, 'maxSupply exhausted');
+        assert.strictEqual(h.ledger.getContractBalance(ADDR, XC_TICK), '50', 'custody is untouched by a refused claim');
+    });
+
+    // XChain MINT is not issuer-gated, so an unlocked tick could be minted by anyone:
+    // unbacked supply, and a filled cap that strands every real claimant.
+    it('public MINT of the bridged tick is locked: the deploy pre-mints maxSupply into custody', async function () {
+        const deployed = await deployBridge('50', '8');
+        const issues = deployed.result.emittedActions.filter(function (e) { return e.action === 'ISSUE'; });
+        assert.strictEqual(issues.length, 1, 'the deploy emits exactly one ISSUE');
+        assert.strictEqual(issues[0].params.tick, XC_TICK);
+        assert.strictEqual(issues[0].params.mintSupply, '50', 'the whole maxSupply is pre-minted into custody');
+        assert.strictEqual(issues[0].params.maxSupply, '50');
+        assert.strictEqual(issues[0].params.lockMint, '1', 'MINT is locked for every address, the contract included');
+        assert.strictEqual(issues[0].params.lockMintSupply, '1', 'no later ISSUE can add MINT_SUPPLY');
+    });
+
+    it('no bridge method emits a MINT', function () {
+        assert.strictEqual(CODE.indexOf('emit.mint'), -1, 'a MINT of a LOCK_MINT tick is refused by the indexer');
     });
 }

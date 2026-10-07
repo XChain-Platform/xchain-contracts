@@ -45,7 +45,7 @@ function registerExponentialQuantity(context) {
 
         const good = await claimWith('123.456789', txHash);
         assertSuccess(good);
-        assertEmittedActions(good, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '123.456789', destination: HOLDER } }]);
+        assertEmittedActions(good, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '123.456789' } }]);
         assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '123.456789');
     });
 }
@@ -69,7 +69,7 @@ function registerMixedPage(context) {
         ]));
         const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
         assertSuccess(cb);
-        assertEmittedActions(cb, [{ action: 'MINT', params: { tick: XC_TICK, quantity: '10.25', destination: HOLDER } }]);
+        assertEmittedActions(cb, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '10.25' } }]);
         assertContractState(h.ledger, ADDR, 'burned:' + goodTx, true);
         assert.ok(!('burned:' + badTx in h.ledger.getContractState(ADDR)),
             'the dropped row must not be marked credited');
@@ -100,7 +100,7 @@ function registerSpellingMatrix(context) {
             await deployBridge();
             const cb = await claimWith(v, nextTxHash());
             assertSuccess(cb, `quantity ${JSON.stringify(v)} must be credited`);
-            assertEmittedActions(cb, [{ action: 'MINT', params: { tick: XC_TICK, quantity: v, destination: HOLDER } }]);
+            assertEmittedActions(cb, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: v } }]);
         }
     });
 }

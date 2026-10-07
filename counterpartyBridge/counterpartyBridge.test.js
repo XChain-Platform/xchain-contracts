@@ -49,12 +49,18 @@ function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart
     this.timeout(0);
     let h;
 
+    // Credits the ISSUE's mintSupply to the contract by hand: the harness
+    // MockIndexer ignores ISSUE, while the real indexer credits MINT_SUPPLY to
+    // the issuing contract, and every claim is a SEND from that custody.
     async function deployBridge(maxSupply, decimals) {
         h = new E2EHarness(XChainVM);
-        await h.deploy({
+        const deployed = await h.deploy({
             code: CODE, deployer: HOLDER, contractAddress: ADDR,
             params: [CP_ASSET, XC_TICK, maxSupply || MAX_SUPPLY, decimals || '8']
         });
+        assert.strictEqual(deployed.success, true, 'bridge deploy failed: ' + deployed.error);
+        h.ledger.creditContractBalance(ADDR, XC_TICK, maxSupply || MAX_SUPPLY);
+        return deployed;
     }
 
     // Seeds a settled attestation response on the harness's MockLedger, the
