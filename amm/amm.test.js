@@ -102,7 +102,7 @@ describe('Template: amm abi', function () {
             assert.deepStrictEqual(reserves(), { a: '1000', b: '1000', shares: '1000' });
         });
 
-        it('XC-3742 locks public LP minting and distributes only pre-minted custody', async function () {
+        it('locks public LP minting and distributes only pre-minted custody', async function () {
             const deployed = await deploy();
             const issues = deployed.result.emittedActions.filter(e => e.action === 'ISSUE');
             assert.strictEqual(issues.length, 1);
