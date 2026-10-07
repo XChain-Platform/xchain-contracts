@@ -92,14 +92,41 @@ describe('Template: amm abi', function () {
     }
 
     describe('liquidity', function () {
-        it('first provider mints sqrt(a*b) shares and sets reserves', async function () {
+        it('first provider mints sqrt(a*b) shares less the locked minimum and sets reserves', async function () {
             assertSuccess(await deploy());
             const r = await addLiq(LP1, '1000', '1000');
             assertSuccess(r);
             const mint = emitted(r, 'MINT', LP);
             assert.ok(mint && mint.params.destination === LP1, 'LP minted to provider');
-            assert.strictEqual(mint.params.quantity, '1000', 'sqrt(1000*1000) = 1000 shares');
+            assert.strictEqual(mint.params.quantity, '999.999', 'sqrt(1000*1000) = 1000 shares, MINIMUM_LIQUIDITY locked');
             assert.deepStrictEqual(reserves(), { a: '1000', b: '1000', shares: '1000' });
+        });
+
+        it('locks MINIMUM_LIQUIDITY on the first deposit so the pool never drains to zero shares', async function () {
+            await deploy();
+            await addLiq(LP1, '1000', '1000');
+            h.ledger.contractBalances[ADDR][LP] = '0';
+            h.ledger.setBalance(LP1, LP, '999.999');
+            h.deposit(LP1, ADDR, LP, '999.999');
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }));
+            const r = reserves();
+            assert.strictEqual(r.shares, '0.001', 'locked shares stay in totalShares');
+            assert.ok(math.larger(bn(r.a), 0) && math.larger(bn(r.b), 0), 'locked share keeps a reserve behind');
+        });
+
+        it('rejects a first deposit that does not exceed MINIMUM_LIQUIDITY', async function () {
+            await deploy();
+            assertReverted(await addLiq(LP1, '0.001', '0.001'), 'insufficient liquidity minted');
+        });
+
+        it('a one-unit first position plus a donation cannot zero out a later depositor', async function () {
+            await deploy();
+            assertReverted(await addLiq(LP1, '0.00000001', '0.00000001'), 'insufficient liquidity minted');
+            await addLiq(LP1, '1000', '1000');
+            h.deposit(LP1, ADDR, A, '1000000'); // direct donation, not accounted until next add
+            const r = await addLiq(LP2, '1000', '1000');
+            assertSuccess(r);
+            assert.ok(math.larger(bn(emitted(r, 'MINT', LP).params.quantity), 0));
         });
 
         it('later providers mint shares proportional to the scarcer side', async function () {
@@ -117,21 +144,21 @@ describe('Template: amm abi', function () {
             // The real indexer pays the provider, so reset the contract's LP custody
             // to 0 and credit LP1 the shares the mint actually represents.
             h.ledger.contractBalances[ADDR][LP] = '0';
-            h.ledger.setBalance(LP1, LP, '1000');
-            h.deposit(LP1, ADDR, LP, '1000'); // return all shares
+            h.ledger.setBalance(LP1, LP, '999.999');
+            h.deposit(LP1, ADDR, LP, '999.999'); // return all minted shares
             const r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
             assertSuccess(r);
             assert.ok(emitted(r, 'DESTROY', LP), 'shares burned');
-            assert.strictEqual(emitted(r, 'SEND', A).params.quantity, '1000');
-            assert.strictEqual(emitted(r, 'SEND', B).params.quantity, '1000');
-            assert.deepStrictEqual(reserves(), { a: '0', b: '0', shares: '0' });
+            assert.strictEqual(emitted(r, 'SEND', A).params.quantity, '999.999');
+            assert.strictEqual(emitted(r, 'SEND', B).params.quantity, '999.999');
+            assert.deepStrictEqual(reserves(), { a: '0.001', b: '0.001', shares: '0.001' });
         });
 
         it('partial removeLiquidity returns the right fraction', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
             h.ledger.contractBalances[ADDR][LP] = '0'; // see note above
-            h.ledger.setBalance(LP1, LP, '1000');
+            h.ledger.setBalance(LP1, LP, '999.999');
             h.deposit(LP1, ADDR, LP, '400');
             const r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
             assert.strictEqual(emitted(r, 'SEND', A).params.quantity, '400');
@@ -247,7 +274,7 @@ describe('Template: amm abi', function () {
         const fracLen = (v) => { const s = String(v); const i = s.indexOf('.'); return i < 0 ? 0 : s.length - i - 1; };
         const onGrid = (v, d) => fracLen(v) <= d;
 
-        it('quantises totalShares to the LP grid so the last LP fully drains', async function () {
+        it('quantises totalShares to the LP grid so the last LP drains all but the locked minimum', async function () {
             await deploy();
             // sqrt(1000 * 3000) = 1732.05080756887... : off the 8-dp grid.
             const r1 = await addLiq(LP1, '1000', '3000');
@@ -255,16 +282,16 @@ describe('Template: amm abi', function () {
             const mint1 = emitted(r1, 'MINT', LP).params.quantity;
             assert.ok(onGrid(reserves().shares, 8),
                 'totalShares must sit on the 8-dp LP grid, got ' + reserves().shares);
-            assert.ok(math.equal(bn(reserves().shares), bn(norm(mint1, 8))),
-                'state totalShares must equal the LP supply the indexer actually mints');
+            assert.ok(math.equal(bn(reserves().shares), math.add(bn(norm(mint1, 8)), bn('0.001'))),
+                'state totalShares must equal the LP supply the indexer mints plus the locked minimum');
 
             // Second provider deposits in-ratio; the proportional share repeats.
             const r2 = await addLiq(LP2, '333', '999');
             assertSuccess(r2);
             const mint2 = emitted(r2, 'MINT', LP).params.quantity;
             assert.ok(onGrid(reserves().shares, 8), 'totalShares stays gridded after the 2nd add');
-            assert.ok(math.equal(bn(reserves().shares), math.add(bn(norm(mint1, 8)), bn(norm(mint2, 8)))),
-                'totalShares == sum of minted LP');
+            assert.ok(math.equal(bn(reserves().shares), math.add(math.add(bn(norm(mint1, 8)), bn(norm(mint2, 8))), bn('0.001'))),
+                'totalShares == sum of minted LP plus the locked minimum');
 
             // Both LPs redeem everything; the pool must drain to exactly zero. The bug
             // divided by an inflated totalShares, so the final dust was unwithdrawable.
@@ -277,7 +304,9 @@ describe('Template: amm abi', function () {
             h.ledger.setBalance(LP1, LP, mint1);
             h.deposit(LP1, ADDR, LP, mint1);
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }));
-            assert.deepStrictEqual(reserves(), { a: '0', b: '0', shares: '0' }, 'last LP drains the pool to zero');
+            const left = reserves();
+            assert.strictEqual(left.shares, '0.001', 'only the locked minimum remains');
+            assert.ok(onGrid(left.a, 8) && onGrid(left.b, 8) && math.larger(bn(left.a), 0), 'last LP leaves only the locked slice behind');
         });
 
         it('quantises swap output so reserves reconcile with token custody', async function () {

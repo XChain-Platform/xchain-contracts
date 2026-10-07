@@ -73,6 +73,13 @@ var FEE_DEN = '1000';
 // this same grid before it touches state or an emission.
 var LP_DECIMALS = 8;
 
+// The first deposit permanently locks this many LP shares: they count toward
+// totalShares but are never minted, so no holder can redeem them and the pool can
+// never be drained to a single share unit. That removes the first-depositor
+// inflation attack, where a one-unit position plus a direct donation rounds a
+// later depositor's shares down to nothing.
+var MINIMUM_LIQUIDITY = '0.001';
+
 // RESERVE RECONCILIATION (see finding: reserves/totalShares drift)
 //
 // xchain.math computes at 64 significant digits, but the indexer normalises every
@@ -189,9 +196,12 @@ module.exports = {
         xchain.require(xchain.math.gt(depA, '0') && xchain.math.gt(depB, '0'), 'must deposit both tokens');
 
         var shares;
+        var locked = '0';
         if (xchain.math.isZero(totalShares)) {
-            // First provider sets the price; initial shares = sqrt(depA * depB).
+            // First provider sets the price; initial shares = sqrt(depA * depB), of
+            // which MINIMUM_LIQUIDITY is locked and the rest is minted.
             shares = xchain.math.sqrt(xchain.math.multiply(depA, depB));
+            locked = MINIMUM_LIQUIDITY;
         } else {
             // Proportional to the scarcer side, so skewed deposits can't mint extra
             // shares; any excess on the other side simply enriches the pool. Deposit
@@ -202,14 +212,15 @@ module.exports = {
         }
         // Quantise to the LP grid so state totalShares matches the LP the indexer mints.
         shares = floorToDecimals(shares, LP_DECIMALS);
-        xchain.require(xchain.math.gt(shares, '0'), 'insufficient liquidity minted');
+        xchain.require(xchain.math.gt(shares, locked), 'insufficient liquidity minted');
+        var minted = xchain.math.subtract(shares, locked);
 
         xchain.state.set('reserveA', xchain.math.add(reserveA, depA));
         xchain.state.set('reserveB', xchain.math.add(reserveB, depB));
         xchain.state.set('totalShares', xchain.math.add(totalShares, shares));
 
-        xchain.emit.mint({ tick: xchain.state.get('lpTick'), quantity: shares, destination: xchain.getSourceAddress() });
-        return shares;
+        xchain.emit.mint({ tick: xchain.state.get('lpTick'), quantity: minted, destination: xchain.getSourceAddress() });
+        return minted;
     },
 
     // removeLiquidity(): BATCH after DEPOSITing LP shares back to the pool.
