@@ -71,8 +71,9 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   difference going to the owner at `withdraw()`. `buy()` therefore keeps only
   the smallest pay-tick amount that buys the same whole units, computed on the
   running total for top-ups, and sends the rest back to the buyer at once;
-  every recorded contribution mints exactly. It returns change rather than
-  reverting because a reverted `buy()` would leave the whole deposit behind.
+  every recorded contribution receives exactly its purchased tokens. It returns
+  change rather than reverting because a reverted `buy()` would leave the whole
+  deposit behind.
 
 ## Known limitations (teaching baseline)
 
