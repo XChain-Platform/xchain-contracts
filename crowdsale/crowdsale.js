@@ -30,11 +30,10 @@
 //   - FAILURE (raised < softCap at the deadline): buyers refund() their payment
 //     in full; nothing is owed.
 //
-// The contract ISSUES the sale token itself at deploy (it becomes the token's
-// owner) and MINTS to each buyer on claim (a worked example of a contract
-// creating and distributing a token. Pick a `saleTick` name that is not already
-// taken: ticks are a global namespace and the deploy's constructor issue will
-// fail if the name exists.
+// The contract ISSUES and pre-mints the full sale-token supply into its custody
+// at deploy, locks further minting, and SENDS tokens to each buyer on claim. Pick
+// a `saleTick` name that is not already taken: ticks are a global namespace and
+// the deploy's constructor issue will fail if the name exists.
 //
 // CUSTODY MODEL: read this, it has a real footgun
 //
@@ -202,8 +201,8 @@ module.exports = {
     // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
     meta: {
         name:        'Crowdsale',
-        description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues its own sale token at deploy and mints it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.3.1'
+        description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
+        version:     '1.3.2'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -212,7 +211,7 @@ module.exports = {
     abi: { version: 1, methods: {
         buy:      { summary: 'Attribute the deposited payment to the sale, returning change past whole sale units (BATCH after a DEPOSIT)', params: [] },
         finalize: { summary: 'Lock in the outcome after the deadline or hard cap', params: [] },
-        claim:    { summary: 'Buyer mints purchased tokens (successful sale only)', params: [] },
+        claim:    { summary: 'Buyer receives purchased tokens (successful sale only)', params: [] },
         refund:   { summary: 'Buyer reclaims their payment (failed sale only)', params: [] },
         withdraw: { summary: 'Owner takes the proceeds (successful sale only)', params: [] },
         info:     { summary: 'Read the sale terms and progress', params: [], view: true }
@@ -283,7 +282,10 @@ module.exports = {
             maxSupply: maxSale,
             maxMint: maxSale,
             decimals: decimals,
-            description: 'Crowdsale token'
+            description: 'Crowdsale token',
+            mintSupply: maxSale,
+            lockMint: '1',
+            lockMintSupply: '1'
         });
     },
 
@@ -339,7 +341,7 @@ module.exports = {
             isAtLeastExact(xchain, raised, xchain.state.get('softCap')) ? 'SUCCESS' : 'FAILED');
     },
 
-    // claim(): buyer mints their purchased sale tokens (successful sale only).
+    // claim(): send the buyer's purchased sale tokens (successful sale only).
     claim: function (xchain) {
         xchain.require(xchain.state.get('status') === 'SUCCESS', 'sale not successful');
         var caller = xchain.getSourceAddress();
@@ -359,7 +361,7 @@ module.exports = {
         xchain.require(xchain.math.gt(tokens, '0'), 'contribution below one sale-token unit');
         xchain.state.delete('c:' + caller); // zero out first (no double claim)
 
-        xchain.emit.mint({
+        xchain.emit.send({
             tick: xchain.state.get('saleTick'),
             quantity: tokens,
             destination: caller
