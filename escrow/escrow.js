@@ -23,8 +23,8 @@
 //
 // A buyer locks tokens in this contract for a seller. The funds are released to
 // the seller, or refunded to the buyer, only on an authorized instruction:
-//   - the buyer can release (they got what they paid for) or, after a deadline,
-//     reclaim;
+//   - the buyer can release (they got what they paid for), cancel before the
+//     escrow is funded, or, after a deadline, reclaim;
 //   - the seller can refund (call off the deal);
 //   - the arbiter can do either, to settle a dispute.
 //
@@ -64,7 +64,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: a buyer deposits tokens for a seller, and the funds are released, refunded, or reclaimed after a deadline only on an authorized instruction from the buyer, the seller, or the arbiter.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -75,6 +75,7 @@ module.exports = {
         release: { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:  { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
         timeout: { summary: 'Buyer reclaims after the deadline', params: [] },
+        cancel:  { summary: 'Buyer withdraws a deposit before the escrow is funded', params: [] },
         status:  { summary: 'Read the escrow status', params: [], view: true }
     } },
 
@@ -98,7 +99,8 @@ module.exports = {
 
         xchain.require(buyer && seller && arbiter, 'buyer, seller, arbiter required');
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
 
         // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
         // parseInt blesses spellings that mean something else entirely ('1e9' -> 1,
@@ -159,6 +161,26 @@ module.exports = {
         settle(xchain, ['buyer'], 'buyer', 'REFUNDED', true);
     },
 
+    // cancel(): buyer withdraws a deposit while the escrow is still INIT, for
+    // example after an underfunded or mistaken DEPOSIT that fund() rejected.
+    // Returns the whole held balance and closes the escrow.
+    cancel: function (xchain) {
+        xchain.require(xchain.state.get('status') === 'INIT', 'escrow not awaiting funds');
+        xchain.require(xchain.getSourceAddress() === xchain.state.get('buyer'), 'caller not authorized for this action');
+
+        var tick = xchain.state.get('tick');
+        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        xchain.require(xchain.math.gt(held, '0'), 'nothing to cancel');
+
+        xchain.state.set('status', 'CANCELLED');
+
+        xchain.emit.send({
+            destination: xchain.state.get('buyer'),
+            tick: tick,
+            quantity: held
+        });
+    },
+
     status: function (xchain) {
         return xchain.state.get('status');
     }
@@ -200,6 +222,28 @@ function settle(xchain, allowedRoles, payeeRole, terminalStatus, requireDeadline
         tick: tick,
         quantity: held
     });
+}
+
+// Require a plain fixed-notation decimal: digits and at most one interior decimal
+// point, no exponent, sign or radix prefix. Same helper as
+// cardDispenser.js:requirePlainDecimal, inlined for the single-file VM load.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
 }
 
 // Throw unless `v` is a canonical base-10 integer string within [min, max]

@@ -34,11 +34,12 @@ makes custody contracts safe on XChain.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
+| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms (`amount` must be a plain decimal: digits and at most one decimal point); status → `INIT`. |
 | `fund()` | anyone (usually buyer, BATCHed after DEPOSIT) | Verifies the contract holds ≥ `amount` of `tick`; anchors the reclaim deadline (`deadlineBlocks` from **this** block); status → `FUNDED`. |
 | `release()` | buyer **or** arbiter | Sends the held balance to the seller; status → `RELEASED`. |
 | `refund()` | seller **or** arbiter | Sends the held balance to the buyer; status → `REFUNDED`. |
 | `timeout()` | buyer | After the deadline, buyer reclaims; status → `REFUNDED`. |
+| `cancel()` | buyer | While still `INIT`, returns the held balance to the buyer (reverts if nothing is held); status → `CANCELLED`. |
 | `status()` | anyone (read-only) | Returns the current status string. |
 
 Settlement sends the contract's **entire** balance of the escrowed tick, so no
@@ -92,6 +93,12 @@ await sdk.contracts.execute({ contractActionIndex: escrowIndex, method: 'release
   seller reading a ~19,000-year protection window off the DEPLOY action would
   have got a 1-block one, letting the buyer `fund()`, take delivery, and reclaim
   the whole balance via `timeout()` at the next block.
+- **A deposit stuck before funding.** `cancel()` lets the buyer take back whatever
+  the contract holds while the escrow is still `INIT`, so an underfunded or
+  mistaken `DEPOSIT` is never stranded. It is buyer-only, needs a non-zero
+  balance, and is closed once `fund()` arms the escrow.
+- **A non-decimal amount.** `initialize(...)` rejects `Infinity`, `NaN`,
+  exponents, signs and radix prefixes in `amount`, so `fund()` can always be met.
 - **Reentrancy.** Emissions are deferred and processed by the indexer after the
   method returns, inside one atomic scope - there is no mid-method callback into
   this contract, and the terminal status is already written.
