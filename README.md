@@ -103,7 +103,10 @@ and applies them when it matches. `DISPENSER_CREATE` is in the same `trade`
 class, so the guard runs when a holder opens a dispenser, but the dispenser path
 honours only a revert; the legs are discarded and dispenser sales pay no split.
 A holder can therefore sell a royalty-bearing token through a dispenser
-royalty-free, and a dispenser opened before the bind is never guarded at all.
+royalty-free. From the `DISPENSER_REFILL` flag day the guard also runs,
+veto-only in the same way, on every refill that adds escrow, so it can deny a
+refill of a dispenser opened before the bind; below that flag day such a
+dispenser runs the guard at no point.
 A cross-chain `ORDER_CREATE` or `SWAP_CREATE` (proceeds on another chain) of a
 royalty-bearing token is denied while the network's `CROSS_CHAIN_ROYALTY`
 protocol change is inactive; once it is active, every leg `to` must also be
