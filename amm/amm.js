@@ -72,6 +72,7 @@ var FEE_DEN = '1000';
 // LP shares are issued with 8 decimals (see initialize); share math is quantised to
 // this same grid before it touches state or an emission.
 var LP_DECIMALS = 8;
+var LP_MAX_SUPPLY = '99999999999999999999';
 
 // The first deposit permanently locks this many LP shares: they count toward
 // totalShares but are never minted, so no holder can redeem them and the pool can
@@ -146,14 +147,14 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
-        addLiquidity:    { summary: 'Mint LP shares for deposited liquidity (BATCH after DEPOSITing both tokens)', params: [] },
+        addLiquidity:    { summary: 'Distribute LP shares for deposited liquidity (BATCH after DEPOSITing both tokens)', params: [] },
         removeLiquidity: { summary: 'Burn LP shares and withdraw both tokens (BATCH after DEPOSITing LP shares)', params: [] },
         swap:            { summary: 'Trade tokenIn for the other token at the constant-product price, 0.3% fee (BATCH after a DEPOSIT)', params: [ { name: 'tokenIn', type: 'tick' }, { name: 'minOut', type: 'amount' } ] },
         info:            { summary: 'Read the pair, reserves, and total LP shares', params: [], view: true }
@@ -175,13 +176,24 @@ module.exports = {
         xchain.state.set('reserveA', '0');
         xchain.state.set('reserveB', '0');
         xchain.state.set('totalShares', '0');
+        xchain.state.set('lpInventory', LP_MAX_SUPPLY);
 
+        // MINT is public on XChain, so pre-mint the full supply into custody and
+        // lock both mint paths. Liquidity shares leave custody only through SEND.
         // A name collision on lpTick reverts the deploy (fail-fast by design).
-        var big = '99999999999999999999';
-        xchain.emit.issue({ tick: lpTick, maxSupply: big, maxMint: big, decimals: String(LP_DECIMALS), description: 'AMM LP share' });
+        xchain.emit.issue({
+            tick: lpTick,
+            maxSupply: LP_MAX_SUPPLY,
+            maxMint: LP_MAX_SUPPLY,
+            decimals: String(LP_DECIMALS),
+            description: 'AMM LP share',
+            mintSupply: LP_MAX_SUPPLY,
+            lockMint: '1',
+            lockMintSupply: '1'
+        });
     },
 
-    // addLiquidity(): BATCH after DEPOSITing both tokenA and tokenB. Mints LP
+    // addLiquidity(): BATCH after DEPOSITing both tokenA and tokenB. Sends LP
     // shares to the provider proportional to the deposit.
     addLiquidity: function (xchain) {
         var self = xchain.getContractAddress();
@@ -214,12 +226,16 @@ module.exports = {
         shares = floorToDecimals(shares, LP_DECIMALS);
         xchain.require(xchain.math.gt(shares, locked), 'insufficient liquidity minted');
         var minted = xchain.math.subtract(shares, locked);
+        var lpInventory = xchain.state.get('lpInventory');
+        var available = xchain.math.subtract(lpInventory, MINIMUM_LIQUIDITY);
+        xchain.require(isAtLeastExact(xchain, available, minted), 'LP supply exhausted');
 
         xchain.state.set('reserveA', xchain.math.add(reserveA, depA));
         xchain.state.set('reserveB', xchain.math.add(reserveB, depB));
         xchain.state.set('totalShares', xchain.math.add(totalShares, shares));
+        xchain.state.set('lpInventory', xchain.math.subtract(lpInventory, minted));
 
-        xchain.emit.mint({ tick: xchain.state.get('lpTick'), quantity: minted, destination: xchain.getSourceAddress() });
+        xchain.emit.send({ tick: xchain.state.get('lpTick'), quantity: minted, destination: xchain.getSourceAddress() });
         return minted;
     },
 
@@ -234,7 +250,10 @@ module.exports = {
         var reserveB = xchain.state.get('reserveB');
         var totalShares = xchain.state.get('totalShares');
 
-        var shares = xchain.getBalance(self, lpTick) || '0';
+        var shares = xchain.math.subtract(
+            xchain.getBalance(self, lpTick) || '0',
+            xchain.state.get('lpInventory')
+        );
         xchain.require(xchain.math.gt(shares, '0'), 'must deposit LP shares');
         xchain.require(xchain.math.lte(shares, totalShares), 'shares exceed total');
 

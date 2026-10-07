@@ -9,11 +9,8 @@
 // (isolated-vm / Node 22). Run from the xchain-vm package:
 //   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/amm/amm.test.js
 //
-// MockIndexer notes: SEND moves custody->recipient (asserted via balances), but
-// MINT credits the contract & ignores `destination` and ISSUE is a no-op. So LP
-// minting is asserted via the emitted MINT action, and for removeLiquidity the
-// provider's LP balance is seeded manually (what the real indexer's mint would do)
-// before depositing it back.
+// MockIndexer notes: ISSUE is a no-op, so deploy() credits the pre-minted LP
+// inventory to contract custody by hand. SEND then moves shares to providers.
 
 'use strict';
 
@@ -22,19 +19,24 @@ const fs = require('fs');
 const path = require('path');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
+const INDEXER_DIR = path.join(__dirname, '..', '..', 'xchain-indexer');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertContractBalance, assertContractState, math;
+let mintValidation, issueSupplyRules;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
     ({ assertSuccess, assertReverted, assertContractBalance, assertContractState } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+    mintValidation = require(path.join(INDEXER_DIR, 'src', 'actions', 'mint', 'validate.js'));
+    issueSupplyRules = require(path.join(INDEXER_DIR, 'src', 'actions', 'issue', 'supply_rules.js'));
     const { create, all } = require(path.join(VM_DIR, 'node_modules', 'mathjs'));
     math = create(all, { number: 'BigNumber', precision: 64 });
-} catch (e) { XChainVM = null; console.log('Skipping AMM tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
+} catch (e) { XChainVM = null; console.log('Skipping AMM tests (xchain-vm harness and xchain-indexer validators must be available on Node 22)'); }
 
 const CODE = fs.readFileSync(path.join(__dirname, 'amm.js'), 'utf8');
 
 const LP1 = 'lp1', LP2 = 'lp2', T1 = 'trader1';
 const ADDR = 'C:BTC:1', A = 'AAA', B = 'BBB', LP = 'AAABBBLP';
+const LP_MAX_SUPPLY = '99999999999999999999';
 
 const bn = (x) => math.bignumber(x);
 const k = (r) => math.multiply(bn(r.a), bn(r.b));
@@ -76,7 +78,9 @@ describe('Template: amm abi', function () {
         h.ledger.setTokenDecimals(A, 8);
         h.ledger.setTokenDecimals(B, 8);
         h.ledger.setTokenDecimals(LP, 8);
-        return h.deploy({ code: CODE, deployer: LP1, contractAddress: ADDR, params: [A, B, LP] });
+        const deployed = await h.deploy({ code: CODE, deployer: LP1, contractAddress: ADDR, params: [A, B, LP] });
+        h.ledger.creditContractBalance(ADDR, LP, LP_MAX_SUPPLY);
+        return deployed;
     }
     async function addLiq(who, a, b) {
         h.deposit(who, ADDR, A, a); h.deposit(who, ADDR, B, b);
@@ -96,17 +100,79 @@ describe('Template: amm abi', function () {
             assertSuccess(await deploy());
             const r = await addLiq(LP1, '1000', '1000');
             assertSuccess(r);
-            const mint = emitted(r, 'MINT', LP);
-            assert.ok(mint && mint.params.destination === LP1, 'LP minted to provider');
-            assert.strictEqual(mint.params.quantity, '999.999', 'sqrt(1000*1000) = 1000 shares, MINIMUM_LIQUIDITY locked');
+            const delivery = emitted(r, 'SEND', LP);
+            assert.ok(delivery && delivery.params.destination === LP1, 'LP delivered to provider');
+            assert.strictEqual(delivery.params.quantity, '999.999', 'sqrt(1000*1000) = 1000 shares, MINIMUM_LIQUIDITY locked');
             assert.deepStrictEqual(reserves(), { a: '1000', b: '1000', shares: '1000' });
+        });
+
+        it('locks public LP minting and distributes only pre-minted custody', async function () {
+            const deployed = await deploy();
+            const issues = deployed.result.emittedActions.filter(e => e.action === 'ISSUE');
+            assert.strictEqual(issues.length, 1);
+            assert.strictEqual(issues[0].params.mintSupply, LP_MAX_SUPPLY);
+            assert.strictEqual(issues[0].params.maxSupply, LP_MAX_SUPPLY);
+            assert.strictEqual(issues[0].params.lockMint, '1');
+            assert.strictEqual(issues[0].params.lockMintSupply, '1');
+            assert.strictEqual(CODE.indexOf('emit.mint'), -1, 'AMM methods never invoke locked MINT');
+
+            const added = await addLiq(LP1, '1000', '1000');
+            assertSuccess(added);
+            assert.strictEqual(emitted(added, 'MINT', LP), undefined);
+            assert.strictEqual(emitted(added, 'SEND', LP).params.quantity, '999.999');
+            assert.strictEqual(h.ledger.getContractState(ADDR).lpInventory, '99999999999999998999.001');
+        });
+
+        it('refuses unauthorized public MINT and any later supply-raising ISSUE under the emitted lock flags', async function () {
+            const deployed = await deploy();
+            const issue = deployed.result.emittedActions.find(e => e.action === 'ISSUE').params;
+
+            const validator = {
+                util: {
+                    isNull: value => value === null || value === undefined || value === '',
+                    isValidAmountFormat: () => true,
+                    isCryptoAddress: () => true
+                },
+                indexerDb: { isActionAllowed: async () => true },
+                config: { MAX_MEMO_LENGTH: 1024 }
+            };
+            const tokenInfo = {
+                DECIMALS: Number(issue.decimals),
+                LOCK_MINT: Number(issue.lockMint),
+                LOCK_MINT_SUPPLY: Number(issue.lockMintSupply)
+            };
+
+            for (const caller of [T1, LP2, LP1, ADDR]) {
+                const mintContext = {
+                    data: { SOURCE: caller, AMOUNT: '1', MEMO: '' },
+                    tokenInfo,
+                    error: null
+                };
+                await mintValidation.validateTokenRules.call(validator, mintContext);
+                assert.strictEqual(mintContext.error, 'invalid: LOCK_MINT', 'MINT refused for ' + caller);
+            }
+
+            const issueContext = {
+                data: { SOURCE: LP1, MINT_SUPPLY: '1', TRANSFER: '', TRANSFER_SUPPLY: '' },
+                tokenInfo,
+                error: null
+            };
+            issueSupplyRules.validateTransferFields.call(validator, issueContext);
+            assert.strictEqual(issueContext.error, 'invalid: MINT_SUPPLY (locked)', 'supply-raising re-ISSUE refused');
+
+            // The contract itself never mints, so the lock costs it nothing.
+            let r = await addLiq(LP1, '1000', '1000');
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
+            h.deposit(LP1, ADDR, LP, '10');
+            r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
+            r = await swap(T1, A, '10', '0');
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
         });
 
         it('locks MINIMUM_LIQUIDITY on the first deposit so the pool never drains to zero shares', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
-            h.ledger.contractBalances[ADDR][LP] = '0';
-            h.ledger.setBalance(LP1, LP, '999.999');
             h.deposit(LP1, ADDR, LP, '999.999');
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }));
             const r = reserves();
@@ -126,25 +192,20 @@ describe('Template: amm abi', function () {
             h.deposit(LP1, ADDR, A, '1000000'); // direct donation, not accounted until next add
             const r = await addLiq(LP2, '1000', '1000');
             assertSuccess(r);
-            assert.ok(math.larger(bn(emitted(r, 'MINT', LP).params.quantity), 0));
+            assert.ok(math.larger(bn(emitted(r, 'SEND', LP).params.quantity), 0));
         });
 
         it('later providers mint shares proportional to the scarcer side', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
             const r = await addLiq(LP2, '500', '500');
-            assert.strictEqual(emitted(r, 'MINT', LP).params.quantity, '500');
+            assert.strictEqual(emitted(r, 'SEND', LP).params.quantity, '500');
             assert.deepStrictEqual(reserves(), { a: '1500', b: '1500', shares: '1500' });
         });
 
         it('removeLiquidity burns shares and returns a proportional slice', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
-            // Mock-indexer quirk: its MINT credits the contract, not `destination`.
-            // The real indexer pays the provider, so reset the contract's LP custody
-            // to 0 and credit LP1 the shares the mint actually represents.
-            h.ledger.contractBalances[ADDR][LP] = '0';
-            h.ledger.setBalance(LP1, LP, '999.999');
             h.deposit(LP1, ADDR, LP, '999.999'); // return all minted shares
             const r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
             assertSuccess(r);
@@ -157,8 +218,6 @@ describe('Template: amm abi', function () {
         it('partial removeLiquidity returns the right fraction', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
-            h.ledger.contractBalances[ADDR][LP] = '0'; // see note above
-            h.ledger.setBalance(LP1, LP, '999.999');
             h.deposit(LP1, ADDR, LP, '400');
             const r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
             assert.strictEqual(emitted(r, 'SEND', A).params.quantity, '400');
@@ -279,7 +338,7 @@ describe('Template: amm abi', function () {
             // sqrt(1000 * 3000) = 1732.05080756887... : off the 8-dp grid.
             const r1 = await addLiq(LP1, '1000', '3000');
             assertSuccess(r1);
-            const mint1 = emitted(r1, 'MINT', LP).params.quantity;
+            const mint1 = emitted(r1, 'SEND', LP).params.quantity;
             assert.ok(onGrid(reserves().shares, 8),
                 'totalShares must sit on the 8-dp LP grid, got ' + reserves().shares);
             assert.ok(math.equal(bn(reserves().shares), math.add(bn(norm(mint1, 8)), bn('0.001'))),
@@ -288,20 +347,17 @@ describe('Template: amm abi', function () {
             // Second provider deposits in-ratio; the proportional share repeats.
             const r2 = await addLiq(LP2, '333', '999');
             assertSuccess(r2);
-            const mint2 = emitted(r2, 'MINT', LP).params.quantity;
+            const mint2 = emitted(r2, 'SEND', LP).params.quantity;
             assert.ok(onGrid(reserves().shares, 8), 'totalShares stays gridded after the 2nd add');
             assert.ok(math.equal(bn(reserves().shares), math.add(math.add(bn(norm(mint1, 8)), bn(norm(mint2, 8))), bn('0.001'))),
                 'totalShares == sum of minted LP plus the locked minimum');
 
             // Both LPs redeem everything; the pool must drain to exactly zero. The bug
             // divided by an inflated totalShares, so the final dust was unwithdrawable.
-            h.ledger.contractBalances[ADDR][LP] = '0'; // undo the mock MINT-to-contract quirk
-            h.ledger.setBalance(LP2, LP, mint2);
             h.deposit(LP2, ADDR, LP, mint2);
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP2 }));
             assert.ok(onGrid(reserves().a, 8) && onGrid(reserves().b, 8), 'reserves gridded after partial exit');
 
-            h.ledger.setBalance(LP1, LP, mint1);
             h.deposit(LP1, ADDR, LP, mint1);
             assertSuccess(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }));
             const left = reserves();
