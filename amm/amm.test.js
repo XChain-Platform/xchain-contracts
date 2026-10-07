@@ -19,14 +19,18 @@ const fs = require('fs');
 const path = require('path');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
+const INDEXER_DIR = path.join(__dirname, '..', '..', 'xchain-indexer');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertContractBalance, assertContractState, math;
+let mintValidation, issueSupplyRules;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
     ({ assertSuccess, assertReverted, assertContractBalance, assertContractState } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+    mintValidation = require(path.join(INDEXER_DIR, 'src', 'actions', 'mint', 'validate.js'));
+    issueSupplyRules = require(path.join(INDEXER_DIR, 'src', 'actions', 'issue', 'supply_rules.js'));
     const { create, all } = require(path.join(VM_DIR, 'node_modules', 'mathjs'));
     math = create(all, { number: 'BigNumber', precision: 64 });
-} catch (e) { XChainVM = null; console.log('Skipping AMM tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
+} catch (e) { XChainVM = null; console.log('Skipping AMM tests (xchain-vm harness and xchain-indexer validators must be available on Node 22)'); }
 
 const CODE = fs.readFileSync(path.join(__dirname, 'amm.js'), 'utf8');
 
@@ -123,16 +127,38 @@ describe('Template: amm abi', function () {
             const deployed = await deploy();
             const issue = deployed.result.emittedActions.find(e => e.action === 'ISSUE').params;
 
-            // Indexer rules: MINT is refused for every address when LOCK_MINT is 1
-            // (mint/validate.js); a re-ISSUE carrying MINT_SUPPLY is refused when
-            // LOCK_MINT_SUPPLY is 1 (issue/supply_rules.js).
-            const mintAllowed = (caller) => caller !== undefined && String(issue.lockMint) !== '1';
-            const reissueAllowed = () => String(issue.lockMintSupply) !== '1';
+            const validator = {
+                util: {
+                    isNull: value => value === null || value === undefined || value === '',
+                    isValidAmountFormat: () => true,
+                    isCryptoAddress: () => true
+                },
+                indexerDb: { isActionAllowed: async () => true },
+                config: { MAX_MEMO_LENGTH: 1024 }
+            };
+            const tokenInfo = {
+                DECIMALS: Number(issue.decimals),
+                LOCK_MINT: Number(issue.lockMint),
+                LOCK_MINT_SUPPLY: Number(issue.lockMintSupply)
+            };
 
             for (const caller of [T1, LP2, LP1, ADDR]) {
-                assert.strictEqual(mintAllowed(caller), false, 'MINT refused for ' + caller);
+                const mintContext = {
+                    data: { SOURCE: caller, AMOUNT: '1', MEMO: '' },
+                    tokenInfo,
+                    error: null
+                };
+                await mintValidation.validateTokenRules.call(validator, mintContext);
+                assert.strictEqual(mintContext.error, 'invalid: LOCK_MINT', 'MINT refused for ' + caller);
             }
-            assert.strictEqual(reissueAllowed(), false, 'supply-raising re-ISSUE refused');
+
+            const issueContext = {
+                data: { SOURCE: LP1, MINT_SUPPLY: '1', TRANSFER: '', TRANSFER_SUPPLY: '' },
+                tokenInfo,
+                error: null
+            };
+            issueSupplyRules.validateTransferFields.call(validator, issueContext);
+            assert.strictEqual(issueContext.error, 'invalid: MINT_SUPPLY (locked)', 'supply-raising re-ISSUE refused');
 
             // The contract itself never mints, so the lock costs it nothing.
             let r = await addLiq(LP1, '1000', '1000');
