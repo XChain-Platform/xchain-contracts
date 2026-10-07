@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- escrow and escrowDelivery gain a buyer `cancel()` while the contract is still in `INIT`, which returns anything held to the buyer, so a deposit made before `fund()` can be recovered.
+
+### Changed
+- escrow and escrowDelivery `initialize()` now reject an `amount` that is not a plain decimal string, because an exponent or signed form could never be matched by a deposit.
+
 ### Fixed
 - englishAuction's and dutchAuction's `cancel()` is now reachable from the pre-funded state and returns the contract's held item balance, so a seller whose `fund()` was rejected can reclaim the deposit instead of losing it.
 - Both auction templates' `fund()` comments and READMEs no longer claim batching avoids the stranded-deposit exposure; it does not, because a `BATCH` is not atomic.

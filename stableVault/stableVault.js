@@ -57,7 +57,7 @@
 // getPrice(coinPair) is the latest consensus-finalized round, as the object
 // { price, roundNumber, timestamp } (a bare string price is also accepted).
 // Price-sensitive operations (borrow, withdraw, liquidate) additionally
-// require getSnapshotAge() <= maxSnapshotAge blocks, so nobody can act on a
+// require getSnapshotAge() <= maxSnapshotAge seconds, so nobody can act on a
 // stale price during an oracle outage. Deposits and repayments are always
 // allowed -- de-risking a vault must never be blocked.
 //
@@ -67,13 +67,11 @@
 
 'use strict';
 
-// Upper bound for the one integer constructor param. A sanity ceiling, not a
-// protocol limit: maxSnapshotAge is compared against a plain JS block count, so
-// the point is to keep a fat-fingered constructor term inside the
-// exactly-representable integer range rather than to constrain a real vault.
-// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
-// ceiling priceBet.js and patterns/validation.js use for a block window.
-var MAX_WINDOW_BLOCKS = 1000000;
+// Upper bound for the oracle freshness window, in seconds. A sanity ceiling,
+// not a protocol limit: maxSnapshotAge is compared against the snapshot age in
+// seconds, so the point is to keep a fat-fingered constructor term inside a
+// sensible range rather than to constrain a real vault. 31536000 is one year.
+var MAX_AGE_SECONDS = 31536000;
 
 module.exports = {
 
@@ -107,7 +105,7 @@ module.exports = {
     //   coinPair        oracle pair pricing 1 collateral in stable units
     //   minRatioPct     minimum collateralization, percent (e.g. '150')
     //   liqBonusPct     liquidator's bonus over the debt, percent (e.g. '10')
-    //   maxSnapshotAge  max oracle age (blocks) for price-sensitive ops
+    //   maxSnapshotAge  max oracle age (seconds, 1 to 31536000) for price-sensitive ops
     //   stableDecimals  decimal grid of the stable this contract issues,
     //                   0-18, default '8'
     initialize: function (xchain) {
@@ -132,11 +130,11 @@ module.exports = {
         // radix-less parseInt blesses spellings that mean something else entirely
         // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and this
         // param is raw deployer text measured in the same deploy that stores it:
-        // a deployer asking for a 1000-block staleness window via '1e3' would
-        // silently get a 1-block one, and freshPrice() would then revert borrow(),
+        // a deployer asking for a 1000-second staleness window via '1e3' would
+        // silently get a 1-second one, and freshPrice() would then revert borrow(),
         // withdraw() and liquidate() on every call whenever the oracle cadence is
-        // slower than one block. See requireIntInRange.
-        requireIntInRange(xchain, maxSnapshotAge, 1, MAX_WINDOW_BLOCKS, 'maxSnapshotAge');
+        // slower than once per second. See requireIntInRange.
+        requireIntInRange(xchain, maxSnapshotAge, 1, MAX_AGE_SECONDS, 'maxSnapshotAge');
         var maxAge = parseInt(maxSnapshotAge, 10);
         // The stable's grid is deployer text with TWO permanent sinks: the
         // emit.issue below (decimals lock once supply exists) and the state key
@@ -416,7 +414,7 @@ function stableDelta(xchain) {
 // Latest oracle price for the configured pair, as a string. Accepts both the
 // production accessor's { price, roundNumber, timestamp } object and a bare
 // string. Reverts if there is no price or the snapshot is older than
-// maxSnapshotAge blocks.
+// maxSnapshotAge seconds.
 function freshPrice(xchain) {
     var age = xchain.oracle.getSnapshotAge();
     xchain.require(age <= parseInt(xchain.state.get('maxSnapshotAge')), 'oracle price is stale');

@@ -44,7 +44,7 @@ module.exports = function registerAttackTests(ctx) {
             await depositColl(ALICE, '3');
             await borrow(ALICE, '100');
 
-            setPrice('100', 50); // snapshot 50 blocks old > maxSnapshotAge 10
+            setPrice('100', 50); // snapshot 50 seconds old > maxSnapshotAge 10
             assertReverted(await borrow(ALICE, '10'), 'oracle price is stale');
             assertReverted(await withdraw(ALICE, '1'), 'oracle price is stale');
             ctx.h.seedBalance(LIQ, STABLE, '100');
