@@ -2,9 +2,9 @@
 
 function registerPurchaseCases(context) {
     const {
-        ADDR, BID, ITEM, SELLER, assertBalance, assertContractBalance,
-        assertContractState, assertEmittedActions, assertReverted,
-        assertSuccess, buy, deployAuction, depositAndFund
+        ADDR, BID, ITEM, SELLER, assert, assertBalance, assertContractBalance,
+        assertContractState, assertEmittedActions, assertSuccess, buy,
+        deployAuction, depositAndFund
     } = context;
 
     it('buying at deploy-time price (block 0 elapsed) charges startPrice', async function () {
@@ -25,7 +25,10 @@ function registerPurchaseCases(context) {
         await deployAuction(10); // 1000 -> 100 over 10 blocks = 90/block
         await depositAndFund();
         context.h.mineBlock(); context.h.mineBlock(); context.h.mineBlock(); // elapsed = 3 -> price 1000 - 270 = 730
-        assertReverted(await buy('alice', '700'), 'insufficient payment for the current price (730)');
+        const short = await buy('alice', '700'); // below the 730 asking price: refunded, no sale
+        assertSuccess(short);
+        assert.strictEqual(JSON.parse(short.returnValue), 'underpaid');
+        assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
         const r = await buy('alice', '730');
         assertSuccess(r);
         assertBalance(context.h.ledger, SELLER, BID, '730');
@@ -53,15 +56,17 @@ function registerPurchaseCases(context) {
 
 function registerPriceFloorAndCancelCases(context) {
     const {
-        ADDR, BID, ITEM, SELLER, assertBalance, assertContractState,
-        assertReverted, assertSuccess, buy, deployAuction, depositAndFund
+        ADDR, BID, ITEM, SELLER, assert, assertBalance, assertContractState,
+        assertSuccess, buy, deployAuction, depositAndFund
     } = context;
 
     it('the price floors at endPrice and holds there indefinitely', async function () {
         await deployAuction(10);
         await depositAndFund();
         for (let i = 0; i < 50; i++) context.h.mineBlock(); // way past duration
-        assertReverted(await buy('alice', '99'), 'insufficient payment for the current price (100)');
+        const short = await buy('alice', '99'); // below the 100 floor: refunded, no sale
+        assertSuccess(short);
+        assert.strictEqual(JSON.parse(short.returnValue), 'underpaid');
         const r = await buy('alice', '100');
         assertSuccess(r);
         assertBalance(context.h.ledger, SELLER, BID, '100');

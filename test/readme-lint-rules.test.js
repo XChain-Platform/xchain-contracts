@@ -23,9 +23,9 @@ const path   = require('path');
 const REPO_DIR = path.join(__dirname, '..');
 const README   = fs.readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
 
-// Try both spellings of xchain-vm's lint core, as lib/policy-gen.test.js does.
-const LINT_CORE_SPELLINGS = [path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint_core.js'),
-                             path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint-core.js')];
+// Try both spellings of xchain-vm's lint core, current one first, as lib/policy-gen.test.js does.
+const LINT_CORE_SPELLINGS = [path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint-core.js'),
+                             path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint_core.js')];
 
 // Load the lint core, failing rather than skipping: xchain-vm is a declared sibling.
 function loadLintCore() {
@@ -56,6 +56,20 @@ describe('README lint rule list', function () {
         assert.deepStrictEqual(missing, [],
             'README.md "Linting" omits deploy-blocking rules the linter enforces: ' +
             missing.join(', ') + '. Name each one as a code span beside a short gloss.');
+    });
+
+    // Fail when the section points authors at an xchain-vm file on disk under neither spelling.
+    // (Either spelling passes, because master CI pairs this repo with a sibling a train behind.)
+    it('cites only xchain-vm paths that exist beside this repo', function () {
+        const cited = [...lintingSection().matchAll(/`(xchain-vm\/[^`]+\.js)`/g)].map(m => m[1]);
+        assert.ok(cited.length > 0,
+            'README.md "Linting" cites no xchain-vm source path, so this guard would check nothing');
+        const swapSeparators = p => path.posix.join(path.posix.dirname(p),
+            path.posix.basename(p).replace(/[-_]/g, c => (c === '-' ? '_' : '-')));
+        const missing = cited.filter(p => ![p, swapSeparators(p)]
+            .some(q => fs.existsSync(path.join(REPO_DIR, '..', q))));
+        assert.deepStrictEqual(missing, [],
+            'README.md "Linting" cites xchain-vm paths that do not exist: ' + missing.join(', '));
     });
 
     it('names the code-size rule and its byte cap', function () {

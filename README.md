@@ -197,7 +197,7 @@ follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 `xchain-contracts lint` runs each contract through the VM's full deploy-time
 validation: V8 syntax, the `code-size` cap (65,536 bytes of UTF-8 source, the
 64 KiB deploy ceiling), and every deploy-blocking rule in `CONSENSUS_RULES`
-(`xchain-vm/src/lint_core.js`, the authoritative list): `invalid-type`,
+(`xchain-vm/src/lint-core.js`, the authoritative list): `invalid-type`,
 `unsupported-syntax` (the acorn metering pass), `reserved-identifier`,
 `banned-math` (`Math.*` outside the deterministic subset), `banned-literal`
 (`BigInt`/`RegExp` literals), `banned-async` (`async`/`await`, `Promise`),

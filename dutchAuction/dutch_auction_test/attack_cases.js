@@ -22,8 +22,8 @@ async function deployOffGridItem(context, itemAmount) {
 
 function registerSettlementAttacks(context) {
     const {
-        ADDR, BID, ITEM, SELLER, assertContractBalance, assertContractState,
-        assertReverted, assertSuccess, buy, deployAuction, depositAndFund
+        ADDR, BID, ITEM, SELLER, assert, assertContractBalance, assertContractState,
+        assertEmittedActions, assertReverted, assertSuccess, buy, deployAuction, depositAndFund
     } = context;
 
     it('fund() rejects an underfunded item deposit', async function () {
@@ -45,12 +45,15 @@ function registerSettlementAttacks(context) {
             'only the seller');
     });
 
-    it('an underpaying buy() is rejected and the deposit stays in custody', async function () {
+    it('an underpaying buy() refunds the deposit in the same call and sells nothing', async function () {
         await deployAuction(10);
         await depositAndFund();
-        assertReverted(await buy('alice', '500'), 'insufficient payment');
+        const r = await buy('alice', '500');
+        assertSuccess(r);
+        assert.strictEqual(JSON.parse(r.returnValue), 'underpaid');
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '500' } }]);
         assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
-        assertContractBalance(context.h.ledger, ADDR, BID, '500'); // stuck until a corrected buy()
+        assertContractBalance(context.h.ledger, ADDR, BID, '0');
     });
 
     it('a second buy() after a sale is rejected: single-shot settlement', async function () {
@@ -204,9 +207,43 @@ function registerSubGridPriceAttack(context) {
     });
 }
 
+// Before buy() refunded a short payment it reverted, the BATCH kept the deposit, and
+// once the falling price reached it any caller could buy() with nothing deposited,
+// taking the item plus the difference while the seller was paid from the stray.
+function registerStrandedUnderpaymentAttack(context) {
+    const {
+        ADDR, BID, ITEM, SELLER, assert, assertBalance, assertContractBalance,
+        assertContractState, assertEmittedActions, assertSuccess, buy,
+        deployAuction, depositAndFund
+    } = context;
+
+    it('an underpayment is not left for a zero-deposit caller once the price falls to it', async function () {
+        await deployAuction(10);
+        await depositAndFund();
+        assertSuccess(await buy('alice', '500'));
+        for (let i = 0; i < 50; i++) context.h.mineBlock(); // past duration: price is pinned at 100
+
+        const m = await context.h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: 'mallory' });
+        assertSuccess(m);
+        assert.strictEqual(JSON.parse(m.returnValue), 'underpaid');
+        assertEmittedActions(m, []);
+        assertBalance(context.h.ledger, 'alice', BID, '500');
+        assertBalance(context.h.ledger, 'mallory', ITEM, '0');
+        assertBalance(context.h.ledger, 'mallory', BID, '0');
+        assertContractBalance(context.h.ledger, ADDR, ITEM, '10');
+        assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
+
+        assertSuccess(await buy('bob', '100'));
+        assertBalance(context.h.ledger, 'bob', ITEM, '10');
+        assertBalance(context.h.ledger, SELLER, BID, '100');
+        assertContractBalance(context.h.ledger, ADDR, BID, '0');
+    });
+}
+
 function registerAttackCases(context) {
     describe('attacks we considered', function () {
         registerSettlementAttacks(context);
+        registerStrandedUnderpaymentAttack(context);
         registerOffGridFundAttack(context);
         registerCancelRecoveryAttacks(context);
         registerOnGridControls(context);

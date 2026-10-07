@@ -35,13 +35,16 @@ function registerExactCustodyAndPaymentCases(context) {
             assertBalance(context.h.ledger, 'alice', ITEM, '10000');
         });
 
-        it('buy() rejects a payment one base unit short with the payment error, and exact pays the seller', async function () {
+        it('buy() refunds a payment one base unit short instead of selling, and exact pays the seller', async function () {
             assertSuccess(await deployExact('10'));
             assertSuccess(await fundWith('10'));
-            assertReverted(await buy('alice', '99999.99999999'), 'insufficient payment for the current price (100000)');
+            const r = await buy('alice', '99999.99999999');
+            assertSuccess(r);
+            context.assert.strictEqual(JSON.parse(r.returnValue), 'underpaid');
             assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
-            assertContractBalance(context.h.ledger, ADDR, BID, '99999.99999999');
-            assertSuccess(await buy('bob', '0.00000001'));
+            assertContractBalance(context.h.ledger, ADDR, BID, '0');
+            assertBalance(context.h.ledger, 'alice', BID, '99999.99999999');
+            assertSuccess(await buy('bob', '100000'));
             assertContractState(context.h.ledger, ADDR, 'buyer', 'bob');
             assertBalance(context.h.ledger, SELLER, BID, '100000');
         });

@@ -12,14 +12,11 @@ const assert = require('assert');
 const fs     = require('fs');
 const path   = require('path');
 
-// xchain-vm's layout pass renamed src/lint-core.js to src/lint_core.js and left
-// nothing behind at the old path, so an adjacent checkout sits on one side of
-// that move or the other. Pinning a single spelling leaves lintSource undefined
-// against the other side, which describe.skip()s this whole file while the suite
-// still reports green, so try the post-move spelling and fall back to the
-// pre-move one.
-const LINT_CORE_SPELLINGS = ['../../xchain-vm/src/lint_core.js',
-                             '../../xchain-vm/src/lint-core.js'];
+// Load xchain-vm's lint core at src/lint-core.js, falling back to src/lint_core.js,
+// the name an older adjacent checkout may still carry. Pinning one spelling would
+// leave lintSource undefined there and describe.skip() this file while still green.
+const LINT_CORE_SPELLINGS = ['../../xchain-vm/src/lint-core.js',
+                             '../../xchain-vm/src/lint_core.js'];
 let lintSource;
 for (const spec of LINT_CORE_SPELLINGS) {
     try { ({ lintSource } = require(spec)); break; }
