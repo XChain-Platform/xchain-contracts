@@ -49,7 +49,7 @@ DEPOSIT is not rolled back" under [Attacks we considered](#attacks-we-considered
 | Method | BATCH with | Effect |
 |---|---|---|
 | `initialize(tokenA, tokenB, lpTick)` | - (deploy) | Empty pool; issues `lpTick` (contract-owned). |
-| `addLiquidity()` | DEPOSIT A + DEPOSIT B | Mints LP shares (`sqrt(a*b)` first, else proportional to the scarcer side). |
+| `addLiquidity()` | DEPOSIT A + DEPOSIT B | Mints LP shares (`sqrt(a*b)` less `MINIMUM_LIQUIDITY` first, else proportional to the scarcer side). |
 | `removeLiquidity()` | DEPOSIT LP shares | Burns them; returns a proportional slice of both reserves. |
 | `swap(tokenIn, minOut)` | DEPOSIT tokenIn | Trades at the constant-product price minus 0.3%; reverts below `minOut`. |
 | `info()` | - | `{ tokenA, tokenB, lpTick, reserveA, reserveB, totalShares }`. |
@@ -75,6 +75,10 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
   only ever move tokens inside a BATCHed call).
 - **Share dilution via skewed deposits.** `addLiquidity` mints on the scarcer side,
   so an unbalanced deposit can't mint extra shares; the surplus enriches the pool.
+- **First-depositor inflation.** The first `addLiquidity` locks `MINIMUM_LIQUIDITY`
+  (0.001 LP) in `totalShares` without minting it, so a one-unit first position plus a
+  donation cannot round a later depositor to zero, and the pool always keeps a sliver
+  of both reserves. A first deposit must exceed it or the call reverts.
 - **Double / unauthorized settlement.** Each path keys off the caller and the
   balance delta within one atomic execution; emissions and state commit together.
 - **Owner draining the pool with WITHDRAW.** From the `OWNER_WITHDRAW_OPT_IN` flag
