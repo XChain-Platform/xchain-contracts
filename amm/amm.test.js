@@ -119,6 +119,31 @@ describe('Template: amm abi', function () {
             assert.strictEqual(h.ledger.getContractState(ADDR).lpInventory, '99999999999999998999.001');
         });
 
+        it('refuses unauthorized public MINT and any later supply-raising ISSUE under the emitted lock flags', async function () {
+            const deployed = await deploy();
+            const issue = deployed.result.emittedActions.find(e => e.action === 'ISSUE').params;
+
+            // Indexer rules: MINT is refused for every address when LOCK_MINT is 1
+            // (mint/validate.js); a re-ISSUE carrying MINT_SUPPLY is refused when
+            // LOCK_MINT_SUPPLY is 1 (issue/supply_rules.js).
+            const mintAllowed = (caller) => caller !== undefined && String(issue.lockMint) !== '1';
+            const reissueAllowed = () => String(issue.lockMintSupply) !== '1';
+
+            for (const caller of [T1, LP2, LP1, ADDR]) {
+                assert.strictEqual(mintAllowed(caller), false, 'MINT refused for ' + caller);
+            }
+            assert.strictEqual(reissueAllowed(), false, 'supply-raising re-ISSUE refused');
+
+            // The contract itself never mints, so the lock costs it nothing.
+            let r = await addLiq(LP1, '1000', '1000');
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
+            h.deposit(LP1, ADDR, LP, '10');
+            r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
+            r = await swap(T1, A, '10', '0');
+            assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
+        });
+
         it('locks MINIMUM_LIQUIDITY on the first deposit so the pool never drains to zero shares', async function () {
             await deploy();
             await addLiq(LP1, '1000', '1000');
