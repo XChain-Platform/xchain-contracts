@@ -119,7 +119,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
     });
 
     describe('attacks we considered', function () {
-        it('XC-3743 locks public minting and pre-mints the sale supply into custody', async function () {
+        it('locks public minting and pre-mints the sale supply into custody', async function () {
             const deployed = await deploy();
             assertSuccess(deployed);
             const issues = deployed.result.emittedActions.filter(e => e.action === 'ISSUE');
