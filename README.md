@@ -205,8 +205,9 @@ validation: V8 syntax, the `code-size` cap (65,536 bytes of UTF-8 source, the
 `banned-math` (`Math.*` outside the deterministic subset), `banned-literal`
 (`BigInt`/`RegExp` literals), `banned-async` (`async`/`await`, `Promise`),
 `banned-generator` (`function*`, `yield`), `banned-wasm` (any `WebAssembly`
-reference) and `banned-rest` (rest parameters and the other unmetered rest
-positions). It adds the logic-level advisories (crossCallable integrity,
+reference), `banned-rest` (rest parameters and the other unmetered rest
+positions) and `banned-with` (the `with` statement, which rebinds free
+identifiers at runtime). It adds the logic-level advisories (crossCallable integrity,
 unbounded loops, unchecked `state.get`, …). A clean
 result is a conservative preflight, **not** exact deploy parity: the rule set is a
 superset of the live deploy gate (future and mainnet-gated rules are enforced
