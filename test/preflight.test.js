@@ -40,6 +40,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 const { execFileSync } = require('child_process');
+const { runIsolateProbe } = require('../lib/isolate_probe.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 const ROOT   = path.join(__dirname, '..');
@@ -159,28 +160,12 @@ describe('Preflight: the xchain-vm harness must be usable', function () {
     // Requiring the module is NOT proof the native binding works: isolated-vm
     // only dlopens when an isolate is actually constructed, which is exactly
     // where the template suites would fail on an unsupported platform.
+    // The probe is shared with bin/ci-preflight.js so the two proofs stay identical.
     it('executes a trivial contract inside a real isolate', async function () {
         isolateChecked = true;
         const XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
         const { E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
-
-        const h = new E2EHarness(XChainVM);
-        const ADDR = 'C:BTC:PREFLIGHT';
-
-        const deployed = await h.deploy({
-            code: 'module.exports = function (xchain) { return "ok"; };',
-            deployer: 'preflight_addr',
-            contractAddress: ADDR
-        });
-        assert.strictEqual(deployed.success, true,
-            'trivial contract failed to deploy: ' + deployed.error);
-
-        const r = await h.execute({
-            contractAddress: ADDR, method: 'default', params: [], caller: 'preflight_addr'
-        });
-        assert.strictEqual(r.success, true,
-            'trivial contract failed to execute: ' + r.error);
-        assert.strictEqual(JSON.parse(r.returnValue), 'ok');
+        await runIsolateProbe(XChainVM, E2EHarness);
         harnessUsable = true;
     });
 });

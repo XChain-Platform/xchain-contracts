@@ -20,13 +20,14 @@
 // 82 percent of the suite skipped. test/preflight.test.js is the same proof
 // living INSIDE the mocha run (wired first in the `test` script, locked there
 // by test/gate-wiring.test.js), so no choice of command reaches a false green.
-// Keep the two in step: both must prove an isolate actually executes, because
-// requiring xchain-vm's harness helper succeeds even where isolated-vm cannot
-// dlopen.
+// Both prove an isolate actually executes through the one shared probe in
+// lib/isolate_probe.js, because requiring xchain-vm's harness helper succeeds
+// even where isolated-vm cannot dlopen.
 
 'use strict';
 
 const path = require('path');
+const { runIsolateProbe } = require('../lib/isolate_probe.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 
@@ -67,16 +68,19 @@ for (const [what, modulePath] of REQUIRED) {
 }
 
 // Loading the module is not proof the native binding works: isolated-vm only
-// dlopens when an isolate is actually constructed, which is exactly where the
-// suites fail on an unsupported platform.
-try {
+// dlopens when an isolate is actually constructed, so run the shared probe
+// (lib/isolate_probe.js, the same one test/preflight.test.js runs).
+async function proveIsolate() {
     const harness = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
     if (typeof harness.E2EHarness !== 'function') {
         throw new Error('E2EHarness is not exported by the harness helper');
     }
     if (!XChainVM) throw new Error('xchain-vm did not export a module object');
-} catch (err) {
-    fail('a usable E2E harness', err);
+    await runIsolateProbe(XChainVM, harness.E2EHarness);
 }
 
-console.log('CI preflight OK: xchain-vm harness loadable on Node ' + process.versions.node);
+// Exit explicitly on success: the VM can keep handles open after the probe.
+proveIsolate().then(() => {
+    console.log('CI preflight OK: a contract executed inside an isolate on Node ' + process.versions.node);
+    process.exit(0);
+}, (err) => fail('a working isolate (trivial contract deploy + execute)', err));

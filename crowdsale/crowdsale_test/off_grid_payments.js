@@ -127,6 +127,31 @@ function registerCapRefundTests(ctx, kit) {
     });
 }
 
+// Change at or below the 1e-15 compare tolerance must still leave custody (18-decimal pay tick).
+function registerDustChangeTests(ctx, kit) {
+    const { OWNER, B1, B2, ADDR, PAY, assert, assertSuccess, assertEmittedActions,
+            assertContractBalance } = ctx;
+    const { buy, call, change, succeed } = kit;
+
+    describe('off-grid payments: change below the compare tolerance', function () {
+        it('a 1e-18 change is sent back, so custody equals the accounted pay', async function () {
+            await kit.deployAt('1', '1', '1000', '0');
+            kit.h.ledger.setTokenDecimals(PAY, 18);
+            change(await buy(B1, '1.000000000000000001'), B1, '0.000000000000000001');
+            assert.strictEqual(kit.state('c:' + B1), '1');
+            assert.strictEqual(kit.state('accountedPay'), '1');
+            assertContractBalance(kit.h.ledger, ADDR, PAY, '1');
+            const r = await buy(B2, '2');
+            assertSuccess(r);
+            assertEmittedActions(r, []);
+            assert.strictEqual(kit.state('c:' + B2), '2');
+            await succeed();
+            assertSuccess(await call('withdraw', OWNER));
+            assertContractBalance(kit.h.ledger, ADDR, PAY, '0');
+        });
+    });
+}
+
 // Exact decimal helpers for the cross-check below: a value scaled by 10^18 as a BigInt.
 const SCALE = 18;
 function big(v) {
@@ -172,5 +197,6 @@ module.exports = function registerOffGridPaymentTests(ctx) {
     const kit = makeKit(ctx);
     registerChangeTests(ctx, kit);
     registerCapRefundTests(ctx, kit);
+    registerDustChangeTests(ctx, kit);
     registerMinimumTests(ctx, kit);
 };

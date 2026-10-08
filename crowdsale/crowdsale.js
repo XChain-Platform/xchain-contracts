@@ -202,7 +202,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.3.2'
+        version:     '1.3.3'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -322,7 +322,8 @@ module.exports = {
         // The change leaves custody through the SEND below, so it is not accounted pay.
         xchain.state.set('accountedPay', xchain.math.subtract(balance, change));
         xchain.state.set('raised', newRaised);
-        if (xchain.math.gt(change, '0'))
+        // Test the change exactly, as delta and accountedPay do (gt reads a change <= 1e-15 as zero).
+        if (!xchain.math.isZero(change))
             xchain.emit.send({ destination: caller, tick: payTick, quantity: change });
     },
 
