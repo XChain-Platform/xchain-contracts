@@ -44,14 +44,16 @@ const PAIR     = 'BTC/USD';
 const STRIKE   = '60000';
 const STAKE    = '100';
 
-// Mock chain clock: height 1 / ts 1700000000 at deploy, +600s per mined block.
-const T0 = 1700000000;
+// Mock chain clock: the harness's block-time anchor at deploy, +600s per mined block.
+// Read off a harness rather than typed, so the bet follows the anchor when it moves.
+const T0 = XChainVM ? new E2EHarness(XChainVM).ledger.blockTimestamp : 0;
 const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
 
 (XChainVM ? describe : describe.skip)('Template: priceBetTimed', function () {
     this.timeout(0);
     async function deployBet(side, window) {
         setHarness(new E2EHarness(XChainVM));
+        assert.strictEqual(h.ledger.blockTimestamp, T0, 'harness clock drifted from the T0 the bet is built on');
         h.seedBalance(MAKER, 'XCHAIN', '1000000');
         h.seedBalance(MAKER, TICK, '100');
         h.seedBalance(TAKER, TICK, '100');

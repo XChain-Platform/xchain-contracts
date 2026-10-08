@@ -34,6 +34,17 @@ of truth; caller-supplied funding amounts are never trusted.
 - Price-sensitive ops (**borrow / withdraw-with-debt / liquidate**) require
   `getSnapshotAge() <= maxSnapshotAge` seconds: nobody acts on a stale price
   during an oracle outage.
+- **Interim unit on live hosts.** The age is in seconds only once the host
+  indexer's `oracle_snapshot_age_seconds_activation` is armed on the network.
+  Before that the host returns a block count. On BTC that makes the window
+  about 600x looser than its face value. On LTC and DOGE the value is the
+  chain's own height minus a BTC reference height (millions), not an age, so
+  `borrow`, `withdraw` with debt and `liquidate` revert `oracle price is
+  stale` and an under-water vault cannot be liquidated. Do not deploy on LTC
+  or DOGE before the activation is armed, and do not widen `maxSnapshotAge`
+  into the millions to get around it, because that turns the freshness check
+  off. A vault deployed from an earlier revision that measured
+  `maxSnapshotAge` in blocks must be redeployed once the activation is armed.
 - De-risking (**deposit / repay**) never touches the oracle: making a vault
   safer must never be blocked. A debt-free `withdraw` skips the oracle too.
 

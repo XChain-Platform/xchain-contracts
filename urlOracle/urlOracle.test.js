@@ -54,6 +54,10 @@ function createVM() {
     });
 }
 
+// Block time of the direct executions: the E2E harness's anchor, so this suite runs
+// the same time-gated rules as its siblings instead of a typed pre-flag-day instant.
+const ANCHOR_TS = XChainVM ? new E2EHarness(XChainVM).ledger.blockTimestamp : 0;
+
 // Carry state forward between executions the way the indexer would.
 function applyState(prev, result) {
     const s = { ...prev };
@@ -72,7 +76,7 @@ function baseExecOpts(extra) {
         contractAddress: 'C:BTC:1',
         contractIndex:   1,
         txHash:          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        blockContext:    { height: 100, timestamp: 1700000000, hash: 'abc' }
+        blockContext:    { height: 100, timestamp: ANCHOR_TS, hash: 'abc' }
     }, extra || {});
 }
 

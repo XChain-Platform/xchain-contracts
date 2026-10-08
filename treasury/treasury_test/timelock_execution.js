@@ -3,14 +3,14 @@
 function registerTimingTests(context) {
     const {
         assert, assertReverted, HOLDER, PAY, ADDR, POLL, TIMELOCK, WINDOW,
-        call, passedPoll, proposeAndArm, proposalStatus, readyToExecute
+        call, passedPoll, proposeAndArm, proposalStatus, readyToExecute, atOffset
     } = context;
 
     it('an armed proposal cannot execute before the timelock elapses', async function () {
         await proposeAndArm();
         context.h.deposit(HOLDER, ADDR, PAY, '1000');
         context.h.ledger.seedPollResult(POLL, passedPoll());
-        context.h.ledger.blockHeight = 1 + TIMELOCK - 1;
+        atOffset(TIMELOCK - 1);
         assertReverted(await call('executeProposal', ['1'], HOLDER), 'timelock has not elapsed');
     });
 
@@ -18,7 +18,7 @@ function registerTimingTests(context) {
         await proposeAndArm();
         context.h.deposit(HOLDER, ADDR, PAY, '1000');
         context.h.ledger.seedPollResult(POLL, passedPoll());
-        context.h.ledger.blockHeight = 1 + TIMELOCK + WINDOW + 1;
+        atOffset(TIMELOCK + WINDOW + 1);
         assertReverted(await call('executeProposal', ['1'], HOLDER), 'execution window has passed');
         assert.strictEqual(await proposalStatus(), 'EXPIRED');
     });
@@ -26,7 +26,7 @@ function registerTimingTests(context) {
     it('execution re-verifies the poll on-chain: no verifiable result, no payout', async function () {
         await proposeAndArm();
         context.h.deposit(HOLDER, ADDR, PAY, '1000');
-        context.h.ledger.blockHeight = 1 + TIMELOCK;
+        atOffset(TIMELOCK);
         assertReverted(await call('executeProposal', ['1'], HOLDER), 'poll result not verifiable');
     });
 

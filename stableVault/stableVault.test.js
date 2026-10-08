@@ -66,11 +66,13 @@ const MAXAGE = '10';        // oracle freshness window, seconds
         });
     }
 
-    // Latest finalized round in the production accessor shape.
+    // Latest finalized round in the production accessor shape, dated `age` seconds
+    // before the current block so its timestamp agrees with the snapshot age.
     function setPrice(price, age) {
+        const snapshotAge = age || 0;
         h.ledger.seedOracle(PAIR,
-            { price: String(price), roundNumber: 1, timestamp: 1700000000 },
-            age || 0, {});
+            { price: String(price), roundNumber: 1, timestamp: h.ledger.blockTimestamp - snapshotAge },
+            snapshotAge, {});
     }
 
     async function depositColl(who, amount) {

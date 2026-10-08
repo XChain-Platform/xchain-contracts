@@ -93,7 +93,11 @@ function passedPoll() {
             code: CODE, deployer: GUARDIAN, contractAddress: ADDR,
             params: [GUARDIAN, GOV, String(TIMELOCK), String(WINDOW), MIN_PROPOSE, mode || 'guardian']
         });
+        context.base = context.h.ledger.blockHeight;
     }
+
+    // Move to `n` blocks after the deploy height, where arm() starts the timelock.
+    function atOffset(n) { context.h.ledger.blockHeight = context.base + n; }
 
     function call(method, params, caller) {
         return context.h.execute({ contractAddress: ADDR, method, params: params || [], caller });
@@ -131,12 +135,12 @@ function passedPoll() {
     }
 
     function readyToExecute() {
-        context.h.ledger.blockHeight = 1 + TIMELOCK;
+        atOffset(TIMELOCK);
         context.h.ledger.seedPollResult(POLL, passedPoll());
     }
 
     Object.assign(context, {
-        deploy, call, propose, pollCallback, proposeAndArm, proposalStatus, readyToExecute
+        deploy, call, propose, pollCallback, proposeAndArm, proposalStatus, readyToExecute, atOffset
     });
 
     registerHappyPathTests(context);

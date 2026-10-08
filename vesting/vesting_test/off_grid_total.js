@@ -15,6 +15,7 @@ function makeKit(ctx) {
         kit.h.ledger.setTokenDecimals(TICK, decimals);
         assertSuccess(await kit.h.deploy({ code: CODE, deployer: GRANTOR, contractAddress: ADDR,
             params: [GRANTOR, BENE, TICK, total, '0', '10', 'false'] }));
+        kit.base = kit.h.ledger.blockHeight;
     };
     kit.call = function (method, who) {
         return kit.h.execute({ contractAddress: ADDR, method: method, params: [], caller: who || GRANTOR });
@@ -61,7 +62,7 @@ function registerOffGridFundTests(ctx, kit) {
         it('a total spelled with trailing zeros but on the grid still funds and drains', async function () {
             await kit.deployAt(0, '2.0');
             assertSuccess(await kit.fundWith('2'));
-            kit.h.ledger.blockHeight = 1 + 10;
+            kit.h.ledger.blockHeight = kit.base + 10;
             assertSuccess(await kit.call('claim', BENE));
             assertContractBalance(kit.h.ledger, ADDR, TICK, '0');
         });

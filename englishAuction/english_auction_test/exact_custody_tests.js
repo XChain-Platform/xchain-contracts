@@ -1,5 +1,29 @@
 'use strict';
 
+// Register the strict-raise cases: a tolerant gt reads one base unit over 10000 as equal.
+function registerExactRaiseTests(tests, deployExact) {
+    const { assertSuccess, assertReverted, assertBalance, assertContractState,
+        BID, ADDR, env, depositAndFund, bid } = tests;
+
+    it('bid() accepts a raise one base unit above a large high bid', async function () {
+        assertSuccess(await deployExact('10', '1'));
+        assertSuccess(await depositAndFund('10'));
+        assertSuccess(await bid('alice', '10000'));
+        assertSuccess(await bid('bob', '10000.00000001'));
+        assertContractState(env.h.ledger, ADDR, 'highBid', '10000.00000001');
+        assertContractState(env.h.ledger, ADDR, 'highBidder', 'bob');
+        assertBalance(env.h.ledger, 'alice', BID, '10000');
+    });
+
+    it('bid() still rejects a bid exactly equal to a large high bid', async function () {
+        assertSuccess(await deployExact('10', '1'));
+        assertSuccess(await depositAndFund('10'));
+        assertSuccess(await bid('alice', '10000'));
+        assertReverted(await bid('bob', '10000'), 'bid must exceed the current high bid');
+        assertContractState(env.h.ledger, ADDR, 'highBidder', 'alice');
+    });
+}
+
 module.exports = function registerExactCustodyTests(tests) {
     const {
         XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
@@ -41,6 +65,8 @@ module.exports = function registerExactCustodyTests(tests) {
             assertContractState(env.h.ledger, ADDR, 'highBid', '10000');
             assertContractState(env.h.ledger, ADDR, 'highBidder', 'bob');
         });
+
+        registerExactRaiseTests(tests, deployExact);
 
         it('an Infinity minBid never accepts a bid', async function () {
             assertSuccess(await deployExact('10', 'Infinity'));

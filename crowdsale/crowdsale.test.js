@@ -50,7 +50,6 @@ const CODE = fs.readFileSync(path.join(__dirname, 'crowdsale.js'), 'utf8');
 const OWNER = 'owner', B1 = 'buyer1', B2 = 'buyer2', STRANGER = 'stranger';
 const ADDR = 'C:BTC:1', PAY = 'PAY', SALE = 'SALE';
 const RATE = '10', SOFT = '100', HARD = '200', DURATION = 50;
-const DEADLINE = 1 + DURATION; // deploy at height 1
 
 (XChainVM ? describe : describe.skip)('Template: crowdsale', function () {
     this.timeout(0);
@@ -74,7 +73,8 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         return h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: who });
     }
     function call(method, who) { return h.execute({ contractAddress: ADDR, method, params: [], caller: who }); }
-    function close() { h.ledger.blockHeight = DEADLINE; }
+    // init sets the deadline DURATION blocks past the height the sale was deployed at.
+    function close() { h.ledger.blockHeight = h.ledger.getContract(ADDR).blockIndex + DURATION; }
 
     describe('successful sale', function () {
         it('buyers fund past the soft cap, finalize, claim tokens, owner withdraws', async function () {
@@ -339,13 +339,14 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '1000001', '8'])).success, false);
 
             // '1000' means 1000 blocks in the deadline, not the 1 a parseInt of
-            // '1e3' gave. The harness deploys at height 1.
+            // '1e3' gave, counted from the height the harness deploys at.
             const b4 = new E2EHarness(XChainVM);
             b4.seedBalance(OWNER, 'XCHAIN', '1000000');
             const r = await b4.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
                 params: [OWNER, PAY, SALE, RATE, SOFT, HARD, '1000', '8'] });
             assert.strictEqual(r.success, true);
-            assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'), '1001');
+            assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'),
+                String(b4.ledger.getContract('C:BTC:9').blockIndex + 1000));
         });
     });
 

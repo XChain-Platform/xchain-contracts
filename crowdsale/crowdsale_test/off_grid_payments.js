@@ -7,13 +7,15 @@
 function makeKit(ctx) {
     const { OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert,
             assertSuccess, assertEmittedActions } = ctx;
+    const DURATION = 50;
     const kit = { h: null };
     kit.deployAt = async function (rate, soft, hard, saleDecimals) {
         const h = kit.h = new E2EHarness(XChainVM);
         for (const a of [OWNER, B1, B2]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
         h.ledger.setTokenDecimals(PAY, 8);
         assertSuccess(await h.deploy({ code: CODE, deployer: OWNER, contractAddress: ADDR,
-            params: [OWNER, PAY, SALE, rate, soft, hard, '50', saleDecimals] }));
+            params: [OWNER, PAY, SALE, rate, soft, hard, String(DURATION), saleDecimals] }));
+        kit.deadline = h.ledger.blockHeight + DURATION;
     };
     kit.buy = function (who, amount) {
         kit.h.deposit(who, ADDR, PAY, amount);
@@ -31,7 +33,7 @@ function makeKit(ctx) {
         assertEmittedActions(r, [{ action: 'MINT', params: { tick: SALE, quantity, destination: who } }]);
     };
     kit.succeed = async function () {
-        kit.h.ledger.blockHeight = 51;
+        kit.h.ledger.blockHeight = kit.deadline;
         assertSuccess(await kit.call('finalize', B1));
         assert.strictEqual(kit.h.ledger.getContractStateKey(ADDR, 'status'), 'SUCCESS');
     };
@@ -106,7 +108,7 @@ function registerCapRefundTests(ctx, kit) {
             await kit.deployAt('1', '100', '1000', '0');
             change(await buy(B1, '1.5'), B1, '0.5');
             change(await buy(B2, '2.25'), B2, '0.25');
-            kit.h.ledger.blockHeight = 51;
+            kit.h.ledger.blockHeight = kit.deadline;
             assertSuccess(await call('finalize', B1));
             assertSuccess(await call('refund', B1));
             assertSuccess(await call('refund', B2));

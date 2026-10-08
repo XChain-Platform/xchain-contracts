@@ -18,7 +18,7 @@ function registerTimingAttacks(context) {
     it('accept after the settle time reverts (betting window closed)', async function () {
         await deployBet('OVER');
         await depositAnd(MAKER, 'fund');
-        h.mineBlock(); h.mineBlock(); h.mineBlock(); // ts 1700001800 >= T
+        h.mineBlock(); h.mineBlock(); h.mineBlock(); // ts T0 + 1800 >= T
         assertReverted(await depositAnd(TAKER, 'accept'), 'betting window closed');
     });
 

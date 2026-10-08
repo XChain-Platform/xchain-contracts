@@ -61,6 +61,18 @@
 // stale price during an oracle outage. Deposits and repayments are always
 // allowed -- de-risking a vault must never be blocked.
 //
+// INTERIM UNIT ON LIVE HOSTS. getSnapshotAge() reads seconds only once the
+// host indexer's oracle_snapshot_age_seconds_activation is armed on the
+// network. Until then it returns a block count: on BTC the window is about
+// 600x looser than its face value, and on LTC and DOGE it is the chain's own
+// height minus a BTC reference height (millions), not an age at all, so
+// borrow, withdraw-with-debt and liquidate revert 'oracle price is stale' and
+// an under-water vault cannot be liquidated. Do not deploy on LTC or DOGE
+// before the activation is armed, and never widen maxSnapshotAge into the
+// millions to get around it (that switches the freshness check off). A vault
+// deployed from a revision that measured maxSnapshotAge in blocks must be
+// redeployed once the activation is armed.
+//
 // NOT PRODUCTION-GRADE ON PURPOSE. A real system adds stability fees, partial
 // liquidations, auctions, debt ceilings, and multiple collateral types. This
 // template shows the mechanism in its smallest deterministic form.
@@ -81,7 +93,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.1.0'
+        version:     '1.1.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:

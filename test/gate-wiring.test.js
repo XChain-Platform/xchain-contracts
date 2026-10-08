@@ -335,9 +335,10 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
     // the deployed export and refuses the DEPLOY outright when name or description is
     // missing, so a template that ships without it is undeployable on a meta-active
     // chain and every other gate in this repo stays green over it: the linter is
-    // advisory, and the template suites deploy on a regtest harness whose flag day need
-    // not be armed. `require()` the module rather than string-matching, so a block that
-    // is present but malformed (empty name, non-string version) fails here too.
+    // advisory, and the template suites deploy through the E2E harness, which runs the
+    // VM but never the indexer's DEPLOY checks. `require()` the module rather than
+    // string-matching, so a block that is present but malformed (empty name, non-string
+    // version) fails here too.
     it('every discovered template declares a consensus-required meta block', function () {
         const offenders = [];
         for (const name of discoverTemplates()) {

@@ -39,7 +39,7 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
 
 (XChainVM ? describe : describe.skip)('Template: vesting', function () {
     this.timeout(0);
-    let h;
+    let h, base;
 
     async function deploy(revocable, total) {
         h = new E2EHarness(XChainVM);
@@ -54,13 +54,14 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             code: CODE, deployer: GRANTOR, contractAddress: ADDR,
             params: [GRANTOR, BENE, TICK, total || TOTAL, String(CLIFF), String(DURATION), revocable || 'false']
         });
+        base = h.ledger.blockHeight;
     }
     async function fund(amount) {
         h.deposit(GRANTOR, ADDR, TICK, amount || TOTAL);
         return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
     }
-    // Jump to a precise elapsed-since-start block (fund() starts the clock at height 1).
-    function atElapsed(e) { h.ledger.blockHeight = 1 + e; }
+    // Jump to a precise elapsed-since-start block (fund() starts the clock at the deploy height).
+    function atElapsed(e) { h.ledger.blockHeight = base + e; }
     function claim(who) { return h.execute({ contractAddress: ADDR, method: 'claim', params: [], caller: who || BENE }); }
 
     describe('linear accrual', function () {
