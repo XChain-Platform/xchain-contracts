@@ -21,13 +21,13 @@
 // living INSIDE the mocha run (wired first in the `test` script, locked there
 // by test/gate-wiring.test.js), so no choice of command reaches a false green.
 // Both prove an isolate actually executes through the one shared probe in
-// lib/isolate_probe.js, because requiring xchain-vm's harness helper succeeds
+// lib/preflight/isolate_probe.js, because requiring xchain-vm's harness helper succeeds
 // even where isolated-vm cannot dlopen.
 
 'use strict';
 
 const path = require('path');
-const { runIsolateProbe } = require('../lib/isolate_probe.js');
+const { runIsolateProbe } = require('../lib/preflight/isolate_probe.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 
@@ -69,7 +69,7 @@ for (const [what, modulePath] of REQUIRED) {
 
 // Loading the module is not proof the native binding works: isolated-vm only
 // dlopens when an isolate is actually constructed, so run the shared probe
-// (lib/isolate_probe.js, the same one test/preflight.test.js runs).
+// (lib/preflight/isolate_probe.js, the same one test/preflight.test.js runs).
 async function proveIsolate() {
     const harness = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js'));
     if (typeof harness.E2EHarness !== 'function') {

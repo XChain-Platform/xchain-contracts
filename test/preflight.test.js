@@ -40,7 +40,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 const { execFileSync } = require('child_process');
-const { runIsolateProbe } = require('../lib/isolate_probe.js');
+const { runIsolateProbe } = require('../lib/preflight/isolate_probe.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 const ROOT   = path.join(__dirname, '..');

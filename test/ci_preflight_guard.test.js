@@ -41,7 +41,7 @@ describe('bin/ci-preflight.js', function () {
     it('runs the same isolate probe as the mocha preflight', function () {
         for (const file of [SCRIPT, path.join(ROOT, 'test', 'preflight.test.js')]) {
             const src = fs.readFileSync(file, 'utf8');
-            assert.ok(/require\('\.\.\/lib\/isolate_probe\.js'\)/.test(src), file + ' no longer loads the shared probe');
+            assert.ok(/require\('\.\.\/lib\/preflight\/isolate_probe\.js'\)/.test(src), file + ' no longer loads the shared probe');
             assert.ok(/await runIsolateProbe\(/.test(src), file + ' no longer awaits the shared probe');
         }
     });
@@ -55,8 +55,8 @@ function stubHarness(deployed, executed) {
     };
 }
 
-describe('lib/isolate_probe.js checks results, not just calls', function () {
-    const { runIsolateProbe } = require('../lib/isolate_probe.js');
+describe('lib/preflight/isolate_probe.js checks results, not just calls', function () {
+    const { runIsolateProbe } = require('../lib/preflight/isolate_probe.js');
     const OK = { success: true, returnValue: '"ok"' };
 
     it('rejects a failed deploy', async function () {
