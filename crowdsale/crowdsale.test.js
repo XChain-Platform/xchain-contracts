@@ -19,6 +19,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const registerOffGridPaymentTests = require('./crowdsale_test/off_grid_payments');
+const registerDustContributionSuite = require('./crowdsale_test/dust_contribution');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
@@ -358,6 +359,10 @@ const RATE = '10', SOFT = '100', HARD = '200', DURATION = 50;
     };
 
     registerOffGridPaymentTests({
+        OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions: assertDeliveredActions, assertBalance, assertContractBalance
+    });
+    registerDustContributionSuite({
         OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert, assertSuccess,
         assertReverted, assertEmittedActions: assertDeliveredActions, assertBalance, assertContractBalance
     });

@@ -57,9 +57,13 @@
 // getPrice(coinPair) is the latest consensus-finalized round, as the object
 // { price, roundNumber, timestamp } (a bare string price is also accepted).
 // Price-sensitive operations (borrow, withdraw, liquidate) additionally
-// require getSnapshotAge() <= maxSnapshotAge seconds, so nobody can act on a
-// stale price during an oracle outage. Deposits and repayments are always
-// allowed -- de-risking a vault must never be blocked.
+// require getSnapshotAge() <= maxSnapshotAge seconds AND, when getPrice returns
+// the object shape, getBlockTimestamp() - timestamp <= maxSnapshotAge for the
+// configured pair's own round, so nobody can act on a stale price during an
+// oracle outage, including one where only this pair stops publishing while the
+// rest of the fleet advances. maxSnapshotAge must exceed the pair's normal
+// round interval, or price-sensitive operations revert between rounds. Deposits
+// and repayments are always allowed -- de-risking a vault must never be blocked.
 //
 // INTERIM UNIT ON LIVE HOSTS. getSnapshotAge() reads seconds only once the
 // host indexer's oracle_snapshot_age_seconds_activation is armed on the
@@ -93,7 +97,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.1.1'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -423,16 +427,22 @@ function stableDelta(xchain) {
     return xchain.math.subtract(held, xchain.state.get('trackedStable'));
 }
 
-// Latest oracle price for the configured pair, as a string. Accepts both the
-// production accessor's { price, roundNumber, timestamp } object and a bare
-// string. Reverts if there is no price or the snapshot is older than
-// maxSnapshotAge seconds.
+// Latest price for the configured pair as a string (object or bare-string shape).
+// Reverts when the fleet snapshot or the pair's own round is older than maxSnapshotAge.
 function freshPrice(xchain) {
+    var maxAge = parseInt(xchain.state.get('maxSnapshotAge'), 10);
     var age = xchain.oracle.getSnapshotAge();
-    xchain.require(age <= parseInt(xchain.state.get('maxSnapshotAge')), 'oracle price is stale');
+    xchain.require(age <= maxAge, 'oracle price is stale');
 
     var r = xchain.oracle.getPrice(xchain.state.get('coinPair'));
     xchain.require(r !== null && r !== undefined, 'no oracle price for pair');
+    if (typeof r === 'object') {
+        // Round timestamp and block time are both chain unix seconds; a round
+        // stamped after the block (time skew) reads as age <= 0 and passes.
+        var ts = parseInt(r.timestamp, 10);
+        if (ts > 0)
+            xchain.require(xchain.getBlockTimestamp() - ts <= maxAge, 'oracle price is stale');
+    }
     var price = (typeof r === 'object') ? r.price : r;
     xchain.require(price !== null && price !== undefined, 'no oracle price for pair');
     price = String(price);

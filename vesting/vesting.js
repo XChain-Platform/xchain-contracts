@@ -101,14 +101,14 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
     // xchain-documentation/protocol/contract-abi.md). Advisory only; never
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
-        fund:   { summary: 'Confirm custody and start the vesting clock (BATCH after a DEPOSIT)', params: [] },
+        fund:   { summary: 'Grantor confirms custody and starts the vesting clock (BATCH after a DEPOSIT)', params: [] },
         claim:  { summary: 'Beneficiary withdraws everything vested but unclaimed', params: [] },
         cancel: { summary: 'Grantor reclaims the held deposit before the grant is funded, e.g. after fund() refused it', params: [] },
         revoke: { summary: 'Grantor reclaims the unvested portion (revocable grants only)', params: [] },
@@ -162,8 +162,11 @@ module.exports = {
     },
 
     // fund(): confirm custody and start the vesting clock. BATCH after a DEPOSIT.
+    // Grantor-only: it picks the clock-start block and ends the INIT window cancel() needs.
     fund: function (xchain) {
         xchain.require(xchain.state.get('status') === 'INIT', 'vesting not awaiting funds');
+        xchain.require(xchain.getSourceAddress() === xchain.state.get('grantor'),
+            'only the grantor can fund');
 
         var tick  = xchain.state.get('tick');
         var total = xchain.state.get('total');
@@ -177,6 +180,9 @@ module.exports = {
         xchain.require(isAtLeastExact(xchain, floorToDecimals(total, grid), total),
             'total is not representable at tick decimals (' + grid + ')');
 
+        // Keep the grid so info() can floor its view without token info (read-only
+        // simulations run with none).
+        xchain.state.set('decimals', String(grid));
         xchain.state.set('start', String(xchain.getBlockHeight()));
         xchain.state.set('status', 'ACTIVE');
     },
@@ -214,8 +220,8 @@ module.exports = {
         // amount actually paid, not the full-precision accrual: `claimed` then
         // always equals what the beneficiary really received, the sub-grid
         // remainder stays claimable instead of silently evaporating, and the
-        // final claim pays out the accumulated dust exactly (total custody is
-        // conserved to within one tick unit).
+        // final claim pays out the accumulated dust exactly (the claims sum to
+        // the grant, or to a revoked grant's on-grid frozen cap).
         var claimable = floorToDecimals(
             xchain.math.subtract(vested, claimed),
             tickDecimals(xchain, tick)
@@ -246,20 +252,18 @@ module.exports = {
         var total    = xchain.state.get('total');
         // Floor the reclaimed payout onto the tick's decimal grid BEFORE it is
         // emitted (see floorToDecimals above): the indexer's half-up rounding
-        // could otherwise round it UP past custody and revert the revoke. Because
-        // the beneficiary's frozen cap below is also reached through a floored
-        // claim() payout, the sub-grid fraction left behind by this floor is
-        // forfeited to the contract (bounded by less than one tick unit); it is
-        // not claimable by the beneficiary or recoverable by any method here.
+        // could otherwise round it UP past custody and revert the revoke.
         var unvested = floorToDecimals(
             xchain.math.subtract(total, vested),
             tickDecimals(xchain, tick)
         );
         xchain.require(xchain.math.gt(unvested, '0'), 'nothing to revoke (fully vested)');
 
-        // Freeze the cap at what had vested; status REVOKED makes vestedAmount()
-        // return this frozen value instead of continuing to accrue.
-        xchain.state.set('total', vested);
+        // Freeze the cap at total minus the grantor's floored payout, so the two
+        // payouts sum to exactly total (a raw `vested` cap is floored again by
+        // claim() and strands up to two tick units). The cap is on the grid and
+        // under one tick unit above `vested`; REVOKED makes vestedAmount() return it.
+        xchain.state.set('total', xchain.math.subtract(total, unvested));
         xchain.state.set('status', 'REVOKED');
 
         xchain.emit.send({
@@ -271,14 +275,17 @@ module.exports = {
     },
 
     info: function (xchain) {
+        var status = xchain.state.get('status');
         return JSON.stringify({
-            status: xchain.state.get('status'),
+            status: status,
             total: xchain.state.get('total'),
             claimed: xchain.state.get('claimed'),
             // No schedule has started in INIT or CANCELLED, so nothing is claimable.
-            claimable: (xchain.state.get('status') === 'INIT' || xchain.state.get('status') === 'CANCELLED')
+            // Otherwise floor on the grid fund() stored, so the view shows what claim() pays.
+            claimable: (status === 'INIT' || status === 'CANCELLED')
                 ? '0'
-                : xchain.math.subtract(vestedAmount(xchain), xchain.state.get('claimed'))
+                : floorToDecimals(xchain.math.subtract(vestedAmount(xchain), xchain.state.get('claimed')),
+                    parseInt(xchain.state.get('decimals'), 10))
         });
     }
 };
@@ -292,7 +299,7 @@ module.exports = {
 //     from it is floored onto the grid at the emission sites (claim/revoke)
 //     so the ledger's half-up re-normalisation can never round a payout UP
 //     past custody.
-// Once REVOKED, the stored `total` is the frozen vested cap, returned directly.
+// Once REVOKED, the stored `total` is the frozen cap revoke() set, returned directly.
 function vestedAmount(xchain) {
     if (xchain.state.get('status') === 'REVOKED')
         return xchain.state.get('total');

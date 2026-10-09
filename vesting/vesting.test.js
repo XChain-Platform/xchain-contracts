@@ -15,6 +15,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const registerOffGridTotalTests = require('./vesting_test/off_grid_total');
+const registerFundAccessAndRevokeCapTests = require('./vesting_test/fund_access_and_revoke_cap');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -307,20 +308,24 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assertSuccess(r);
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '5' } }]);
 
-            atElapsed(DUR3);                  // cap frozen at 2.666... → beneficiary claims 2
+            atElapsed(DUR3);                  // cap frozen at 8 - 5 = 3 → beneficiary claims 3
             const c = await claim();
             assertSuccess(c);
-            assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '2' } }]);
+            assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '3' } }]);
 
-            // Custody retains only sub-grid dust (< 1 tick unit) and never went negative.
+            // The two payouts sum to exactly the grant, so nothing is stranded in custody.
             assertBalance(h.ledger, GRANTOR, TICK, '5');
-            assertBalance(h.ledger, BENE, TICK, '2');
-            assertContractBalance(h.ledger, ADDR, TICK, '1');
+            assertBalance(h.ledger, BENE, TICK, '3');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
             assertReverted(await claim(), 'nothing to claim');
         });
     });
 
     registerOffGridTotalTests({
+        GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions, assertBalance, assertContractBalance
+    });
+    registerFundAccessAndRevokeCapTests({
         GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
         assertReverted, assertEmittedActions, assertBalance, assertContractBalance
     });

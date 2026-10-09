@@ -56,6 +56,46 @@ module.exports = function registerAttackTests(ctx) {
             assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
         });
 
+        it('a stalled vault pair blocks borrow/withdraw/liquidate while the fleet snapshot is fresh', async function () {
+            await deployVault();
+            setPrice('100');
+            await depositColl(ALICE, '3');
+            await borrow(ALICE, '100');
+
+            // Global snapshot age 0 (another pair just published), own round 50 s old.
+            ctx.h.ledger.seedOracle(ctx.PAIR,
+                { price: '100', roundNumber: 2, timestamp: ctx.h.ledger.blockTimestamp - 50 }, 0, {});
+            ctx.h.ledger.seedOracle('SILVER/USD',
+                { price: '25', roundNumber: 9, timestamp: ctx.h.ledger.blockTimestamp }, 0, {});
+            assertReverted(await borrow(ALICE, '10'), 'oracle price is stale');
+            assertReverted(await withdraw(ALICE, '1'), 'oracle price is stale');
+            ctx.h.seedBalance(LIQ, STABLE, '100');
+            assertReverted(await liquidate(LIQ, ALICE, '100'), 'oracle price is stale');
+
+            assertSuccess(await depositColl(ALICE, '1'));
+            assertSuccess(await repay(ALICE, '100'));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        });
+
+        it('the pair round age bound is inclusive at maxSnapshotAge', async function () {
+            await deployVault();
+            setPrice('100');
+            await depositColl(ALICE, '3');
+            ctx.h.ledger.seedOracle(ctx.PAIR,
+                { price: '100', roundNumber: 2, timestamp: ctx.h.ledger.blockTimestamp - 10 }, 0, {});
+            assertSuccess(await borrow(ALICE, '10'));
+            ctx.h.ledger.seedOracle(ctx.PAIR,
+                { price: '100', roundNumber: 3, timestamp: ctx.h.ledger.blockTimestamp - 11 }, 0, {});
+            assertReverted(await borrow(ALICE, '10'), 'oracle price is stale');
+        });
+
+        it('a bare string price falls back to the global snapshot age alone', async function () {
+            await deployVault();
+            ctx.h.ledger.seedOracle(ctx.PAIR, '100', 0, {});
+            await depositColl(ALICE, '3');
+            assertSuccess(await borrow(ALICE, '10'));
+        });
+
         it('borrow with an empty vault reverts', async function () {
             await deployVault();
             setPrice('100');

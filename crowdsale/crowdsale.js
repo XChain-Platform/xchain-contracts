@@ -186,7 +186,7 @@ function acceptedFor(xchain, total) {
     for (var i = 0; i < 2 && !buysUnits(xchain, a, rate, saleDec, tokens); i++) a = xchain.math.add(a, unit);
     for (var j = 0; j < 2; j++) {
         var less = xchain.math.subtract(a, unit);
-        if (!xchain.math.gt(less, '0') || !buysUnits(xchain, less, rate, saleDec, tokens)) break;
+        if (xchain.math.isZero(less) || !buysUnits(xchain, less, rate, saleDec, tokens)) break;
         a = less;
     }
     xchain.require(buysUnits(xchain, a, rate, saleDec, tokens) && isAtLeastExact(xchain, total, a),
@@ -202,7 +202,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.3.3'
+        version:     '1.3.4'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -347,7 +347,8 @@ module.exports = {
         xchain.require(xchain.state.get('status') === 'SUCCESS', 'sale not successful');
         var caller = xchain.getSourceAddress();
         var paid   = xchain.state.get('c:' + caller) || '0';
-        xchain.require(xchain.math.gt(paid, '0'), 'nothing to claim');
+        // Test the record exactly, as buy() stored it (gt reads a record <= 1e-15 as zero).
+        xchain.require(!xchain.math.isZero(paid), 'nothing to claim');
 
         // Floor the mint onto saleTick's decimal grid so the indexer's half-up
         // re-normalisation cannot round it UP (over-issuing past the rate and, across
@@ -359,7 +360,7 @@ module.exports = {
         // Defence in depth (buy() records only amounts that mint whole units): a mint that
         // floors to '0' reverts before the record is deleted, so a payment is never silently
         // destroyed into an AMOUNT=0 no-op mint, as amm and vesting guard their emissions.
-        xchain.require(xchain.math.gt(tokens, '0'), 'contribution below one sale-token unit');
+        xchain.require(!xchain.math.isZero(tokens), 'contribution below one sale-token unit');
         xchain.state.delete('c:' + caller); // zero out first (no double claim)
 
         xchain.emit.send({
@@ -375,7 +376,8 @@ module.exports = {
         xchain.require(xchain.state.get('status') === 'FAILED', 'sale did not fail');
         var caller = xchain.getSourceAddress();
         var paid   = xchain.state.get('c:' + caller) || '0';
-        xchain.require(xchain.math.gt(paid, '0'), 'nothing to refund');
+        // Exact, as in claim(): a tolerant gt would strand a record <= 1e-15 in custody.
+        xchain.require(!xchain.math.isZero(paid), 'nothing to refund');
 
         xchain.state.delete('c:' + caller); // zero out first (no double refund)
 

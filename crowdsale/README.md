@@ -64,7 +64,8 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 - **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
   custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
   `MINT` cannot consume the cap or create unbacked supply, and claims only send
-  tokens from the fixed inventory.
+  tokens from the fixed inventory. Whatever claims do not take stays in custody
+  for good (see Known limitations).
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
   `claim()` floors `contribution * rate` onto the sale token's grid, so a
   payment off that grid would buy fewer tokens than it paid for, with the
@@ -91,6 +92,12 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
+- **Unsold inventory stays locked.** The template has no burn or sweep path, so
+  the sale tokens no claim takes stay in contract custody permanently:
+  `(hardCap - raised) * rate` after a success under the hard cap, and the whole
+  `hardCap * rate` after a failed sale. They never circulate, but the tick's
+  `MAX_SUPPLY` and supply figures still count them, and explorers list the
+  contract as a holder of that balance.
 
 ## Tests
 

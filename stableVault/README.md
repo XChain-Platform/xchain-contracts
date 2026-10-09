@@ -32,8 +32,14 @@ of truth; caller-supplied funding amounts are never trusted.
 - `getPrice(coinPair)`: latest finalized round, production object shape
   `{ price, roundNumber, timestamp }` (a bare string is also accepted).
 - Price-sensitive ops (**borrow / withdraw-with-debt / liquidate**) require
-  `getSnapshotAge() <= maxSnapshotAge` seconds: nobody acts on a stale price
-  during an oracle outage.
+  `getSnapshotAge() <= maxSnapshotAge` seconds, and, for the object shape,
+  `getBlockTimestamp() - timestamp <= maxSnapshotAge` on the configured pair's
+  own round. `getSnapshotAge()` is the newest round across every pair, so the
+  second check is what stops a stalled pair hiding behind a fleet that keeps
+  publishing. Set `maxSnapshotAge` above the pair's normal round interval, or
+  these ops revert between rounds. A vault deployed from a revision before
+  1.2.0 has only the fleet-wide check and must be redeployed to get the
+  per-pair one.
 - **Interim unit on live hosts.** The age is in seconds only once the host
   indexer's `oracle_snapshot_age_seconds_activation` is armed on the network.
   Before that the host returns a block count. On BTC that makes the window
@@ -120,9 +126,10 @@ that one.
   next caller (same footgun as the crowdsale template). Always
   `BATCH(DEPOSIT, deposit/repay/liquidate)`.
 - **Borrowing or withdrawing on a stale price.** Price-sensitive operations
-  (`borrow`, `withdraw` with debt, `liquidate`) require
-  `getSnapshotAge() <= maxSnapshotAge`; nobody can mint against or seize on a
-  price frozen by an oracle outage. De-risking (`deposit`/`repay`, debt-free
+  (`borrow`, `withdraw` with debt, `liquidate`) require both
+  `getSnapshotAge() <= maxSnapshotAge` and the configured pair's own round
+  to be no older than `maxSnapshotAge`; nobody can mint against or seize on a
+  price frozen by an oracle outage, even one confined to this pair. De-risking (`deposit`/`repay`, debt-free
   `withdraw`) deliberately skips the oracle so a vault can always be made
   safer.
 - **Under-collateralized mint / exit.** `borrow()` and `withdraw()` check
