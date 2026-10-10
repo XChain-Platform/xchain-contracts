@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - escrow and escrowDelivery `initialize()` now reject an `amount` that is not a plain decimal string, because an exponent or signed form could never be matched by a deposit.
 
 ### Fixed
+- vesting's `fund()` is now grantor-only, `info()` reports the same grid-floored `claimable` amount that `claim()` can pay, and `revoke()` preserves every whole tick unit for the grantor or beneficiary instead of stranding rounding dust.
+- crowdsale's `claim()` and `refund()` now recognize every nonzero accepted contribution exactly, including amounts below the math comparison tolerance; its permanently locked unsold sale-token inventory is also documented as a known limitation.
 - englishAuction's and dutchAuction's `cancel()` is now reachable from the pre-funded state and returns the contract's held item balance, so a seller whose `fund()` was rejected can reclaim the deposit instead of losing it.
 - Both auction templates' `fund()` comments and READMEs no longer claim batching avoids the stranded-deposit exposure; it does not, because a `BATCH` is not atomic.
 - priceBetTimed's `settle()` and `reclaim()` read the cursor-to-tip round range instead of the tip's timestamp, closing a payout flip and a false void when a round carries an earlier timestamp than the round before it.
@@ -51,4 +53,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deployer-supplied integer parameters (deadlines, durations, decimals) across escrow, escrowDelivery, vesting, crowdsale, dutchAuction, and englishAuction are now validated as canonical in-range integers, closing a gap where a malformed value could deploy a contract on terms the deployer never intended.
 - escrowDelivery no longer accepts a malformed deadline that could let a buyer bypass the seller/arbiter settlement path and reclaim the full escrowed balance early.
 - The card dispenser no longer advances a buyer's paid counter past refunded or swept balances.
-
