@@ -54,94 +54,97 @@ function passedPoll() {
              decided_early: false, tick: GOV, options: [{ index: 0, weight: '4000', voters: 12 }] };
 }
 
+// Shared state the register* modules read. `h` and `base` are replaced by every
+// deploy(), and the modules read them off this object at test time.
+const context = {
+    h: null,
+    base: 0,
+    assert,
+    XChainVM,
+    E2EHarness,
+    assertSuccess,
+    assertReverted,
+    assertEmittedActions,
+    assertBalance,
+    assertContractState,
+    CODE,
+    GUARDIAN,
+    HOLDER,
+    PAYEE,
+    ATTACKER,
+    ADDR,
+    GOV,
+    PAY,
+    TIMELOCK,
+    WINDOW,
+    MIN_PROPOSE,
+    POLL,
+    passedPoll
+};
+
+async function deploy(mode) {
+    context.h = new E2EHarness(XChainVM);
+    for (const who of [GUARDIAN, HOLDER, ATTACKER, PAYEE])
+        context.h.seedBalance(who, 'XCHAIN', '1000000');
+    context.h.seedBalance(HOLDER, GOV, '1000');
+    context.h.seedBalance(HOLDER, PAY, '5000');
+    context.h.ledger.setTokenDecimals(PAY, 8);
+    await context.h.deploy({
+        code: CODE, deployer: GUARDIAN, contractAddress: ADDR,
+        params: [GUARDIAN, GOV, String(TIMELOCK), String(WINDOW), MIN_PROPOSE, mode || 'guardian']
+    });
+    context.base = context.h.ledger.blockHeight;
+}
+
+// Move to `n` blocks after the deploy height, where arm() starts the timelock.
+function atOffset(n) { context.h.ledger.blockHeight = context.base + n; }
+
+function call(method, params, caller) {
+    return context.h.execute({ contractAddress: ADDR, method, params: params || [], caller });
+}
+
+function propose(who) {
+    return call('propose', [PAYEE, PAY, '400', 'grants round 1'], who || HOLDER);
+}
+
+function pollCallback(proposalId, overrides) {
+    const o = overrides || {};
+    const args = [
+        o.poll || POLL, o.status || 'finalized', o.winning != null ? o.winning : '0',
+        o.weight || '4000', o.voters || '12', o.quorum || '1', o.minVoters || '1',
+        o.tick != null ? o.tick : GOV,
+        proposalId
+    ];
+    if (o.dropTick) args.splice(7, 1);
+    if (o.extraParam != null) args.push(o.extraParam);
+    return call('arm', args, o.caller || ADDR);
+}
+
+async function proposeAndArm(mode) {
+    await deploy(mode);
+    assertSuccess(await propose());
+    if ((mode || 'guardian') === 'guardian')
+        assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
+    assertSuccess(await pollCallback('1'));
+}
+
+async function proposalStatus(id) {
+    const r = await call('proposalInfo', [id || '1'], HOLDER);
+    assertSuccess(r);
+    return JSON.parse(JSON.parse(r.returnValue)).status;
+}
+
+function readyToExecute() {
+    atOffset(TIMELOCK);
+    context.h.ledger.seedPollResult(POLL, passedPoll());
+}
+
+Object.assign(context, {
+    deploy, call, propose, pollCallback, proposeAndArm, proposalStatus, readyToExecute, atOffset
+});
+
 (XChainVM ? describe : describe.skip)('Template: treasury', function () {
     this.timeout(0);
-
-    const context = {
-        h: null,
-        assert,
-        XChainVM,
-        E2EHarness,
-        assertSuccess,
-        assertReverted,
-        assertEmittedActions,
-        assertBalance,
-        assertContractState,
-        CODE,
-        GUARDIAN,
-        HOLDER,
-        PAYEE,
-        ATTACKER,
-        ADDR,
-        GOV,
-        PAY,
-        TIMELOCK,
-        WINDOW,
-        MIN_PROPOSE,
-        POLL,
-        passedPoll
-    };
-
-    async function deploy(mode) {
-        context.h = new E2EHarness(XChainVM);
-        for (const who of [GUARDIAN, HOLDER, ATTACKER, PAYEE])
-            context.h.seedBalance(who, 'XCHAIN', '1000000');
-        context.h.seedBalance(HOLDER, GOV, '1000');
-        context.h.seedBalance(HOLDER, PAY, '5000');
-        context.h.ledger.setTokenDecimals(PAY, 8);
-        await context.h.deploy({
-            code: CODE, deployer: GUARDIAN, contractAddress: ADDR,
-            params: [GUARDIAN, GOV, String(TIMELOCK), String(WINDOW), MIN_PROPOSE, mode || 'guardian']
-        });
-        context.base = context.h.ledger.blockHeight;
-    }
-
-    // Move to `n` blocks after the deploy height, where arm() starts the timelock.
-    function atOffset(n) { context.h.ledger.blockHeight = context.base + n; }
-
-    function call(method, params, caller) {
-        return context.h.execute({ contractAddress: ADDR, method, params: params || [], caller });
-    }
-
-    function propose(who) {
-        return call('propose', [PAYEE, PAY, '400', 'grants round 1'], who || HOLDER);
-    }
-
-    function pollCallback(proposalId, overrides) {
-        const o = overrides || {};
-        const args = [
-            o.poll || POLL, o.status || 'finalized', o.winning != null ? o.winning : '0',
-            o.weight || '4000', o.voters || '12', o.quorum || '1', o.minVoters || '1',
-            o.tick != null ? o.tick : GOV,
-            proposalId
-        ];
-        if (o.dropTick) args.splice(7, 1);
-        if (o.extraParam != null) args.push(o.extraParam);
-        return call('arm', args, o.caller || ADDR);
-    }
-
-    async function proposeAndArm(mode) {
-        await deploy(mode);
-        assertSuccess(await propose());
-        if ((mode || 'guardian') === 'guardian')
-            assertSuccess(await call('approvePoll', ['1', POLL], GUARDIAN));
-        assertSuccess(await pollCallback('1'));
-    }
-
-    async function proposalStatus(id) {
-        const r = await call('proposalInfo', [id || '1'], HOLDER);
-        assertSuccess(r);
-        return JSON.parse(JSON.parse(r.returnValue)).status;
-    }
-
-    function readyToExecute() {
-        atOffset(TIMELOCK);
-        context.h.ledger.seedPollResult(POLL, passedPoll());
-    }
-
-    Object.assign(context, {
-        deploy, call, propose, pollCallback, proposeAndArm, proposalStatus, readyToExecute, atOffset
-    });
 
     registerHappyPathTests(context);
     registerProposalGatingTests(context);
