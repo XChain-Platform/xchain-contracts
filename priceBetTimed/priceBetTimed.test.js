@@ -49,88 +49,95 @@ const STAKE    = '100';
 const T0 = XChainVM ? new E2EHarness(XChainVM).ledger.blockTimestamp : 0;
 const T  = T0 + 1500;   // settle time: "2.5 blocks" after deploy
 
-(XChainVM ? describe : describe.skip)('Template: priceBetTimed', function () {
-    this.timeout(0);
-    async function deployBet(side, window) {
-        setHarness(new E2EHarness(XChainVM));
-        assert.strictEqual(h.ledger.blockTimestamp, T0, 'harness clock drifted from the T0 the bet is built on');
-        h.seedBalance(MAKER, 'XCHAIN', '1000000');
-        h.seedBalance(MAKER, TICK, '100');
-        h.seedBalance(TAKER, TICK, '100');
-        // Register decimals so the ledger re-rounds emissions the way the real
-        // indexer does at write time, and so getTokenInfo (which refundBoth's
-        // grid-flooring reads) resolves. A tick a contract actually holds always
-        // carries token info on a real node.
-        h.ledger.setTokenDecimals(TICK, 8);
-        await h.deploy({
-            code: CODE, deployer: MAKER, contractAddress: ADDR,
-            params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(T), String(window || 5)]
-        });
-        seedTipRound();
+// The harness `h` is a proxy onto the harness the latest deployBet() made, so
+// each test sees the harness its own deploy created.
+let current;
+const h = new Proxy({}, {
+    get: function (_, key) {
+        const value = current[key];
+        return typeof value === 'function' ? value.bind(current) : value;
     }
+});
+function setHarness(next) { current = next; }
 
-    // Publish one pre-settleTime round so accept() has a tip to anchor the cursor
-    // on (it refuses the match without one). Round 1 keeps the historic cursor = 1
-    // start; a later publishRounds() replaces this history wholesale.
-    function seedTipRound() {
-        const tip = { price: '59000', roundNumber: 1, timestamp: T0 };
-        h.ledger.seedOracle(PAIR, tip, 0, { 1: tip });
-    }
-
-    async function depositAnd(who, method, amount) {
-        h.deposit(who, ADDR, TICK, amount || STAKE);
-        return h.execute({ contractAddress: ADDR, method: method, params: [], caller: who });
-    }
-
-    // Seed finalized rounds in the PRODUCTION accessor shape. `spec` maps
-    // roundNumber -> { ts, price }; the highest round becomes getPrice()'s
-    // "latest". Gaps in the numbering model skipped/disputed rounds.
-    function publishRounds(spec) {
-        const rounds = {};
-        let top = null;
-        for (const n of Object.keys(spec).map(Number).sort((a, b) => a - b)) {
-            rounds[n] = { price: spec[n].price, roundNumber: n, timestamp: spec[n].ts };
-            top = rounds[n];
-        }
-        h.ledger.seedOracle(PAIR, top, 0, rounds);
-    }
-
-    // Same history as publishRounds, but with what getPrice() reports about the
-    // TIP round overridden. Two shapes model the two sides of the indexer's
-    // stale-round visibility flag day, for a tip older than
-    // ORACLE_MAX_PRICE_AGE_SECONDS:
-    //   null                                  before it: the stale tip is
-    //                                         dropped from the getPrice() view
-    //                                         entirely, while getPriceAtRound()
-    //                                         keeps the very same round;
-    //   { price: null, roundNumber, timestamp,
-    //     stale: true }                       at/after it: the tip is kept with
-    //                                         its price withheld.
-    function publishRoundsWithTip(spec, tip) {
-        publishRounds(spec);
-        h.ledger.oraclePrices[PAIR].current = tip;
-    }
-
-    async function settleBy(caller) {
-        return h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: caller || STRANGER });
-    }
-    function returned(r) { return JSON.parse(r.returnValue); }
-
-    let current;
-    const h = new Proxy({}, {
-        get: function (_, key) {
-            const value = current[key];
-            return typeof value === 'function' ? value.bind(current) : value;
-        }
+async function deployBet(side, window) {
+    setHarness(new E2EHarness(XChainVM));
+    assert.strictEqual(h.ledger.blockTimestamp, T0, 'harness clock drifted from the T0 the bet is built on');
+    h.seedBalance(MAKER, 'XCHAIN', '1000000');
+    h.seedBalance(MAKER, TICK, '100');
+    h.seedBalance(TAKER, TICK, '100');
+    // Register decimals so the ledger re-rounds emissions the way the real
+    // indexer does at write time, and so getTokenInfo (which refundBoth's
+    // grid-flooring reads) resolves. A tick a contract actually holds always
+    // carries token info on a real node.
+    h.ledger.setTokenDecimals(TICK, 8);
+    await h.deploy({
+        code: CODE, deployer: MAKER, contractAddress: ADDR,
+        params: [MAKER, PAIR, STRIKE, side || 'OVER', TICK, STAKE, String(T), String(window || 5)]
     });
-    function setHarness(next) { current = next; }
+    seedTipRound();
+}
 
-    const context = {
+// Publish one pre-settleTime round so accept() has a tip to anchor the cursor
+// on (it refuses the match without one). Round 1 keeps the historic cursor = 1
+// start; a later publishRounds() replaces this history wholesale.
+function seedTipRound() {
+    const tip = { price: '59000', roundNumber: 1, timestamp: T0 };
+    h.ledger.seedOracle(PAIR, tip, 0, { 1: tip });
+}
+
+async function depositAnd(who, method, amount) {
+    h.deposit(who, ADDR, TICK, amount || STAKE);
+    return h.execute({ contractAddress: ADDR, method: method, params: [], caller: who });
+}
+
+// Seed finalized rounds in the PRODUCTION accessor shape. `spec` maps
+// roundNumber -> { ts, price }; the highest round becomes getPrice()'s
+// "latest". Gaps in the numbering model skipped/disputed rounds.
+function publishRounds(spec) {
+    const rounds = {};
+    let top = null;
+    for (const n of Object.keys(spec).map(Number).sort((a, b) => a - b)) {
+        rounds[n] = { price: spec[n].price, roundNumber: n, timestamp: spec[n].ts };
+        top = rounds[n];
+    }
+    h.ledger.seedOracle(PAIR, top, 0, rounds);
+}
+
+// Same history as publishRounds, but with what getPrice() reports about the
+// TIP round overridden. Two shapes model the two sides of the indexer's
+// stale-round visibility flag day, for a tip older than
+// ORACLE_MAX_PRICE_AGE_SECONDS:
+//   null                                  before it: the stale tip is
+//                                         dropped from the getPrice() view
+//                                         entirely, while getPriceAtRound()
+//                                         keeps the very same round;
+//   { price: null, roundNumber, timestamp,
+//     stale: true }                       at/after it: the tip is kept with
+//                                         its price withheld.
+function publishRoundsWithTip(spec, tip) {
+    publishRounds(spec);
+    h.ledger.oraclePrices[PAIR].current = tip;
+}
+
+async function settleBy(caller) {
+    return h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: caller || STRANGER });
+}
+function returned(r) { return JSON.parse(r.returnValue); }
+
+// Builds the shared context the register* modules read.
+function buildContext() {
+    return {
         ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, STRIKE, STAKE, T0, T, CODE, XChainVM, E2EHarness,
         assert, assertSuccess, assertReverted, assertBalance, assertContractBalance, assertContractState,
         h, setHarness, deployBet, seedTipRound, depositAnd, publishRounds, publishRoundsWithTip,
         settleBy, returned
     };
+}
+
+(XChainVM ? describe : describe.skip)('Template: priceBetTimed', function () {
+    this.timeout(0);
+    const context = buildContext();
 
     registerHappyPathTests(context);
     registerOracleWindowAndTimingAttackTests(context);
