@@ -4,7 +4,10 @@ module.exports = function registerOracleWindowAndTimingAttackTests(context) {
     describe('attacks we considered: timing and oracle window', function () {
         registerTimingAttacks(context);
         registerStaleTipAttacks(context);
-        registerEvictedRoundAttacks(context);
+        registerEvictedRoundReadAttacks(context);
+        registerEvictedRoundSpanAttacks(context);
+        registerEvictedRoundAcceptAttacks(context);
+        registerEvictedWithheldTipAttacks(context);
         registerCursorAttacks(context);
     });
 };
@@ -131,11 +134,10 @@ function registerStaleTipAttacks(context) {
     });
 }
 
-function registerEvictedRoundAttacks(context) {
+function registerEvictedRoundReadAttacks(context) {
     const {
-        ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, T, T0, assertSuccess, assertReverted, assertBalance,
-        assertContractBalance, assertContractState, h, deployBet, depositAnd, publishRounds,
-        publishRoundsWithTip, settleBy
+        ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, T, assertReverted, assertBalance,
+        assertContractBalance, assertContractState, h, deployBet, depositAnd, publishRounds, settleBy
     } = context;
 
     it('a scan read without round metadata fails loud instead of being skipped as a gap', async function () {
@@ -172,6 +174,13 @@ function registerEvictedRoundAttacks(context) {
         assertContractBalance(h.ledger, ADDR, TICK, '200');
         assertBalance(h.ledger, MAKER, TICK, '0');
     });
+}
+
+function registerEvictedRoundSpanAttacks(context) {
+    const {
+        ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, T, assertSuccess, assertReverted, assertBalance,
+        assertContractBalance, assertContractState, h, deployBet, depositAnd, publishRounds, settleBy
+    } = context;
 
     it('a fully evicted scan span reverts instead of reporting SCANNING forever', async function () {
         // With cursor..top entirely below the floor the scan must revert, not
@@ -208,6 +217,13 @@ function registerEvictedRoundAttacks(context) {
         assertContractState(h.ledger, ADDR, 'status', 'SETTLED');
         assertBalance(h.ledger, MAKER, TICK, '200');
     });
+}
+
+function registerEvictedRoundAcceptAttacks(context) {
+    const {
+        ADDR, MAKER, TAKER, TICK, PAIR, T0, assertSuccess, assertReverted, assertContractBalance,
+        assertContractState, h, deployBet, depositAnd
+    } = context;
 
     it('accept() refuses a pair with no readable tip: the birth-wedge cannot be minted', async function () {
         // Without the guard the cursor falls back to round 1, already evicted on
@@ -246,6 +262,13 @@ function registerEvictedRoundAttacks(context) {
         assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
         assertContractBalance(h.ledger, ADDR, TICK, '0');
     });
+}
+
+function registerEvictedWithheldTipAttacks(context) {
+    const {
+        ADDR, MAKER, TAKER, PAIR, T0, assertReverted, assertContractState, h, deployBet, depositAnd,
+        publishRoundsWithTip
+    } = context;
 
     it('a withheld-price tip below the floor is refused at accept() too', async function () {
         // The post-flag-day stale shape keeps a non-null tip object, so the
