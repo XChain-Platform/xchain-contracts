@@ -45,8 +45,33 @@ const BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 let txCounter = 0;
 function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart(62, '0'); }
 
-(XChainVM ? describe : describe.skip)('Template: counterpartyBridge', function () {
-    this.timeout(0);
+// Shape of a real tokenscan.io GET /api/sends/{address}/{page}/{limit}
+// response (see https://tokenscan.io/api#sends): every Send that ever
+// landed on BURN_ADDRESS, across every asset and every sender.
+function sendsPayload(rows) {
+    return JSON.stringify({
+        data: rows.map(function (r) {
+            return {
+                asset: r.asset || CP_ASSET,
+                asset_longname: '',
+                block_index: r.blockIndex || 900000,
+                destination: BURN_ADDRESS,
+                quantity: r.quantity,
+                source: r.source || HOLDER,
+                status: r.status || 'valid',
+                timestamp: 1700000000,
+                tx_hash: r.txHash,
+                tx_index: r.txIndex || 1
+            };
+        }),
+        total: rows.length
+    });
+}
+
+// Builds the shared context the register* modules read. The harness `h` is
+// created per deploy and reached through getHarness(), so each test sees the
+// harness its own deployBridge() call made.
+function buildContext() {
     let h;
 
     // Credits the ISSUE's mintSupply to the contract by hand: the harness
@@ -72,30 +97,7 @@ function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart
         });
     }
 
-    // Shape of a real tokenscan.io GET /api/sends/{address}/{page}/{limit}
-    // response (see https://tokenscan.io/api#sends): every Send that ever
-    // landed on BURN_ADDRESS, across every asset and every sender.
-    function sendsPayload(rows) {
-        return JSON.stringify({
-            data: rows.map(function (r) {
-                return {
-                    asset: r.asset || CP_ASSET,
-                    asset_longname: '',
-                    block_index: r.blockIndex || 900000,
-                    destination: BURN_ADDRESS,
-                    quantity: r.quantity,
-                    source: r.source || HOLDER,
-                    status: r.status || 'valid',
-                    timestamp: 1700000000,
-                    tx_hash: r.txHash,
-                    tx_index: r.txIndex || 1
-                };
-            }),
-            total: rows.length
-        });
-    }
-
-    const context = {
+    return {
         ADDR,
         HOLDER,
         OTHER,
@@ -116,6 +118,11 @@ function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart
         sendsPayload,
         nextTxHash
     };
+}
+
+(XChainVM ? describe : describe.skip)('Template: counterpartyBridge', function () {
+    this.timeout(0);
+    const context = buildContext();
 
     registerHappyPathTests(context);
     registerNoBurnFailureTests(context);
