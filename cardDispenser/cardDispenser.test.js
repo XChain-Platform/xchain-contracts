@@ -40,347 +40,350 @@ const CARDS = [A, B, C];
 const PRICE = '1';
 const UNIT  = '1';
 
+let h;
+
+// A fresh harness with OWNER and BUYER funded for gas and BUYER holding 1000 PAY.
+function newHarness() {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(OWNER, 'XCHAIN', '1000000');
+    h.seedBalance(BUYER, 'XCHAIN', '1000000');
+    h.seedBalance(BUYER, PAY, '1000');
+}
+
+// Deploy a fresh dispenser for PAY/price 1, unit 1, cards A/B/C, then fund the
+// contract's custody with `stock` copies of each (default 5/5/5).
+async function deployDispenser(stock) {
+    stock = stock || { [A]: 5, [B]: 5, [C]: 5 };
+    newHarness();
+    // draw() and info() count only DELIVERABLE copies, so they read each stocked
+    // card's decimals. The harness's decimals registry is balance-INDEPENDENT
+    // (MockLedger) while a node's is not: the indexer builds balances and
+    // tokenInfo from ONE snapshot over SOURCE + the contract address (src/db/index.js
+    // buildVmBalancesAndTokenInfo), so a card this contract holds always carries
+    // its info in the same snapshot getBalance reads. Seeding the card ticks
+    // models that reachability rather than papering over it.
+    for (const tick of CARDS) h.ledger.setTokenDecimals(tick, 0);
+    await h.deploy({
+        code: CODE, deployer: OWNER, contractAddress: ADDR,
+        params: [PAY, PRICE, UNIT, A, B, C]
+    });
+    for (const tick of CARDS)
+        if (stock[tick]) h.ledger.creditContractBalance(ADDR, tick, String(stock[tick]));
+}
+
+// The dispenser emits `unit` verbatim and the indexer re-quantises every
+// emitted amount onto its tick's grid at write time, so an off-grid unit
+// normalises silently - to ZERO on a zero-decimal card, which is a VALID
+// SEND that moves nothing. floor(balance/unit) counts the phantom copies,
+// so before the grid check the buyer paid, received nothing, the card
+// balance never moved, and the same paid draw delivered nothing again for
+// as long as the owner cared to collect (AML #7036).
+async function deployOffGridUnit(unit, cardDecimals) {
+    newHarness();
+    for (const tick of CARDS) h.ledger.setTokenDecimals(tick, cardDecimals);
+    await h.deploy({
+        code: CODE, deployer: OWNER, contractAddress: ADDR,
+        params: [PAY, PRICE, unit, A, B, C]
+    });
+    h.ledger.creditContractBalance(ADDR, A, '1');
+}
+
+async function deploySingle(price, copies) {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(OWNER, 'XCHAIN', '1000000');
+    h.seedBalance(BUYER, PAY, '200000');
+    h.ledger.setTokenDecimals(PAY, 8);
+    h.ledger.setTokenDecimals(A, 0);
+    await h.deploy({ code: CODE, deployer: OWNER, contractAddress: ADDR, params: [PAY, price, UNIT, A] });
+    h.ledger.creditContractBalance(ADDR, A, copies);
+}
+
+// Pay-and-draw: mirrors BATCH(DEPOSIT(PAY, amount), EXECUTE("draw")).
+async function payAndDraw(amount) {
+    h.deposit(BUYER, ADDR, PAY, amount);
+    return h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
+}
+const draw = () => payAndDraw(PRICE);
+
+// BigInt replica of the template's fold(): Horner base 131 over charCodes, mod 1e38.
+function foldBig(s) {
+    let acc = 0n;
+    for (let i = 0; i < s.length; i++) acc = (acc * 131n + BigInt(s.charCodeAt(i))) % (10n ** 38n);
+    return acc;
+}
+
+// Build a string whose fold() is exactly v: its base-131 digits as char codes.
+function stringWithFold(v) {
+    const digits = [];
+    for (; v > 0n; v /= 131n) digits.unshift(Number(v % 131n));
+    return String.fromCharCode(...digits);
+}
+
+// Deploy on a fresh harness funding only OWNER's gas; returns the result and its ledger.
+async function bareDeploy(contractAddress, params) {
+    const bare = new E2EHarness(XChainVM);
+    bare.seedBalance(OWNER, 'XCHAIN', '1000000');
+    const r = await bare.deploy({ code: CODE, deployer: OWNER, contractAddress, params });
+    return { r, ledger: bare.ledger };
+}
+
+function happyPathTests() {
+    it('a paid draw sends the buyer exactly one in-set card', async function () {
+        await deployDispenser();
+        const r = await draw();
+        assertSuccess(r);
+        // exactly one SEND, to the buyer, of one unit (tick is random)
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, quantity: UNIT } }]);
+        const tick = r.emittedActions[0].params.tick;
+        assert(CARDS.indexOf(tick) !== -1, 'drawn tick must be one of the declared cards, got ' + tick);
+        assertBalance(h.ledger, BUYER, tick, '1');
+        assertContractBalance(h.ledger, ADDR, tick, '4');   // 5 -> 4
+        assertContractState(h.ledger, ADDR, 'nonce', '1');
+    });
+
+    it('the draw counter advances each successful draw', async function () {
+        await deployDispenser();
+        await draw();
+        await draw();
+        assertContractState(h.ledger, ADDR, 'nonce', '2');
+    });
+
+    it('owner can withdraw the accumulated proceeds (payTick)', async function () {
+        await deployDispenser();
+        await draw();
+        await draw();   // 2 PAY now held by the contract
+        const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: OWNER, tick: PAY, quantity: '2' } }]);
+        assertContractBalance(h.ledger, ADDR, PAY, '0');
+    });
+
+    // Regression: the sweep moves payTick OUT of custody, so the acctPay
+    // watermark draw() measures against has to follow it down. Leaving the
+    // watermark at the pre-sweep total makes every later draw() compute a
+    // negative delta and revert 'underpaid' forever.
+    it('a draw still works after the owner sweeps the proceeds', async function () {
+        await deployDispenser();
+        await draw();
+        await draw();
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER }));
+        assertContractBalance(h.ledger, ADDR, PAY, '0');
+        assertContractState(h.ledger, ADDR, 'acctPay', '0');
+        assertSuccess(await draw());
+        assertContractState(h.ledger, ADDR, 'nonce', '3');
+    });
+
+    it('info() reports remaining stock', async function () {
+        await deployDispenser();
+        const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: STRANGER });
+        assertSuccess(r);
+        assert(r.returnValue && r.returnValue.indexOf('stock') !== -1, 'info should report stock');
+    });
+}
+
+function distributionTests() {
+    // Draining the whole pool proves every in-stock card is reachable: 15
+    // draws against 5+5+5 copies must dispense each card exactly its stock
+    // count (you can never send a card you do not hold) and leave the
+    // contract empty — i.e. the selection covers ALL held tokens.
+    it('drains the entire pool, covering every card', async function () {
+        await deployDispenser({ [A]: 5, [B]: 5, [C]: 5 });
+        const counts = { [A]: 0, [B]: 0, [C]: 0 };
+        for (let i = 0; i < 15; i++) {
+            const r = await draw();
+            assertSuccess(r);
+            counts[r.emittedActions[0].params.tick]++;
+        }
+        assert.strictEqual(counts[A], 5, 'CARD_A fully dispensed');
+        assert.strictEqual(counts[B], 5, 'CARD_B fully dispensed');
+        assert.strictEqual(counts[C], 5, 'CARD_C fully dispensed');
+        for (const tick of CARDS) assertContractBalance(h.ledger, ADDR, tick, '0');
+    });
+
+    it('does not always return the same card (randomness varies the outcome)', async function () {
+        await deployDispenser({ [A]: 50, [B]: 50, [C]: 50 });
+        const seen = {};
+        for (let i = 0; i < 12; i++) {
+            const r = await draw();
+            assertSuccess(r);
+            seen[r.emittedActions[0].params.tick] = true;
+        }
+        assert(Object.keys(seen).length >= 2, 'expected more than one distinct card across 12 draws');
+    });
+}
+
+function paymentAttackTests() {
+    it('an underpaid draw reverts (no trust in caller-supplied amount)', async function () {
+        await deployDispenser();
+        // EXECUTE("draw") with NO preceding DEPOSIT: paid delta is 0 < price.
+        const r = await h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
+        assertReverted(r, 'underpaid');
+        assertContractState(h.ledger, ADDR, 'nonce', '0'); // untouched
+    });
+
+    it('when sold out the payment is refunded, not stranded', async function () {
+        await deployDispenser({ [A]: 1 });   // one card total (B, C empty)
+        const first = await draw();
+        assertSuccess(first);
+        assert.strictEqual(first.emittedActions[0].params.tick, A);
+
+        const r = await draw();   // nothing left -> refund
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertBalance(h.ledger, BUYER, A, '1');     // kept the one card it drew
+        assertBalance(h.ledger, BUYER, PAY, '999'); // 1000 - 2 deposits + 1 refund
+    });
+
+    // Regression: the refund leaves custody too, so the watermark must land
+    // on the POST-refund balance. Advancing it to the pre-refund balance
+    // over-counts by exactly the refund and bricks the restocked dispenser.
+    it('a draw still works after a sold-out refund and a restock', async function () {
+        await deployDispenser({ [A]: 1 });
+        const first = await draw();
+        assertSuccess(first);
+        assert.strictEqual(first.emittedActions[0].params.tick, A);
+
+        assertSuccess(await draw());                       // sold out -> refund
+        assertContractBalance(h.ledger, ADDR, PAY, '1');
+        assertContractState(h.ledger, ADDR, 'acctPay', '1');
+
+        h.ledger.creditContractBalance(ADDR, B, '1');      // operator restocks
+        const third = await draw();
+        assertSuccess(third);
+        assert.strictEqual(third.emittedActions[0].params.tick, B);
+    });
+
+    it('only the owner can withdraw', async function () {
+        await deployDispenser();
+        await draw();
+        assertReverted(
+            await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: STRANGER }),
+            'owner only'
+        );
+    });
+}
+
+function offGridUnitTests() {
+    it('a card whose grid cannot express unit is refunded, never drawn', async function () {
+        await deployOffGridUnit('0.25', 0);
+        const r = await draw();
+        assertSuccess(r);
+        // Refund, not a card: the only stocked card weighs zero, so the draw
+        // falls through to the existing sold-out path.
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertBalance(h.ledger, BUYER, A, '0');
+        assertBalance(h.ledger, BUYER, PAY, '1000');    // deposit fully returned
+        assertContractBalance(h.ledger, ADDR, A, '1');  // stock untouched
+        assertContractState(h.ledger, ADDR, 'nonce', '0');
+    });
+
+    it('info() reports zero stock for a card whose grid cannot express unit', async function () {
+        await deployOffGridUnit('0.25', 0);
+        const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: BUYER });
+        assertSuccess(r);
+        // returnValue is the method's JSON string, itself JSON-encoded by the VM.
+        assert.strictEqual(JSON.parse(JSON.parse(r.returnValue)).stock[A], '0',
+            'info() must not advertise phantom copies the dispenser cannot deliver');
+    });
+
+    // The other direction of the same normalisation: HALF-UP rounds '1.5' on a
+    // zero-decimal card UP to 2, so the dispenser would ship two copies for one
+    // unit of price and drain its own stock at double rate.
+    it('an off-grid unit above one is refused too, not rounded up', async function () {
+        await deployOffGridUnit('1.5', 0);
+        h.ledger.creditContractBalance(ADDR, A, '9');   // 10 held, 6 phantom copies
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertContractBalance(h.ledger, ADDR, A, '10');
+    });
+
+    // The control: a sub-unit unit that IS on its card's grid must still draw.
+    // Without it, a change that refused every draw would look identical to one
+    // that caught the defect.
+    it('an on-grid fractional unit still draws and delivers exactly that amount', async function () {
+        await deployOffGridUnit('0.25', 2);
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: '0.25' } }]);
+    });
+}
+
+function exactComparisonTests() {
+    it('draw() rejects a payment one base unit short of a large price', async function () {
+        await deploySingle('100000', '5');
+        assertReverted(await payAndDraw('99999.99999999'), 'underpaid');
+        assertContractState(h.ledger, ADDR, 'nonce', '0');
+        assertSuccess(await payAndDraw('0.00000001'));
+        assertContractState(h.ledger, ADDR, 'nonce', '1');
+    });
+
+    it('a pick of r = total - 1 on a large total delivers instead of reverting', async function () {
+        // total 1e14 puts total - 1 inside lt's 1e-12 band, and a mix 1e20 times larger
+        // keeps mod() exact (its tolerant floor snaps only on a small quotient).
+        const T = 10n ** 14n;
+        await deploySingle('1', String(T));
+        // nonce 0: mix = fold(blockHash) + fold(buyer) * 1000000007, so seed it to land on T - 1.
+        const resid = ((T - 1n - foldBig(BUYER) * 1000000007n) % T + T) % T;
+        h.ledger.blockHash = stringWithFold(10n ** 20n * T + resid);
+        const r = await payAndDraw('1');
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: UNIT } }]);
+    });
+}
+
+function deployValidationTests() {
+    it('rejects a deploy with no card ticks', async function () {
+        const { r } = await bareDeploy('C:BTC:2', [PAY, PRICE, UNIT]);   // no cards
+        assert.strictEqual(r.success, false, 'deploy without cards should revert in initialize');
+    });
+
+    it('rejects a non-positive price', async function () {
+        const { r } = await bareDeploy('C:BTC:3', [PAY, '0', UNIT, A]);
+        assert.strictEqual(r.success, false, 'deploy with price=0 should revert in initialize');
+    });
+}
+
+function unitNotationTests() {
+    // unit is stored verbatim, emitted verbatim as a draw's quantity, and fed to
+    // floorToDecimals by deliverableCopies - string surgery presupposing fixed
+    // notation. On '2.5e-1' the floor is a no-op, so the grid check would bless a
+    // unit the ledger reads as 0.25. The magnitude check is no filter: xchain.math
+    // parses every one of these.
+    it('rejects a unit that is not a plain fixed-notation decimal', async function () {
+        const BAD = ['2.5e-1', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
+                     '1.2.3', '', ' 1', 'abc', '-1'];
+        for (let i = 0; i < BAD.length; i++) {
+            const { r } = await bareDeploy('C:BTC:4', [PAY, PRICE, BAD[i], A]);
+            assert.strictEqual(r.success, false,
+                'deploy with unit ' + JSON.stringify(BAD[i]) + ' should revert');
+        }
+    });
+
+    // Notation-only: the card ticks' grids are unreadable at deploy (the contract
+    // holds none of them), so an off-grid but plainly spelled unit still deploys
+    // and is caught per card at draw() instead.
+    it('accepts an off-grid but plainly spelled unit and stores it verbatim', async function () {
+        const { r, ledger } = await bareDeploy('C:BTC:5', [PAY, PRICE, '0.25', A]);
+        assertSuccess(r);
+        assertContractState(ledger, 'C:BTC:5', 'unit', '0.25');
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: cardDispenser', function () {
     this.timeout(0);
-    let h;
-
-    // Deploy a fresh dispenser for PAY/price 1, unit 1, cards A/B/C, then fund the
-    // contract's custody with `stock` copies of each (default 5/5/5).
-    async function deployDispenser(stock) {
-        stock = stock || { [A]: 5, [B]: 5, [C]: 5 };
-        h = new E2EHarness(XChainVM);
-        h.seedBalance(OWNER, 'XCHAIN', '1000000');
-        h.seedBalance(BUYER, 'XCHAIN', '1000000');
-        h.seedBalance(BUYER, PAY, '1000');
-        // draw() and info() count only DELIVERABLE copies, so they read each stocked
-        // card's decimals. The harness's decimals registry is balance-INDEPENDENT
-        // (MockLedger) while a node's is not: the indexer builds balances and
-        // tokenInfo from ONE snapshot over SOURCE + the contract address (src/db/index.js
-        // buildVmBalancesAndTokenInfo), so a card this contract holds always carries
-        // its info in the same snapshot getBalance reads. Seeding the card ticks
-        // models that reachability rather than papering over it.
-        for (const tick of CARDS) h.ledger.setTokenDecimals(tick, 0);
-        await h.deploy({
-            code: CODE, deployer: OWNER, contractAddress: ADDR,
-            params: [PAY, PRICE, UNIT, A, B, C]
-        });
-        for (const tick of CARDS)
-            if (stock[tick]) h.ledger.creditContractBalance(ADDR, tick, String(stock[tick]));
-    }
-
-    // Pay-and-draw: mirrors BATCH(DEPOSIT(PAY, price), EXECUTE("draw")).
-    async function draw() {
-        h.deposit(BUYER, ADDR, PAY, PRICE);
-        return h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
-    }
-
-    describe('happy paths', function () {
-        it('a paid draw sends the buyer exactly one in-set card', async function () {
-            await deployDispenser();
-            const r = await draw();
-            assertSuccess(r);
-            // exactly one SEND, to the buyer, of one unit (tick is random)
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, quantity: UNIT } }]);
-            const tick = r.emittedActions[0].params.tick;
-            assert(CARDS.indexOf(tick) !== -1, 'drawn tick must be one of the declared cards, got ' + tick);
-            assertBalance(h.ledger, BUYER, tick, '1');
-            assertContractBalance(h.ledger, ADDR, tick, '4');   // 5 -> 4
-            assertContractState(h.ledger, ADDR, 'nonce', '1');
-        });
-
-        it('the draw counter advances each successful draw', async function () {
-            await deployDispenser();
-            await draw();
-            await draw();
-            assertContractState(h.ledger, ADDR, 'nonce', '2');
-        });
-
-        it('owner can withdraw the accumulated proceeds (payTick)', async function () {
-            await deployDispenser();
-            await draw();
-            await draw();   // 2 PAY now held by the contract
-            const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER });
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: OWNER, tick: PAY, quantity: '2' } }]);
-            assertContractBalance(h.ledger, ADDR, PAY, '0');
-        });
-
-        // Regression: the sweep moves payTick OUT of custody, so the acctPay
-        // watermark draw() measures against has to follow it down. Leaving the
-        // watermark at the pre-sweep total makes every later draw() compute a
-        // negative delta and revert 'underpaid' forever.
-        it('a draw still works after the owner sweeps the proceeds', async function () {
-            await deployDispenser();
-            await draw();
-            await draw();
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER }));
-            assertContractBalance(h.ledger, ADDR, PAY, '0');
-            assertContractState(h.ledger, ADDR, 'acctPay', '0');
-            assertSuccess(await draw());
-            assertContractState(h.ledger, ADDR, 'nonce', '3');
-        });
-
-        it('info() reports remaining stock', async function () {
-            await deployDispenser();
-            const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: STRANGER });
-            assertSuccess(r);
-            assert(r.returnValue && r.returnValue.indexOf('stock') !== -1, 'info should report stock');
-        });
-    });
-
-    describe('distribution & coverage', function () {
-        // Draining the whole pool proves every in-stock card is reachable: 15
-        // draws against 5+5+5 copies must dispense each card exactly its stock
-        // count (you can never send a card you do not hold) and leave the
-        // contract empty — i.e. the selection covers ALL held tokens.
-        it('drains the entire pool, covering every card', async function () {
-            await deployDispenser({ [A]: 5, [B]: 5, [C]: 5 });
-            const counts = { [A]: 0, [B]: 0, [C]: 0 };
-            for (let i = 0; i < 15; i++) {
-                const r = await draw();
-                assertSuccess(r);
-                counts[r.emittedActions[0].params.tick]++;
-            }
-            assert.strictEqual(counts[A], 5, 'CARD_A fully dispensed');
-            assert.strictEqual(counts[B], 5, 'CARD_B fully dispensed');
-            assert.strictEqual(counts[C], 5, 'CARD_C fully dispensed');
-            for (const tick of CARDS) assertContractBalance(h.ledger, ADDR, tick, '0');
-        });
-
-        it('does not always return the same card (randomness varies the outcome)', async function () {
-            await deployDispenser({ [A]: 50, [B]: 50, [C]: 50 });
-            const seen = {};
-            for (let i = 0; i < 12; i++) {
-                const r = await draw();
-                assertSuccess(r);
-                seen[r.emittedActions[0].params.tick] = true;
-            }
-            assert(Object.keys(seen).length >= 2, 'expected more than one distinct card across 12 draws');
-        });
-    });
-
+    describe('happy paths', happyPathTests);
+    describe('distribution & coverage', distributionTests);
     describe('attacks we considered', function () {
-        it('an underpaid draw reverts (no trust in caller-supplied amount)', async function () {
-            await deployDispenser();
-            // EXECUTE("draw") with NO preceding DEPOSIT: paid delta is 0 < price.
-            const r = await h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
-            assertReverted(r, 'underpaid');
-            assertContractState(h.ledger, ADDR, 'nonce', '0'); // untouched
-        });
-
-        it('when sold out the payment is refunded, not stranded', async function () {
-            await deployDispenser({ [A]: 1 });   // one card total (B, C empty)
-            const first = await draw();
-            assertSuccess(first);
-            assert.strictEqual(first.emittedActions[0].params.tick, A);
-
-            const r = await draw();   // nothing left -> refund
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
-            assertBalance(h.ledger, BUYER, A, '1');     // kept the one card it drew
-            assertBalance(h.ledger, BUYER, PAY, '999'); // 1000 - 2 deposits + 1 refund
-        });
-
-        // Regression: the refund leaves custody too, so the watermark must land
-        // on the POST-refund balance. Advancing it to the pre-refund balance
-        // over-counts by exactly the refund and bricks the restocked dispenser.
-        it('a draw still works after a sold-out refund and a restock', async function () {
-            await deployDispenser({ [A]: 1 });
-            const first = await draw();
-            assertSuccess(first);
-            assert.strictEqual(first.emittedActions[0].params.tick, A);
-
-            assertSuccess(await draw());                       // sold out -> refund
-            assertContractBalance(h.ledger, ADDR, PAY, '1');
-            assertContractState(h.ledger, ADDR, 'acctPay', '1');
-
-            h.ledger.creditContractBalance(ADDR, B, '1');      // operator restocks
-            const third = await draw();
-            assertSuccess(third);
-            assert.strictEqual(third.emittedActions[0].params.tick, B);
-        });
-
-        it('only the owner can withdraw', async function () {
-            await deployDispenser();
-            await draw();
-            assertReverted(
-                await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: STRANGER }),
-                'owner only'
-            );
-        });
-
-        // The dispenser emits `unit` verbatim and the indexer re-quantises every
-        // emitted amount onto its tick's grid at write time, so an off-grid unit
-        // normalises silently - to ZERO on a zero-decimal card, which is a VALID
-        // SEND that moves nothing. floor(balance/unit) counts the phantom copies,
-        // so before the grid check the buyer paid, received nothing, the card
-        // balance never moved, and the same paid draw delivered nothing again for
-        // as long as the owner cared to collect (AML #7036).
-        async function deployOffGridUnit(unit, cardDecimals) {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(OWNER, 'XCHAIN', '1000000');
-            h.seedBalance(BUYER, 'XCHAIN', '1000000');
-            h.seedBalance(BUYER, PAY, '1000');
-            for (const tick of CARDS) h.ledger.setTokenDecimals(tick, cardDecimals);
-            await h.deploy({
-                code: CODE, deployer: OWNER, contractAddress: ADDR,
-                params: [PAY, PRICE, unit, A, B, C]
-            });
-            h.ledger.creditContractBalance(ADDR, A, '1');
-        }
-
-        it('a card whose grid cannot express unit is refunded, never drawn', async function () {
-            await deployOffGridUnit('0.25', 0);
-            const r = await draw();
-            assertSuccess(r);
-            // Refund, not a card: the only stocked card weighs zero, so the draw
-            // falls through to the existing sold-out path.
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
-            assertBalance(h.ledger, BUYER, A, '0');
-            assertBalance(h.ledger, BUYER, PAY, '1000');    // deposit fully returned
-            assertContractBalance(h.ledger, ADDR, A, '1');  // stock untouched
-            assertContractState(h.ledger, ADDR, 'nonce', '0');
-        });
-
-        it('info() reports zero stock for a card whose grid cannot express unit', async function () {
-            await deployOffGridUnit('0.25', 0);
-            const r = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: BUYER });
-            assertSuccess(r);
-            // returnValue is the method's JSON string, itself JSON-encoded by the VM.
-            assert.strictEqual(JSON.parse(JSON.parse(r.returnValue)).stock[A], '0',
-                'info() must not advertise phantom copies the dispenser cannot deliver');
-        });
-
-        // The other direction of the same normalisation: HALF-UP rounds '1.5' on a
-        // zero-decimal card UP to 2, so the dispenser would ship two copies for one
-        // unit of price and drain its own stock at double rate.
-        it('an off-grid unit above one is refused too, not rounded up', async function () {
-            await deployOffGridUnit('1.5', 0);
-            h.ledger.creditContractBalance(ADDR, A, '9');   // 10 held, 6 phantom copies
-            const r = await draw();
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
-            assertContractBalance(h.ledger, ADDR, A, '10');
-        });
-
-        // The control: a sub-unit unit that IS on its card's grid must still draw.
-        // Without it, a change that refused every draw would look identical to one
-        // that caught the defect.
-        it('an on-grid fractional unit still draws and delivers exactly that amount', async function () {
-            await deployOffGridUnit('0.25', 2);
-            const r = await draw();
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: '0.25' } }]);
-        });
+        paymentAttackTests();
+        offGridUnitTests();
     });
 
     // The payment guard and the weighted pick compare exactly: a tolerant gte/lt reads
     // values within 1e-12 relative as equal.
-    describe('payment and pick comparisons are exact (no mathjs tolerance)', function () {
-        async function deploySingle(price, copies) {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(OWNER, 'XCHAIN', '1000000');
-            h.seedBalance(BUYER, PAY, '200000');
-            h.ledger.setTokenDecimals(PAY, 8);
-            h.ledger.setTokenDecimals(A, 0);
-            await h.deploy({ code: CODE, deployer: OWNER, contractAddress: ADDR, params: [PAY, price, UNIT, A] });
-            h.ledger.creditContractBalance(ADDR, A, copies);
-        }
-
-        async function payAndDraw(amount) {
-            h.deposit(BUYER, ADDR, PAY, amount);
-            return h.execute({ contractAddress: ADDR, method: 'draw', params: [], caller: BUYER });
-        }
-
-        // BigInt replica of the template's fold(): Horner base 131 over charCodes, mod 1e38.
-        function foldBig(s) {
-            let acc = 0n;
-            for (let i = 0; i < s.length; i++) acc = (acc * 131n + BigInt(s.charCodeAt(i))) % (10n ** 38n);
-            return acc;
-        }
-
-        it('draw() rejects a payment one base unit short of a large price', async function () {
-            await deploySingle('100000', '5');
-            assertReverted(await payAndDraw('99999.99999999'), 'underpaid');
-            assertContractState(h.ledger, ADDR, 'nonce', '0');
-            assertSuccess(await payAndDraw('0.00000001'));
-            assertContractState(h.ledger, ADDR, 'nonce', '1');
-        });
-
-        // Build a string whose fold() is exactly v: its base-131 digits as char codes.
-        function stringWithFold(v) {
-            const digits = [];
-            for (; v > 0n; v /= 131n) digits.unshift(Number(v % 131n));
-            return String.fromCharCode(...digits);
-        }
-
-        it('a pick of r = total - 1 on a large total delivers instead of reverting', async function () {
-            // total 1e14 puts total - 1 inside lt's 1e-12 band, and a mix 1e20 times larger
-            // keeps mod() exact (its tolerant floor snaps only on a small quotient).
-            const T = 10n ** 14n;
-            await deploySingle('1', String(T));
-            // nonce 0: mix = fold(blockHash) + fold(buyer) * 1000000007, so seed it to land on T - 1.
-            const resid = ((T - 1n - foldBig(BUYER) * 1000000007n) % T + T) % T;
-            h.ledger.blockHash = stringWithFold(10n ** 20n * T + resid);
-            const r = await payAndDraw('1');
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: UNIT } }]);
-        });
-    });
-
+    describe('payment and pick comparisons are exact (no mathjs tolerance)', exactComparisonTests);
     describe('deploy-time validation', function () {
-        it('rejects a deploy with no card ticks', async function () {
-            const bad = new E2EHarness(XChainVM);
-            bad.seedBalance(OWNER, 'XCHAIN', '1000000');
-            const r = await bad.deploy({
-                code: CODE, deployer: OWNER, contractAddress: 'C:BTC:2',
-                params: [PAY, PRICE, UNIT]   // no cards
-            });
-            assert.strictEqual(r.success, false, 'deploy without cards should revert in initialize');
-        });
-
-        it('rejects a non-positive price', async function () {
-            const bad = new E2EHarness(XChainVM);
-            bad.seedBalance(OWNER, 'XCHAIN', '1000000');
-            const r = await bad.deploy({
-                code: CODE, deployer: OWNER, contractAddress: 'C:BTC:3',
-                params: [PAY, '0', UNIT, A]
-            });
-            assert.strictEqual(r.success, false, 'deploy with price=0 should revert in initialize');
-        });
-
-        // unit is stored verbatim, emitted verbatim as a draw's quantity, and fed to
-        // floorToDecimals by deliverableCopies - string surgery presupposing fixed
-        // notation. On '2.5e-1' the floor is a no-op, so the grid check would bless a
-        // unit the ledger reads as 0.25. The magnitude check is no filter: xchain.math
-        // parses every one of these.
-        it('rejects a unit that is not a plain fixed-notation decimal', async function () {
-            const BAD = ['2.5e-1', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
-                         '1.2.3', '', ' 1', 'abc', '-1'];
-            for (let i = 0; i < BAD.length; i++) {
-                const bad = new E2EHarness(XChainVM);
-                bad.seedBalance(OWNER, 'XCHAIN', '1000000');
-                const r = await bad.deploy({
-                    code: CODE, deployer: OWNER, contractAddress: 'C:BTC:4',
-                    params: [PAY, PRICE, BAD[i], A]
-                });
-                assert.strictEqual(r.success, false,
-                    'deploy with unit ' + JSON.stringify(BAD[i]) + ' should revert');
-            }
-        });
-
-        // Notation-only: the card ticks' grids are unreadable at deploy (the contract
-        // holds none of them), so an off-grid but plainly spelled unit still deploys
-        // and is caught per card at draw() instead.
-        it('accepts an off-grid but plainly spelled unit and stores it verbatim', async function () {
-            const ok = new E2EHarness(XChainVM);
-            ok.seedBalance(OWNER, 'XCHAIN', '1000000');
-            const r = await ok.deploy({
-                code: CODE, deployer: OWNER, contractAddress: 'C:BTC:5',
-                params: [PAY, PRICE, '0.25', A]
-            });
-            assertSuccess(r);
-            assertContractState(ok.ledger, 'C:BTC:5', 'unit', '0.25');
-        });
+        deployValidationTests();
+        unitNotationTests();
     });
 });
