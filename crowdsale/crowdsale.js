@@ -202,7 +202,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.3.4'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -211,6 +211,7 @@ module.exports = {
     abi: { version: 1, methods: {
         buy:      { summary: 'Attribute the deposited payment to the sale, returning change past whole sale units (BATCH after a DEPOSIT)', params: [] },
         finalize: { summary: 'Lock in the outcome after the deadline or hard cap', params: [] },
+        burnUnsold: { summary: 'Permanently burn sale tokens not allocated to buyers after finalization', params: [] },
         claim:    { summary: 'Buyer receives purchased tokens (successful sale only)', params: [] },
         refund:   { summary: 'Buyer reclaims their payment (failed sale only)', params: [] },
         withdraw: { summary: 'Owner takes the proceeds (successful sale only)', params: [] },
@@ -268,8 +269,10 @@ module.exports = {
         xchain.state.set('hardCap', hardCap);
         xchain.state.set('deadline', String(xchain.getBlockHeight() + duration));
         xchain.state.set('raised', '0');
+        xchain.state.set('allocated', '0');
         xchain.state.set('accountedPay', '0');
         xchain.state.set('withdrawn', 'false');
+        xchain.state.set('unsoldBurned', 'false');
         xchain.state.set('status', 'OPEN');
         // Persist the sale token's decimal grid so claim() can floor its mint onto
         // it (initialize is the only place the grid is known; getTokenInfo(saleTick)
@@ -312,6 +315,11 @@ module.exports = {
         var change = xchain.math.subtract(total, accepted);
         var delta  = xchain.math.isZero(change) ? contributed : xchain.math.subtract(accepted, prior);
 
+        var saleDecimals = parseInt(xchain.state.get('saleDecimals'), 10);
+        var priorTokens = floorToDecimals(xchain.math.multiply(prior, xchain.state.get('rate')), saleDecimals);
+        var acceptedTokens = floorToDecimals(xchain.math.multiply(accepted, xchain.state.get('rate')), saleDecimals);
+        var tokenDelta = xchain.math.subtract(acceptedTokens, priorTokens);
+
         var raised = xchain.state.get('raised');
         var newRaised = xchain.math.add(raised, delta);
         // Refuse a raise past hardCap, compared exactly: a tolerant gate lets the claims
@@ -319,6 +327,7 @@ module.exports = {
         xchain.require(isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised), 'hard cap exceeded');
 
         if (!xchain.math.isZero(accepted)) xchain.state.set('c:' + caller, accepted);
+        xchain.state.set('allocated', xchain.math.add(xchain.state.get('allocated'), tokenDelta));
         // The change leaves custody through the SEND below, so it is not accounted pay.
         xchain.state.set('accountedPay', xchain.math.subtract(balance, change));
         xchain.state.set('raised', newRaised);
@@ -340,6 +349,25 @@ module.exports = {
         // Succeed only when the soft cap is met exactly; one base unit short refunds.
         xchain.state.set('status',
             isAtLeastExact(xchain, raised, xchain.state.get('softCap')) ? 'SUCCESS' : 'FAILED');
+    },
+
+    // burnUnsold(): permanently remove inventory that no successful claim can use.
+    // On failure no claims are payable, so the entire issued supply is unsold.
+    burnUnsold: function (xchain) {
+        var status = xchain.state.get('status');
+        xchain.require(status !== 'OPEN', 'sale not finalized');
+        xchain.require(xchain.state.get('unsoldBurned') !== 'true', 'unsold inventory already burned');
+
+        var maxSale = xchain.math.multiply(xchain.state.get('hardCap'), xchain.state.get('rate'));
+        var unsold = status === 'FAILED'
+            ? maxSale
+            : xchain.math.subtract(maxSale, xchain.state.get('allocated'));
+
+        xchain.state.set('unsoldBurned', 'true');
+        if (!xchain.math.isZero(unsold)) {
+            xchain.emit.destroy({ tick: xchain.state.get('saleTick'), quantity: unsold });
+        }
+        return unsold;
     },
 
     // claim(): send the buyer's purchased sale tokens (successful sale only).

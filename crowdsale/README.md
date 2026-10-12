@@ -40,6 +40,7 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 | `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`) into contract custody, locks minting, and opens the sale. |
 | `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
+| `burnUnsold()` | anyone (after finalization, once) | Permanently burns every sale token not allocated to a buyer after a successful sale, or the entire inventory after a failed sale. Outstanding successful claims remain fully backed. |
 | `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
 | `withdraw()` | owner (SUCCESS, once) | Sends the raised proceeds to the owner. |
@@ -64,8 +65,10 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 - **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
   custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
   `MINT` cannot consume the cap or create unbacked supply, and claims only send
-  tokens from the fixed inventory. Whatever claims do not take stays in custody
-  for good (see Known limitations).
+  tokens from the fixed inventory. After finalization, anyone can call
+  `burnUnsold()` once to destroy inventory no successful claim can use. On a
+  failed sale the whole inventory is unsold; on success the contract preserves
+  the exact grid-floored allocation recorded for every buyer.
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
   `claim()` floors `contribution * rate` onto the sale token's grid, so a
   payment off that grid would buy fewer tokens than it paid for, with the
@@ -92,12 +95,10 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
-- **Unsold inventory stays locked.** The template has no burn or sweep path, so
-  the sale tokens no claim takes stay in contract custody permanently:
-  `(hardCap - raised) * rate` after a success under the hard cap, and the whole
-  `hardCap * rate` after a failed sale. They never circulate, but the tick's
-  `MAX_SUPPLY` and supply figures still count them, and explorers list the
-  contract as a holder of that balance.
+- **Burn requires a follow-up call.** Unsold inventory stays in contract custody
+  until anyone calls `burnUnsold()` after finalization. The one-shot call removes
+  it from supply permanently and cannot reduce the inventory reserved for
+  successful claims.
 
 ## Tests
 

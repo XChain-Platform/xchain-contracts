@@ -65,7 +65,7 @@ const RATE = '10', SOFT = '100', HARD = '200', DURATION = 50;
         return h.deploy({
             code: CODE, deployer: OWNER, contractAddress: ADDR,
             params: [OWNER, PAY, SALE, over.rate || RATE, over.soft || SOFT, over.hard || HARD,
-                     String(DURATION), '8']
+                     String(DURATION), over.decimals || '8']
         });
     }
     // Same-batch pay: DEPOSIT then buy(), mirroring BATCH(DEPOSIT, EXECUTE("buy")).
@@ -116,6 +116,79 @@ const RATE = '10', SOFT = '100', HARD = '200', DURATION = 50;
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '50' } }]);
             assertBalance(h.ledger, B1, PAY, '500'); // 500 - 50 deposit + 50 refund
             assertReverted(await call('refund', B1), 'nothing to refund'); // no double refund
+        });
+    });
+
+    describe('burning unsold inventory', function () {
+        it('burns only unallocated inventory on success and preserves outstanding claims', async function () {
+            assertSuccess(await deploy());
+            assertSuccess(await buy(B1, '60'));
+            assertSuccess(await buy(B2, '60'));
+            close();
+            assertSuccess(await call('finalize', B1));
+
+            assertSuccess(await call('claim', B1));
+            const burned = await call('burnUnsold', STRANGER);
+            assertSuccess(burned);
+            assertEmittedActions(burned, [
+                { action: 'DESTROY', params: { tick: SALE, quantity: '800' } }
+            ]);
+            assertContractBalance(h.ledger, ADDR, SALE, '600');
+
+            assertSuccess(await call('claim', B2));
+            assertBalance(h.ledger, B2, SALE, '600');
+            assertContractBalance(h.ledger, ADDR, SALE, '0');
+            assertReverted(await call('burnUnsold', OWNER), 'unsold inventory already burned');
+        });
+
+        it('burns the entire sale-token supply after a failed sale without blocking refunds', async function () {
+            assertSuccess(await deploy());
+            assertSuccess(await buy(B1, '50'));
+            close();
+            assertSuccess(await call('finalize', B1));
+
+            const burned = await call('burnUnsold', OWNER);
+            assertSuccess(burned);
+            assertEmittedActions(burned, [
+                { action: 'DESTROY', params: { tick: SALE, quantity: '2000' } }
+            ]);
+            assertContractBalance(h.ledger, ADDR, SALE, '0');
+            assertSuccess(await call('refund', B1));
+            assertBalance(h.ledger, B1, PAY, '500');
+        });
+
+        it('burns grid-rounding inventory that a remaining-payment calculation would miss', async function () {
+            assertSuccess(await deploy({ rate: '0.3', soft: '1', hard: '10', decimals: '0' }));
+            assertSuccess(await buy(B1, '4'));
+            assertSuccess(await buy(B2, '4'));
+            close();
+            assertSuccess(await call('finalize', B1));
+
+            const burned = await call('burnUnsold', OWNER);
+            assertSuccess(burned);
+            assertEmittedActions(burned, [
+                { action: 'DESTROY', params: { tick: SALE, quantity: '1' } }
+            ]);
+            assertContractBalance(h.ledger, ADDR, SALE, '2');
+            assertSuccess(await call('claim', B1));
+            assertSuccess(await call('claim', B2));
+            assertContractBalance(h.ledger, ADDR, SALE, '0');
+        });
+
+        it('rejects burning before finalization', async function () {
+            assertSuccess(await deploy());
+            assertReverted(await call('burnUnsold', OWNER), 'sale not finalized');
+        });
+
+        it('completes without a destroy emission when the successful sale allocated everything', async function () {
+            assertSuccess(await deploy());
+            assertSuccess(await buy(B1, '200'));
+            assertSuccess(await call('finalize', B1));
+
+            const burned = await call('burnUnsold', OWNER);
+            assertSuccess(burned);
+            assertEmittedActions(burned, []);
+            assert.strictEqual(JSON.parse(burned.returnValue), '0');
         });
     });
 
