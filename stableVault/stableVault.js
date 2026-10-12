@@ -97,7 +97,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.2.0'
+        version:     '1.2.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -258,10 +258,10 @@ module.exports = {
         setVault(xchain, addr, 'debt', xchain.math.subtract(debt, burned));
         xchain.state.set('totalDebt', xchain.math.subtract(xchain.state.get('totalDebt'), burned));
 
-        if (xchain.math.gt(burned, '0')) {
+        if (exceedsExactly(xchain, burned, '0')) {
             xchain.emit.destroy({ tick: xchain.state.get('stableTick'), quantity: burned });
         }
-        if (xchain.math.gt(excess, '0')) {
+        if (exceedsExactly(xchain, excess, '0')) {
             xchain.emit.send({
                 destination: addr,
                 tick: xchain.state.get('stableTick'),
@@ -369,7 +369,7 @@ module.exports = {
             tick: xchain.state.get('collateralTick'),
             quantity: seize
         });
-        if (xchain.math.gt(excess, '0')) {
+        if (exceedsExactly(xchain, excess, '0')) {
             xchain.emit.send({
                 destination: liquidator,
                 tick: xchain.state.get('stableTick'),
@@ -577,6 +577,16 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+function exceedsExactly(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) === '-') return false;
+    for (var i = 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+    }
+    return false;
 }
 
 // Collateralization check without division:
