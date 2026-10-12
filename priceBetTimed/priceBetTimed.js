@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -515,7 +515,7 @@ function refundBoth(xchain) {
     var rest   = xchain.math.subtract(held, amount);
 
     xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount });
-    if (xchain.math.gt(rest, '0')) {
+    if (!isAtLeastExact(xchain, '0', rest)) {
         xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
     }
 }

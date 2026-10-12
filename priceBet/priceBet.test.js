@@ -86,6 +86,10 @@ function registerSettleOutcomes(ctx) {
 // Happy paths that push at the strike, on the tick grid and half a base unit off it.
 function registerPushRefunds(ctx) {
     const { deployBet, depositAnd, publishRound } = ctx;
+    it('payout guards use exact comparisons', function () {
+        assert.doesNotMatch(CODE, /math\.gt\(rest, '0'\)/);
+    });
+
     it('round exactly at the strike: push, both stakes returned', async function () {
         await deployBet('OVER');
         await depositAnd(MAKER, 'fund');
@@ -130,6 +134,28 @@ function registerPushRefunds(ctx) {
         assertBalance(ctx.h.ledger, TAKER, TICK, '1.00000001');
         assertContractBalance(ctx.h.ledger, ADDR, TICK, '0');
         assertContractState(ctx.h.ledger, ADDR, 'status', 'PUSH');
+    });
+
+    it('a one-unit 18-decimal residual is paid to the taker', async function () {
+        const tiny = '0.000000000000000001';
+        ctx.h = new E2EHarness(XChainVM);
+        ctx.h.seedBalance(MAKER, 'XCHAIN', '1000000');
+        ctx.h.seedBalance(MAKER, TICK, '1');
+        ctx.h.seedBalance(TAKER, TICK, '1');
+        ctx.h.ledger.setTokenDecimals(TICK, 18);
+        assertSuccess(await ctx.h.deploy({
+            code: CODE, deployer: MAKER, contractAddress: ADDR,
+            params: [MAKER, PAIR, STRIKE, 'OVER', TICK, '1', String(ROUND), '5']
+        }));
+        assertSuccess(await depositAnd(MAKER, 'fund', '1'));
+        assertSuccess(await depositAnd(TAKER, 'accept', '1'));
+        ctx.h.ledger.debitContractBalance(ADDR, TICK, '0.999999999999999999');
+
+        publishRound(STRIKE);
+        assertSuccess(await ctx.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: STRANGER }));
+        assertBalance(ctx.h.ledger, MAKER, TICK, '1');
+        assertBalance(ctx.h.ledger, TAKER, TICK, tiny);
+        assertContractBalance(ctx.h.ledger, ADDR, TICK, '0');
     });
 }
 

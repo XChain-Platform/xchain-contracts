@@ -135,6 +135,43 @@ function buildContext() {
     };
 }
 
+function registerExactPayoutGuardTests(context) {
+    const {
+        ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, STRIKE, T, CODE, XChainVM, E2EHarness, assert,
+        assertSuccess, assertBalance, assertContractBalance, h, setHarness, seedTipRound,
+        depositAnd, publishRounds, settleBy
+    } = context;
+
+    describe('exact payout guards', function () {
+        it('payout guards use exact comparisons', function () {
+            assert.doesNotMatch(CODE, /math\.gt\(rest, '0'\)/);
+        });
+
+        it('a one-unit 18-decimal residual is paid to the taker', async function () {
+            const tiny = '0.000000000000000001';
+            setHarness(new E2EHarness(XChainVM));
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '1');
+            h.seedBalance(TAKER, TICK, '1');
+            h.ledger.setTokenDecimals(TICK, 18);
+            assertSuccess(await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, '1', String(T), '5']
+            }));
+            seedTipRound();
+            assertSuccess(await depositAnd(MAKER, 'fund', '1'));
+            assertSuccess(await depositAnd(TAKER, 'accept', '1'));
+            h.ledger.debitContractBalance(ADDR, TICK, '0.999999999999999999');
+
+            publishRounds({ 2: { ts: T + 50, price: STRIKE } });
+            assertSuccess(await settleBy(STRANGER));
+            assertBalance(h.ledger, MAKER, TICK, '1');
+            assertBalance(h.ledger, TAKER, TICK, tiny);
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+        });
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: priceBetTimed', function () {
     this.timeout(0);
     const context = buildContext();
@@ -144,4 +181,5 @@ function buildContext() {
     registerCustodyTests(context);
     registerNumericSeamTests(context);
     registerDeployValidationTests(context);
+    registerExactPayoutGuardTests(context);
 });
