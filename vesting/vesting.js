@@ -226,7 +226,7 @@ module.exports = {
             xchain.math.subtract(vested, claimed),
             tickDecimals(xchain, tick)
         );
-        xchain.require(xchain.math.gt(claimable, '0'), 'nothing to claim');
+        xchain.require(isPositiveExact(claimable), 'nothing to claim');
 
         xchain.state.set('claimed', xchain.math.add(claimed, claimable));
 
@@ -257,7 +257,7 @@ module.exports = {
             xchain.math.subtract(total, vested),
             tickDecimals(xchain, tick)
         );
-        xchain.require(xchain.math.gt(unvested, '0'), 'nothing to revoke (fully vested)');
+        xchain.require(isPositiveExact(unvested), 'nothing to revoke (fully vested)');
 
         // Freeze the cap at total minus the grantor's floored payout, so the two
         // payouts sum to exactly total (a raw `vested` cap is floored again by
@@ -373,4 +373,19 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+// Return true when v > 0 exactly, by the sign and digits of the value itself.
+// xchain.math.gt treats a value within the absolute tolerance of zero as equal to
+// it, so a real sub-tolerance payout would be refused as "nothing". Used by the
+// claim and revoke payout guards.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
 }

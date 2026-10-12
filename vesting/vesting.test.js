@@ -330,6 +330,36 @@ function registerOffGrid() {
     });
 }
 
+function registerExactPayoutGuards() {
+    describe('payout guards are exact (no mathjs tolerance)', function () {
+        // At 18 dp a single base unit is 1e-18, far under the math comparison
+        // tolerance of zero, so a tolerant gt(.., '0') would refuse the payout.
+        const TINY = '0.0000000000005';
+        async function deployTiny(revocable) {
+            await deploy(revocable, TINY);
+            h.ledger.setTokenDecimals(TICK, 18);
+            h.seedBalance(GRANTOR, TICK, TINY);
+        }
+
+        it('claim() pays a sub-tolerance vested amount', async function () {
+            await deployTiny('false'); await fund(TINY);
+            atElapsed(DURATION);
+            const r = await claim();
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: TINY } }]);
+            assertReverted(await claim(), 'nothing to claim');
+        });
+
+        it('revoke() reclaims a sub-tolerance unvested amount', async function () {
+            await deployTiny('true'); await fund(TINY);
+            atElapsed(CLIFF);                 // 10% vested, 90% unvested
+            const r = await h.execute({ contractAddress: ADDR, method: 'revoke', params: [], caller: GRANTOR });
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '0.00000000000045' } }]);
+        });
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: vesting', function () {
     this.timeout(0);
 
@@ -338,6 +368,7 @@ function registerOffGrid() {
     registerRevocation();
     registerDeployValidation();
     registerOffGrid();
+    registerExactPayoutGuards();
     registerOffGridTotalTests({
         GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
         assertReverted, assertEmittedActions, assertBalance, assertContractBalance
