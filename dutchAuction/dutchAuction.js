@@ -106,7 +106,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.3.0'
+        version:     '1.3.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -233,7 +233,7 @@ module.exports = {
         // left for a later caller to collect once the price falls to it. Compared
         // exactly, so even one base unit short is refunded rather than accepted.
         if (!isAtLeastExact(xchain, held, price)) {
-            if (xchain.math.gt(held, '0')) {
+            if (!isAtLeastExact(xchain, '0', held)) {
                 xchain.emit.send({ destination: caller, tick: bidTick, quantity: held });
             }
             return 'underpaid';
@@ -249,7 +249,7 @@ module.exports = {
 
         xchain.emit.send({ destination: caller, tick: xchain.state.get('itemTick'), quantity: xchain.state.get('itemAmount') });
         xchain.emit.send({ destination: xchain.state.get('seller'), tick: bidTick, quantity: price });
-        if (xchain.math.gt(excess, '0')) {
+        if (!isAtLeastExact(xchain, '0', excess)) {
             xchain.emit.send({ destination: caller, tick: bidTick, quantity: excess });
         }
     },

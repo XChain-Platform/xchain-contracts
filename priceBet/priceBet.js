@@ -83,7 +83,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.3.0'
+        version:     '1.3.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -395,7 +395,7 @@ function refundBoth(xchain) {
     var rest   = xchain.math.subtract(held, amount);
 
     xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount });
-    if (xchain.math.gt(rest, '0')) {
+    if (!isAtLeastExact(xchain, '0', rest)) {
         xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
     }
 }
