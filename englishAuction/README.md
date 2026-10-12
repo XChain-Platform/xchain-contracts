@@ -23,9 +23,12 @@ BATCH( DEPOSIT(auction, BID_TICK, 80),  EXECUTE(auction, "bid")  )
 
 The contract **never trusts a caller-supplied amount**. Because every out-bid
 deposit is refunded within the same execution that supersedes it, the
-contract's `bidTick` balance is always exactly the current high bid - so a new
-bid's size is read as *the growth in that balance since the last bid*
-(`held - highBid`), not a separately-passed parameter.
+contract's `bidTick` balance right after each successful bid is exactly the
+current high bid - so a new bid's size is read as *the growth in that balance
+since the last bid* (`held - highBid`), not a separately-passed parameter. A
+stray DEPOSIT that arrives between bids sits on top of that balance until the
+next successful bid absorbs it (see "A rejected bid's DEPOSIT is not rolled
+back" below).
 
 The two commands still settle independently: a `BATCH` is **not** atomic, so an
 `EXECUTE` that fails does not undo the `DEPOSIT` before it. See "A rejected bid's
@@ -100,10 +103,25 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   deadline, below `minBid`, not exceeding the current high bid, or a self-raise
   by the current leader - the DEPOSIT batched ahead of it has already settled
   and stays in the contract's `bidTick` custody. It is **not recoverable by its
-  sender**: the delta-accounting folds it into the *next* successful bidder's
-  credited bid, and from there it reaches the seller at `settle()`. Same footgun
-  the `cardDispenser` and `dutchAuction` templates document. Read `info()` and
-  be sure the bid will clear before batching the DEPOSIT behind it.
+  sender**, and no method returns it: `settle()` pays the seller exactly the
+  stored `highBid`, and `cancel()` returns only the item. Where it ends up:
+  - **A later bid succeeds.** The delta-accounting credits the stray to the
+    *next* successful bidder as part of their bid. It travels with that bid, so
+    it goes back to that bidder if they are outbid, and reaches the seller only
+    if that bid wins.
+  - **No later bid succeeds.** The stray is stuck in the contract for good. That
+    covers a DEPOSIT sent after the deadline or once the auction is `SOLD`,
+    `UNSOLD` or `CANCELLED`, a stray followed by an `UNSOLD` settle or by the
+    seller's `cancel()`, and any `bidTick` deposited after the last successful
+    bid.
+  - **A bid made before `fund()`.** It reverts as not `ACTIVE`, but its DEPOSIT
+    is absorbed by the first successful bid once the seller funds; it is lost
+    only if the seller cancels instead.
+
+  Same footgun the `cardDispenser` and `dutchAuction` templates document. Before
+  batching a DEPOSIT behind `bid()`, read `info()` and check that the status is
+  `ACTIVE`, the current block is below `deadline`, your amount is at least
+  `minBid` and above `highBid`, and you are not the current `highBidder`.
 
 ## Known limitations (by design, for a teaching baseline)
 
