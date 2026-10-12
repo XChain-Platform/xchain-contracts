@@ -51,7 +51,7 @@ const MAXAGE = '10';        // oracle freshness window, seconds
     this.timeout(0);
     let h;
 
-    async function deployVault() {
+    async function deployVault(stableDecimals = '8') {
         h = new E2EHarness(XChainVM);
         h.seedBalance(ALICE, 'XCHAIN', '1000000');
         h.seedBalance(ALICE, COLL, '100');
@@ -59,10 +59,10 @@ const MAXAGE = '10';        // oracle freshness window, seconds
         // Register decimals so the ledger normalizes emissions the way the real
         // indexer does and getTokenInfo (used by liquidate's grid-flooring) works.
         h.ledger.setTokenDecimals(COLL, 8);
-        h.ledger.setTokenDecimals(STABLE, 8);
+        h.ledger.setTokenDecimals(STABLE, Number(stableDecimals));
         await h.deploy({
             code: CODE, deployer: ALICE, contractAddress: ADDR,
-            params: [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE]
+            params: [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, stableDecimals]
         });
     }
 
@@ -108,4 +108,45 @@ const MAXAGE = '10';        // oracle freshness window, seconds
     registerDeployValidationTests(ctx);
     registerEmptyTokenInfoTests(ctx);
     registerExactCustodyTests(ctx);
+
+    describe('exact dust payouts', function () {
+        it('burns a debt remainder below the tolerant comparison floor', async function () {
+            await deployVault('18');
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, '1.000000000000000001'));
+            assertSuccess(await repay(ALICE, '1'));
+            h.seedBalance(ALICE, STABLE, '1');
+
+            const result = await repay(ALICE, '1');
+            assertSuccess(result);
+            assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
+                ['DESTROY', '0.000000000000000001'],
+                ['SEND', '0.999999999999999999']
+            ]);
+            assertContractState(h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+            assertContractBalance(h.ledger, ADDR, STABLE, '0');
+        });
+
+        it('routes both excess payouts through the exact comparison', function () {
+            const guards = CODE.match(/if \(exceedsExactly\(xchain, excess, '0'\)\)/g) || [];
+            assert.strictEqual(guards.length, 2);
+        });
+
+        it('refunds a liquidation excess below the tolerant comparison floor', async function () {
+            await deployVault('18');
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, '1'));
+            setPrice('0.1');
+            h.seedBalance(LIQ, STABLE, '1.000000000000000001');
+
+            const result = await liquidate(LIQ, ALICE, '1.000000000000000001');
+            assertSuccess(result);
+            assert.strictEqual(result.emittedActions[2].action, 'SEND');
+            assert.strictEqual(result.emittedActions[2].params.quantity, '0.000000000000000001');
+            assertBalance(h.ledger, LIQ, STABLE, '0.000000000000000001');
+            assertContractBalance(h.ledger, ADDR, STABLE, '0');
+        });
+    });
 });

@@ -248,3 +248,12 @@ describe('pattern helpers pasted into templates match the library source', funct
     });
 
 });
+
+describe('safe-transfer exact payout recommendation', function () {
+    const source = fs.readFileSync(path.join(DIR, 'safe-transfer.js'), 'utf8');
+
+    it('does not recommend a tolerant positive-amount guard', function () {
+        assert.ok(!/math\.gt\(amount, '0'\)/.test(source));
+        assert.ok(/!isAtLeastExact\(xchain, '0', amount\)/.test(source));
+    });
+});

@@ -13,7 +13,7 @@
 //     payout: function (xchain) {
 //       var tick   = xchain.state.get('tick');
 //       var amount = heldBalance(xchain, tick);          // size from real holdings
-//       xchain.require(xchain.math.gt(amount, '0'), 'nothing to pay out');
+//       xchain.require(!isAtLeastExact(xchain, '0', amount), 'nothing to pay out');
 //       xchain.state.set('status', 'PAID');              // commit state FIRST
 //       xchain.emit.send({ destination: xchain.state.get('payee'), tick: tick, quantity: amount });
 //     }
