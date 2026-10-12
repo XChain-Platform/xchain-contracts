@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - escrow and escrowDelivery gain a buyer `cancel()` while the contract is still in `INIT`, which returns anything held to the buyer, so a deposit made before `fund()` can be recovered.
+- crowdsale gains a post-finalization `burnUnsold()` method that permanently removes unallocated sale-token inventory while preserving every successful buyer claim.
 
 ### Changed
 - escrow and escrowDelivery `initialize()` now reject an `amount` that is not a plain decimal string, because an exponent or signed form could never be matched by a deposit.
