@@ -54,6 +54,10 @@ function createVM() {
     });
 }
 
+// Block time of the direct executions: the E2E harness's anchor, so this suite runs
+// the same time-gated rules as its siblings instead of a typed pre-flag-day instant.
+const ANCHOR_TS = XChainVM ? new E2EHarness(XChainVM).ledger.blockTimestamp : 0;
+
 // Carry state forward between executions the way the indexer would.
 function applyState(prev, result) {
     const s = { ...prev };
@@ -72,27 +76,25 @@ function baseExecOpts(extra) {
         contractAddress: 'C:BTC:1',
         contractIndex:   1,
         txHash:          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        blockContext:    { height: 100, timestamp: 1700000000, hash: 'abc' }
+        blockContext:    { height: 100, timestamp: ANCHOR_TS, hash: 'abc' }
     }, extra || {});
 }
 
 const URL = 'https://api.example.com/btc/price';
 
-(XChainVM ? describe : describe.skip)('Template: urlOracle (off-chain URL via attestation)', function () {
-    this.timeout(0);
+// Created in the suite's before() hook; the register* functions read it at test time.
+let vm;
 
-    let vm;
-    before(function () { vm = createVM(); });
-
-    // Deploy-parity gate. The rest of this suite drives vm.execute() directly,
-    // which compiles the source but does NOT run the deploy linter: exec-time
-    // re-linting is gated on isExecLintActive(network, ...) and baseExecOpts
-    // carries no `network`, so the banned-async / banned-generator / Math-subset
-    // rules are never evaluated against urlOracle.js on that path. Every sibling
-    // template test deploys through E2EHarness.deploy(), which calls
-    // vm.validateSyntax(code) - the real deploy gate. Without these two cases an
-    // edit that introduced a banned surface into urlOracle.js would keep this
-    // suite green while a real deploy rejected it.
+// Deploy-parity gate. The rest of this suite drives vm.execute() directly,
+// which compiles the source but does NOT run the deploy linter: exec-time
+// re-linting is gated on isExecLintActive(network, ...) and baseExecOpts
+// carries no `network`, so the banned-async / banned-generator / Math-subset
+// rules are never evaluated against urlOracle.js on that path. Every sibling
+// template test deploys through E2EHarness.deploy(), which calls
+// vm.validateSyntax(code) - the real deploy gate. Without these two cases an
+// edit that introduced a banned surface into urlOracle.js would keep this
+// suite green while a real deploy rejected it.
+function registerDeployGate() {
     describe('deploy gate (parity with the sibling template suites)', function () {
 
         it('the real urlOracle.js source passes E2EHarness.deploy()', async function () {
@@ -115,7 +117,9 @@ const URL = 'https://api.example.com/btc/price';
             assert.match(String(d.error), /banned async surface/);
         });
     });
+}
 
+function registerRequestPrice() {
     describe('requestPrice()', function () {
 
         it('emits an ATTEST http_get for the URL and returns a 64-hex request_id', async function () {
@@ -151,44 +155,49 @@ const URL = 'https://api.example.com/btc/price';
             assert.match(String(result.error), /url required/);
         });
     });
+}
 
+// Request, settle, call back, then read: the full attestation round-trip.
+async function settledRoundTrip() {
+    // 1. Contract requests the URL.
+    const req = await vm.execute(baseExecOpts({ method: 'requestPrice', params: [URL] }));
+    assert.strictEqual(req.success, true, req.error);
+    const requestId = JSON.parse(req.returnValue);
+    const stateAfterReq = applyState({}, req);
+
+    // 2. Off-chain providers fetched the URL and the indexer settled the
+    //    body; we simulate that settled response here.
+    const SETTLED_BODY = '42000.50';
+    const attestationData = {
+        getResponse: (id) => id === requestId
+            ? { status: 'ok', payload: SETTLED_BODY, providerId: 'http_get', blockIndex: 101, validatorCount: 1 }
+            : null
+    };
+
+    // 3. Indexer calls the contract back: onPrice(requestId).
+    const cb = await vm.execute(baseExecOpts({
+        method: 'onPrice',
+        params: [requestId],
+        state:  stateAfterReq,
+        attestationData
+    }));
+    assert.strictEqual(cb.success, true, 'callback should succeed: ' + cb.error);
+    assert.strictEqual(JSON.parse(cb.returnValue), SETTLED_BODY);
+
+    const stateAfterCb = applyState(stateAfterReq, cb);
+    assert.strictEqual(stateAfterCb.price, SETTLED_BODY, 'URL body persisted as price');
+    assert.ok(!('pending' in stateAfterCb), 'pending cleared after settlement');
+
+    // 4. price() reads it back.
+    const read = await vm.execute(baseExecOpts({ method: 'price', state: stateAfterCb }));
+    assert.strictEqual(read.success, true, read.error);
+    assert.strictEqual(JSON.parse(read.returnValue), SETTLED_BODY);
+}
+
+function registerOnPrice() {
     describe('onPrice() callback round-trip', function () {
 
-        it('commits the settled URL body to state once the response is available', async function () {
-            // 1. Contract requests the URL.
-            const req = await vm.execute(baseExecOpts({ method: 'requestPrice', params: [URL] }));
-            assert.strictEqual(req.success, true, req.error);
-            const requestId = JSON.parse(req.returnValue);
-            const stateAfterReq = applyState({}, req);
-
-            // 2. Off-chain providers fetched the URL and the indexer settled the
-            //    body; we simulate that settled response here.
-            const SETTLED_BODY = '42000.50';
-            const attestationData = {
-                getResponse: (id) => id === requestId
-                    ? { status: 'ok', payload: SETTLED_BODY, providerId: 'http_get', blockIndex: 101, validatorCount: 1 }
-                    : null
-            };
-
-            // 3. Indexer calls the contract back: onPrice(requestId).
-            const cb = await vm.execute(baseExecOpts({
-                method: 'onPrice',
-                params: [requestId],
-                state:  stateAfterReq,
-                attestationData
-            }));
-            assert.strictEqual(cb.success, true, 'callback should succeed: ' + cb.error);
-            assert.strictEqual(JSON.parse(cb.returnValue), SETTLED_BODY);
-
-            const stateAfterCb = applyState(stateAfterReq, cb);
-            assert.strictEqual(stateAfterCb.price, SETTLED_BODY, 'URL body persisted as price');
-            assert.ok(!('pending' in stateAfterCb), 'pending cleared after settlement');
-
-            // 4. price() reads it back.
-            const read = await vm.execute(baseExecOpts({ method: 'price', state: stateAfterCb }));
-            assert.strictEqual(read.success, true, read.error);
-            assert.strictEqual(JSON.parse(read.returnValue), SETTLED_BODY);
-        });
+        it('commits the settled URL body to state once the response is available', settledRoundTrip);
 
         it('reverts if the callback runs before the response has settled', async function () {
             const result = await vm.execute(baseExecOpts({
@@ -210,4 +219,14 @@ const URL = 'https://api.example.com/btc/price';
             assert.match(String(result.error), /attestation failed: failed/);
         });
     });
+}
+
+(XChainVM ? describe : describe.skip)('Template: urlOracle (off-chain URL via attestation)', function () {
+    this.timeout(0);
+
+    before(function () { vm = createVM(); });
+
+    registerDeployGate();
+    registerRequestPrice();
+    registerOnPrice();
 });

@@ -29,10 +29,11 @@ actual `bidTick` balance and compares it to the asking price *in effect at the
 block the transaction lands*. If the deposit exceeds that price (a quote can
 go stale between when you read it and when your transaction confirms - the
 price only ever moves in the buyer's favor while waiting), the excess is
-refunded in the same call. If the deposit falls short, `buy()` reverts and the
-deposit sits in the contract's custody until either a corrected `buy()` lands
-or the seller `cancel()`s (which returns only the *item*, not stray `bidTick` -
-see Known limitations).
+refunded in the same call. If the deposit falls short, `buy()` refunds the
+whole held `bidTick` balance to the caller in the same call, sells nothing and
+returns `'underpaid'` (the auction stays `ACTIVE`). It does not revert, because a
+revert would leave the deposit in custody for a later caller to collect - see
+Attacks we considered.
 
 ## Lifecycle
 
@@ -40,7 +41,7 @@ see Known limitations).
 |---|---|---|
 | `initialize(seller, itemTick, itemAmount, bidTick, startPrice, endPrice, durationBlocks)` | deployer | Sets immutable terms (`startPrice > endPrice > 0`); status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; starts the price clock from **this** block; status → `ACTIVE`. |
-| `buy()` | anyone (BATCHed after DEPOSIT) | Must deposit ≥ the current asking price; item → buyer, price → seller, any excess → buyer, all in one call; status → `SOLD`. |
+| `buy()` | anyone (BATCHed after DEPOSIT) | Must deposit ≥ the current asking price; item → buyer, price → seller, any excess → buyer, all in one call; status → `SOLD`. A short deposit is refunded to the caller instead, the call returns `'underpaid'` and status stays `ACTIVE`. |
 | `cancel()` | seller, only before any purchase | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, currentPrice, startPrice, endPrice }`. |
 
@@ -93,6 +94,13 @@ await sdk.batch()
   `buy()` on an already-sold auction reverts - there is no reentrancy window
   (emissions are deferred and applied by the indexer after the method
   returns).
+- **Claiming a stranded underpayment for free.** When a short payment made
+  `buy()` revert, the non-atomic `BATCH` kept the deposit in custody, and
+  because the price only falls, any caller could later `buy()` with nothing
+  deposited once the price reached it: they took the item plus the difference,
+  and the seller was paid out of the first buyer's deposit. `buy()` now refunds
+  a short payment to its caller in the same call and returns `'underpaid'`, so
+  an underpaying `BATCH` leaves nothing behind.
 - **Rounding gifting free value.** The asking price is floored onto `bidTick`'s
   decimal grid (`floorToDecimals`) before it's used as both the required
   minimum and the emitted amounts, so the indexer's own half-up
@@ -113,13 +121,17 @@ await sdk.batch()
 
 ## Known limitations (by design, for a teaching baseline)
 
-- **An underpaying `buy()` strands the deposit.** If a buyer deposits less
-  than the current price, `buy()` reverts (correctly - no sale happens), but
-  the deposit itself is not auto-refunded; it sits in the contract's `bidTick`
-  custody until a follow-up correct `buy()` covers (and thus consumes) it, or
-  forever if the auction is later cancelled (`cancel()` only ever returns the
-  *item*). Always deposit at least the price you read from `info()` in the
-  same transaction.
+- **A `buy()` that reverts strands its deposit.** An underpayment is refunded,
+  but `buy()` still reverts when the auction is not `ACTIVE` (before `fund()`,
+  after a sale or after `cancel()`, including a buyer who loses a same-block
+  race to another) or when the price floors below one unit of the bid tick,
+  and the non-atomic `BATCH` keeps that deposit. `bidTick` sent by a plain
+  `DEPOSIT` with no `buy()` stays too. While the auction is `ACTIVE`, the next
+  `buy()` caller receives any such stray (refunded with an underpayment, or as
+  part of their payment and excess), so a zero-deposit `buy()` can collect it at
+  once; after a sale or `cancel()` it is lost for good (`cancel()` only ever
+  returns the *item*). Always deposit at least the price you read from `info()`
+  in the same transaction as `buy()`.
 - **Single item tick, single bid tick.** Only the configured `itemTick` and
   `bidTick` are handled; tokens of any other tick sent to the contract address
   are not recoverable by this template.

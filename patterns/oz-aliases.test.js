@@ -148,7 +148,7 @@ describe('oz-aliases.json cross-file requires', function () {
 });
 
 // Pin the ERC2981 royalty claim to the generator's royalty-scope disclosure
-// (lib/policy-gen.js royaltyScopeNotes), since Solidity readers land on this row first.
+// (lib/policy_gen/source_emission.js royaltyScopeNotes), since Solidity readers land on this row first.
 describe('oz-aliases.json ERC2981 royalty note', function () {
 
     it('the ERC2981 note scopes the royalty to ORDER/SWAP and names the dispenser gap', function () {

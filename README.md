@@ -103,7 +103,10 @@ and applies them when it matches. `DISPENSER_CREATE` is in the same `trade`
 class, so the guard runs when a holder opens a dispenser, but the dispenser path
 honours only a revert; the legs are discarded and dispenser sales pay no split.
 A holder can therefore sell a royalty-bearing token through a dispenser
-royalty-free, and a dispenser opened before the bind is never guarded at all.
+royalty-free. From the `DISPENSER_REFILL` flag day the guard also runs,
+veto-only in the same way, on every refill that adds escrow, so it can deny a
+refill of a dispenser opened before the bind; below that flag day such a
+dispenser runs the guard at no point.
 A cross-chain `ORDER_CREATE` or `SWAP_CREATE` (proceeds on another chain) of a
 royalty-bearing token is denied while the network's `CROSS_CHAIN_ROYALTY`
 protocol change is inactive; once it is active, every leg `to` must also be
@@ -117,7 +120,7 @@ The generated header and the printed bind hints repeat this whenever a
 
 | Template | Contract | Guide | Tests | What it teaches |
 |---|---|---|---|---|
-| **Escrow** | [escrow.js](./escrow/escrow.js) | [README](./escrow/README.md) | [tests](./escrow/escrow.test.js) | The custody baseline: DEPOSIT funding verified on-chain, conditional release/refund, an arbiter, and a deadline so funds can't be locked forever. |
+| **Escrow** | [escrow.js](./escrow/escrow.js) | [README](./escrow/README.md) | [tests](./escrow/escrow.test.js) | The custody baseline: DEPOSIT funding verified on-chain, conditional release/refund, an arbiter, and a deadline so funds can't be locked forever. The buyer can `cancel()` while still in `INIT` to recover an early deposit, and `amount` must be a plain decimal. |
 | **Vesting** | [vesting.js](./vesting/vesting.js) | [README](./vesting/README.md) | [tests](./vesting/vesting.test.js) | Linear release with a cliff, partial-claim accounting, and optional revocation. |
 | **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds, plus a **contract that issues its own token** and mints it to buyers. |
 | **AMM** | [amm.js](./amm/amm.js) | [README](./amm/README.md) | [tests](./amm/amm.test.js) | A constant-product market maker. LP positions are **real, tradeable ticks**; 0.3% fee; slippage protection; the `k`-invariant is fuzz-tested. |
@@ -127,7 +130,7 @@ The generated header and the printed bind hints repeat this whenever a
 | **Price bet (timed)** | [priceBetTimed.js](./priceBetTimed/priceBetTimed.js) | [README](./priceBetTimed/README.md) | [tests](./priceBetTimed/priceBetTimed.test.js) | The timestamp variant: the first oracle round at/after a settle time decides, with a gas-capped, cursor-persisted round scan. |
 | **Stable vault** | [stableVault.js](./stableVault/stableVault.js) | [README](./stableVault/README.md) | [tests](./stableVault/stableVault.test.js) | A mini-MakerDAO: over-collateralized vaults that mint the contract's own stable token, oracle staleness gating, and permissionless liquidation. |
 | **URL oracle** | [urlOracle.js](./urlOracle/urlOracle.js) | [README](./urlOracle/README.md) | [tests](./urlOracle/urlOracle.test.js) | Reading off-chain HTTP data without breaking determinism: the ATTEST request/callback round-trip. |
-| **Escrow (delivery)** | [escrowDelivery.js](./escrowDelivery/escrowDelivery.js) | [README](./escrowDelivery/README.md) | [tests](./escrowDelivery/escrowDelivery.test.js) | Escrow that settles itself: point it at a carrier tracking URL and a marker string, and a delivery attestation pays the seller with nobody having to call `release()`. |
+| **Escrow (delivery)** | [escrowDelivery.js](./escrowDelivery/escrowDelivery.js) | [README](./escrowDelivery/README.md) | [tests](./escrowDelivery/escrowDelivery.test.js) | Escrow that settles itself: point it at a carrier tracking URL and a marker string, and a delivery attestation pays the seller with nobody having to call `release()`. The buyer can `cancel()` while still in `INIT` to recover an early deposit, and `amount` must be a plain decimal. |
 | **English auction** | [englishAuction.js](./englishAuction/englishAuction.js) | [README](./englishAuction/README.md) | [tests](./englishAuction/englishAuction.test.js) | An ascending-bid auction: each new bid refunds the one it topped in the same transaction, and after the deadline anyone can settle. Custody applied to a contest rather than a single hand-off. |
 | **Dutch auction** | [dutchAuction.js](./dutchAuction/dutchAuction.js) | [README](./dutchAuction/README.md) | [tests](./dutchAuction/dutchAuction.test.js) | A descending-price auction: the price falls linearly per block to a floor, and the first buyer to pay the price in effect at their block takes the item. One purchase, no losing bids to refund. |
 | **Counterparty bridge** | [counterpartyBridge.js](./counterpartyBridge/counterpartyBridge.js) | [README](./counterpartyBridge/README.md) | [tests](./counterpartyBridge/counterpartyBridge.test.js) | A burn-to-mint bridge for a single Counterparty asset: an off-chain attestation (the same pattern as `urlOracle`) confirms an irreversible burn to a well-known unspendable address before minting, so a holder cannot claim the migrated tokens and still sell the original asset. |
@@ -197,13 +200,15 @@ follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 `xchain-contracts lint` runs each contract through the VM's full deploy-time
 validation: V8 syntax, the `code-size` cap (65,536 bytes of UTF-8 source, the
 64 KiB deploy ceiling), and every deploy-blocking rule in `CONSENSUS_RULES`
-(`xchain-vm/src/lint_core.js`, the authoritative list): `invalid-type`,
-`unsupported-syntax` (the acorn metering pass), `reserved-identifier`,
+(`xchain-vm/src/lint-core.js`, the authoritative list): `invalid-type`,
+`nesting-depth` (delimiter nesting above 64), `unsupported-syntax` (the acorn
+metering pass), `reserved-identifier`,
 `banned-math` (`Math.*` outside the deterministic subset), `banned-literal`
 (`BigInt`/`RegExp` literals), `banned-async` (`async`/`await`, `Promise`),
 `banned-generator` (`function*`, `yield`), `banned-wasm` (any `WebAssembly`
-reference) and `banned-rest` (rest parameters and the other unmetered rest
-positions). It adds the logic-level advisories (crossCallable integrity,
+reference), `banned-rest` (rest parameters and the other unmetered rest
+positions) and `banned-with` (the `with` statement, which rebinds free
+identifiers at runtime). It adds the logic-level advisories (crossCallable integrity,
 unbounded loops, unchecked `state.get`, …). A clean
 result is a conservative preflight, **not** exact deploy parity: the rule set is a
 superset of the live deploy gate (future and mainnet-gated rules are enforced

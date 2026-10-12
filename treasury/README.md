@@ -97,6 +97,12 @@ reverts with `unknown proposal` instead of resolving to some other proposal, so
 a guardian's `approvePoll` and a poll's visible id always bind the proposal they
 name.
 
+`approvePoll`'s `pollIndex` follows the same rule: it must be the poll's
+canonical decimal index (for example `"501"`). `arm()` matches the bound index
+exactly against the one the poll callback carries, so any other spelling
+(`"0501"`, `"5.01e2"`, `"+501"`) reverts at bind time, while the guardian can
+still correct it, instead of binding a poll that could never arm.
+
 Funding needs no method call: `DEPOSIT` any tick to the contract address at any
 time.
 

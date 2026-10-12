@@ -73,7 +73,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     abi: { version: 1, methods: {
@@ -86,6 +86,7 @@ module.exports = {
         release:         { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:          { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
         timeout:         { summary: 'Buyer reclaims after the deadline', params: [] },
+        cancel:          { summary: 'Buyer reclaims a stranded deposit before the escrow is funded', params: [] },
         status:          { summary: 'Read the escrow status', params: [], view: true }
     } },
 
@@ -106,7 +107,9 @@ module.exports = {
 
         xchain.require(buyer && seller && arbiter, 'buyer, seller, arbiter required');
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
+        xchain.require(amount, 'amount required');
+        requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
         xchain.require(typeof deliveryMarker === 'string' && deliveryMarker.length > 0, 'deliveryMarker required');
 
         // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
@@ -224,6 +227,16 @@ module.exports = {
         settle(xchain, ['buyer'], 'buyer', 'REFUNDED', true);
     },
 
+    // cancel(): the buyer takes back a deposit that landed while the escrow is
+    // still INIT (a BATCH whose fund() reverted leaves the DEPOSIT standing).
+    // Requires a positive held balance and closes the escrow so it cannot be
+    // funded afterwards.
+    cancel: function (xchain) {
+        xchain.require(xchain.state.get('status') === 'INIT', 'escrow not awaiting funds');
+        xchain.require(xchain.getSourceAddress() === xchain.state.get('buyer'), 'caller not authorized for this action');
+        payout(xchain, 'buyer', 'CANCELLED');
+    },
+
     status: function (xchain) {
         return xchain.state.get('status');
     }
@@ -252,6 +265,29 @@ function requireIntInRange(xchain, v, min, max, name) {
     xchain.require(ok, msg);
     var n = parseInt(s, 10);
     xchain.require(n >= min && n <= max, msg);
+}
+
+// Throw unless `value` is digits with at most one interior decimal point: no
+// exponent, sign, radix prefix, 'Infinity' or 'NaN'. Same helper as
+// patterns/validation.js:requirePlainDecimal, inlined because a contract loads
+// as a single file. No RegExp (the VM determinism validator rejects it).
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
 }
 
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).

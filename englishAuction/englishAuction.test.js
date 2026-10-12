@@ -17,6 +17,11 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+const registerHappyPathTests = require('./english_auction_test/happy_path_tests');
+const registerAttackTests = require('./english_auction_test/attack_tests');
+const registerExactCustodyTests = require('./english_auction_test/exact_custody_tests');
+const registerDeployValidationTests = require('./english_auction_test/deploy_validation_tests');
+
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
     assertBalance, assertContractBalance, assertContractState;
@@ -37,13 +42,13 @@ const ADDR   = 'C:BTC:1';
 
 (XChainVM ? describe : describe.skip)('Template: englishAuction', function () {
     this.timeout(0);
-    let h;
+    const env = { h: null };
 
     // Deploy a fresh auction: 10 ITEM for sale, min bid 50 TEST, `window` blocks.
     async function deployAuction(window) {
-        h = new E2EHarness(XChainVM);
-        h.seedBalance(SELLER, 'XCHAIN', '1000000');
-        h.seedBalance(SELLER, ITEM, '10');
+        env.h = new E2EHarness(XChainVM);
+        env.h.seedBalance(SELLER, 'XCHAIN', '1000000');
+        env.h.seedBalance(SELLER, ITEM, '10');
         // fund() reads itemTick's decimals to check the amount lands on its grid, and
         // the harness's decimals registry is balance-INDEPENDENT (MockLedger) while a
         // node's is not: the indexer builds balances and tokenInfo from ONE snapshot
@@ -51,8 +56,8 @@ const ADDR   = 'C:BTC:1';
         // tick the contract holds a just-DEPOSITed amount of always carries its info
         // in the same snapshot getBalance reads. Seeding the item tick models that
         // reachability; it is not the stableVault trap of seeding a tick nobody holds.
-        h.ledger.setTokenDecimals(ITEM, 0);
-        await h.deploy({
+        env.h.ledger.setTokenDecimals(ITEM, 0);
+        await env.h.deploy({
             code: CODE, deployer: SELLER, contractAddress: ADDR,
             params: [SELLER, ITEM, '10', BID, '50', String(window || 5)]
         });
@@ -60,412 +65,25 @@ const ADDR   = 'C:BTC:1';
 
     // Same-batch fund: deposit the item then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
     async function depositAndFund(amount) {
-        h.deposit(SELLER, ADDR, ITEM, amount || '10');
-        return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER });
+        env.h.deposit(SELLER, ADDR, ITEM, amount || '10');
+        return env.h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER });
     }
 
     // Same-batch bid: fund the bidder, deposit, then bid(). Mirrors
     // BATCH(DEPOSIT, EXECUTE("bid")).
     async function bid(bidder, amount) {
-        h.seedBalance(bidder, BID, amount);
-        h.deposit(bidder, ADDR, BID, amount);
-        return h.execute({ contractAddress: ADDR, method: 'bid', params: [], caller: bidder });
+        env.h.seedBalance(bidder, BID, amount);
+        env.h.deposit(bidder, ADDR, BID, amount);
+        return env.h.execute({ contractAddress: ADDR, method: 'bid', params: [], caller: bidder });
     }
 
-    describe('happy paths', function () {
-        it('a single bidder wins the item and the seller is paid, after the deadline', async function () {
-            await deployAuction(3);
-            assertSuccess(await depositAndFund());
-            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
-
-            assertSuccess(await bid('alice', '50'));
-            assertContractState(h.ledger, ADDR, 'highBidder', 'alice');
-            assertContractState(h.ledger, ADDR, 'highBid', '50');
-
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
-            assertSuccess(r);
-            assertEmittedActions(r, [
-                { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10' } },
-                { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '50' } }
-            ]);
-            assertBalance(h.ledger, 'alice', ITEM, '10');
-            assertBalance(h.ledger, SELLER, BID, '50');
-            assertContractBalance(h.ledger, ADDR, ITEM, '0');
-            assertContractBalance(h.ledger, ADDR, BID, '0');
-            assertContractState(h.ledger, ADDR, 'status', 'SOLD');
-        });
-
-        it('a higher bid instantly refunds the previous leader', async function () {
-            await deployAuction();
-            await depositAndFund();
-            assertSuccess(await bid('alice', '50'));
-            const r = await bid('bob', '80');
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '50' } }]);
-            assertBalance(h.ledger, 'alice', BID, '50'); // fully refunded
-            assertContractBalance(h.ledger, ADDR, BID, '80'); // only bob's stake held
-            assertContractState(h.ledger, ADDR, 'highBidder', 'bob');
-            assertContractState(h.ledger, ADDR, 'highBid', '80');
-        });
-
-        it('multiple raises settle correctly: item to the final leader, bid to the seller', async function () {
-            await deployAuction(3);
-            await depositAndFund();
-            await bid('alice', '50');
-            await bid('bob', '80');
-            await bid('carol', '120');
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
-            assertSuccess(r);
-            assertBalance(h.ledger, 'carol', ITEM, '10');
-            assertBalance(h.ledger, SELLER, BID, '120');
-            assertBalance(h.ledger, 'alice', BID, '50'); // refunded when outbid by bob
-            assertBalance(h.ledger, 'bob', BID, '80'); // refunded when outbid by carol
-        });
-
-        it('no bids: settle() returns the item to the seller (UNSOLD)', async function () {
-            await deployAuction(3);
-            await depositAndFund();
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
-            assertBalance(h.ledger, SELLER, ITEM, '10');
-            assertContractState(h.ledger, ADDR, 'status', 'UNSOLD');
-        });
-
-        it('seller cancels before any bid and reclaims the item', async function () {
-            await deployAuction();
-            await depositAndFund();
-            const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
-            assertSuccess(r);
-            assertBalance(h.ledger, SELLER, ITEM, '10');
-            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
-        });
-    });
-
-    describe('attacks we considered', function () {
-        it('fund() rejects an underfunded item deposit', async function () {
-            await deployAuction();
-            assertReverted(await depositAndFund('5'), 'insufficient item deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        it('only the seller can fund or cancel', async function () {
-            await deployAuction();
-            h.seedBalance('stranger', ITEM, '10');
-            h.deposit('stranger', ADDR, ITEM, '10');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: 'stranger' }),
-                'only the seller');
-            await depositAndFund();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: 'stranger' }),
-                'only the seller');
-        });
-
-        it('a bid below the minimum is rejected', async function () {
-            await deployAuction();
-            await depositAndFund();
-            assertReverted(await bid('alice', '10'), 'below the minimum');
-            assertContractState(h.ledger, ADDR, 'highBid', '0');
-        });
-
-        it('a bid exactly equal to the minimum is accepted (minBid is inclusive)', async function () {
-            await deployAuction();
-            await depositAndFund();
-            assertSuccess(await bid('alice', '50'));
-            assertContractState(h.ledger, ADDR, 'highBid', '50');
-            assertContractState(h.ledger, ADDR, 'highBidder', 'alice');
-        });
-
-        it('a bid that does not exceed the current high bid is rejected', async function () {
-            await deployAuction();
-            await depositAndFund();
-            await bid('alice', '80');
-            assertReverted(await bid('bob', '80'), 'must exceed the current high bid');
-            assertContractState(h.ledger, ADDR, 'highBidder', 'alice');
-        });
-
-        it('the current leader cannot raise their own bid', async function () {
-            await deployAuction();
-            await depositAndFund();
-            await bid('alice', '50');
-            assertReverted(await bid('alice', '100'), 'already the high bidder');
-        });
-
-        // Pins the documented COST of the no-self-raise rule (README, "A rejected
-        // bid's DEPOSIT is not rolled back"). BATCH is not all-or-nothing, so the
-        // top-up behind a reverting bid() settles anyway and the delta accounting
-        // hands it to the NEXT bidder. A future change that refunds or credits it
-        // instead must rewrite this test together with that README entry, not
-        // delete it.
-        it('a rejected bid strands its batched DEPOSIT, and the next bidder inherits it', async function () {
-            await deployAuction();
-            await depositAndFund();
-            await bid('alice', '50');
-            assertReverted(await bid('alice', '100'), 'already the high bidder');
-            assertContractBalance(h.ledger, ADDR, BID, '150');   // alice's 100 settled anyway
-
-            // bob deposits 10 and is credited 110: alice's stranded top-up plus his own.
-            assertSuccess(await bid('bob', '10'));
-            assertContractState(h.ledger, ADDR, 'highBidder', 'bob');
-            assertContractState(h.ledger, ADDR, 'highBid', '110');
-            assertBalance(h.ledger, 'alice', BID, '50');         // her 50 stake back, never the 100
-        });
-
-        it('bidding after the deadline is rejected; settle() is the only path', async function () {
-            await deployAuction(2);
-            await depositAndFund();
-            h.mineBlock(); h.mineBlock();
-            assertReverted(await bid('alice', '50'), 'bidding closed');
-        });
-
-        it('settle() before the deadline is rejected', async function () {
-            await deployAuction(5);
-            await depositAndFund();
-            await bid('alice', '50');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }),
-                'deadline not reached');
-        });
-
-        it('cancel() is rejected once a bid has been placed', async function () {
-            await deployAuction();
-            await depositAndFund();
-            await bid('alice', '50');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER }),
-                'a bid has already been placed');
-        });
-
-        it('double-settle is impossible: second settle() reverts on the status guard', async function () {
-            await deployAuction(2);
-            await depositAndFund();
-            await bid('alice', '50');
-            h.mineBlock(); h.mineBlock();
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }));
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }),
-                'not active');
-        });
-
-        it('bidding before funding reverts', async function () {
-            await deployAuction();
-            assertReverted(await bid('alice', '50'), 'not active');
-        });
-
-        // settle() emits itemAmount VERBATIM and the indexer re-quantises every
-        // emitted amount onto its tick's grid at write time. Off the grid that is
-        // silent, and a zero amount is a VALID SEND that moves nothing: the winner
-        // would pay in full and receive nothing while the deposit sat in a SOLD
-        // auction with no cancel() left. The gate has to fire at fund(), before the
-        // auction arms, because after that there is no path that refunds anyone.
-        async function deployOffGridItem(itemAmount) {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(SELLER, 'XCHAIN', '1000000');
-            h.seedBalance(SELLER, ITEM, '10');
-            h.ledger.setTokenDecimals(ITEM, 0);
-            return h.deploy({
-                code: CODE, deployer: SELLER, contractAddress: ADDR,
-                params: [SELLER, ITEM, itemAmount, BID, '50', '5']
-            });
-        }
-
-        it('fund() rejects an itemAmount that is off the item tick grid', async function () {
-            assertSuccess(await deployOffGridItem('0.25'));
-            h.deposit(SELLER, ADDR, ITEM, '10');
-            assertReverted(
-                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
-                'not representable at itemTick decimals');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            // Never armed, so no bid and no payment.
-            assertReverted(await bid('alice', '50'), 'not active');
-            // The rejecting fund() did NOT roll back the deposit, so cancel() from
-            // the pre-funded state is the seller's recovery path. It returns the
-            // HELD balance, not the off-grid itemAmount the ledger would re-quantise
-            // to nothing.
-            const c = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
-            assertSuccess(c);
-            assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
-            assertBalance(h.ledger, SELLER, ITEM, '10');
-            assertContractBalance(h.ledger, ADDR, ITEM, '0');
-            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
-        });
-
-        it('cancel() returns a short deposit after fund() rejected it', async function () {
-            await deployAuction();
-            assertReverted(await depositAndFund('5'), 'insufficient item deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            const c = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
-            assertSuccess(c);
-            assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5' } }]);
-            assertBalance(h.ledger, SELLER, ITEM, '10');
-            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
-        });
-
-        it('a stranger cannot cancel() a pre-funded auction', async function () {
-            await deployAuction();
-            h.deposit(SELLER, ADDR, ITEM, '10');
-            assertReverted(
-                await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: 'stranger' }),
-                'only the seller');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        it('cancel() on a contract holding nothing reverts rather than latching CANCELLED', async function () {
-            await deployAuction();
-            assertReverted(
-                await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER }),
-                'nothing to reclaim');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            // Still fundable afterwards.
-            assertSuccess(await depositAndFund());
-            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
-        });
-
-        it('an off-grid itemAmount above one unit is rejected too, not rounded up', async function () {
-            assertSuccess(await deployOffGridItem('2.5'));
-            h.deposit(SELLER, ADDR, ITEM, '10');
-            assertReverted(
-                await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
-                'not representable at itemTick decimals');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        // The control the reject case needs: the gate must not refuse a legitimate
-        // auction. Without this, a gate that reverted every fund() would look
-        // identical to a gate that caught the defect.
-        it('an on-grid itemAmount still funds, settles and delivers the exact quantity', async function () {
-            await deployAuction(3);
-            assertSuccess(await depositAndFund());
-            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
-            assertSuccess(await bid('alice', '50'));
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            const r = await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
-            assertSuccess(r);
-            assertBalance(h.ledger, 'alice', ITEM, '10');
-        });
-    });
-
-    // Custody and reserve compare exactly: a tolerant gte admits up to 1e-12 relative
-    // short, one base unit of an 8-decimal tick at 10000.
-    describe('custody and minimum-bid checks are exact (no mathjs tolerance)', function () {
-        async function deployExact(itemAmount, minBid) {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(SELLER, 'XCHAIN', '1000000');
-            h.seedBalance(SELLER, ITEM, '20000');
-            h.ledger.setTokenDecimals(ITEM, 8);
-            h.ledger.setTokenDecimals(BID, 8);
-            return h.deploy({ code: CODE, deployer: SELLER, contractAddress: ADDR,
-                params: [SELLER, ITEM, itemAmount, BID, minBid, '3'] });
-        }
-
-        it('fund() rejects an item deposit one base unit short, and a top-up then settles exactly', async function () {
-            assertSuccess(await deployExact('10000', '1'));
-            assertReverted(await depositAndFund('9999.99999999'), 'insufficient item deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            assertSuccess(await depositAndFund('0.00000001'));
-            assertContractState(h.ledger, ADDR, 'status', 'ACTIVE');
-            assertSuccess(await bid('alice', '5'));
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }));
-            assertBalance(h.ledger, 'alice', ITEM, '10000');
-        });
-
-        it('bid() rejects a bid one base unit under a large minBid', async function () {
-            assertSuccess(await deployExact('10', '10000'));
-            assertSuccess(await depositAndFund('10'));
-            assertReverted(await bid('alice', '9999.99999999'), 'bid below the minimum');
-            assertContractState(h.ledger, ADDR, 'highBidder', null);
-            // The rejected DEPOSIT stays in custody, so one more base unit makes exactly minBid.
-            assertSuccess(await bid('bob', '0.00000001'));
-            assertContractState(h.ledger, ADDR, 'highBid', '10000');
-            assertContractState(h.ledger, ADDR, 'highBidder', 'bob');
-        });
-
-        it('an Infinity minBid never accepts a bid', async function () {
-            assertSuccess(await deployExact('10', 'Infinity'));
-            assertSuccess(await depositAndFund('10'));
-            assertReverted(await bid('alice', '100'), 'bid below the minimum');
-        });
-    });
-
-    describe('deploy-time validation', function () {
-        it('rejects itemTick === bidTick', async function () {
-            const bad = new E2EHarness(XChainVM);
-            bad.seedBalance(SELLER, 'XCHAIN', '1000000');
-            const r = await bad.deploy({
-                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:2',
-                params: [SELLER, BID, '10', BID, '50', '5']
-            });
-            assert.strictEqual(r.success, false, 'deploy with itemTick === bidTick should revert');
-        });
-
-        it('rejects a non-positive minBid', async function () {
-            const bad = new E2EHarness(XChainVM);
-            bad.seedBalance(SELLER, 'XCHAIN', '1000000');
-            const r = await bad.deploy({
-                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:3',
-                params: [SELLER, ITEM, '10', BID, '0', '5']
-            });
-            assert.strictEqual(r.success, false, 'deploy with minBid=0 should revert');
-        });
-
-        // deadlineBlocks is raw deployer text. A radix-less parseInt would measure
-        // '1e3' as 1 and arm a 1-block auction the seller never asked for, so the
-        // constructor shape-checks it (requireIntInRange) instead.
-        it('rejects a deadlineBlocks that is not a canonical integer', async function () {
-            const BAD = ['1e3', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99',
-                         '1_000', '+7', '', 'abc', '-', 'Infinity', 'NaN', '0',
-                         '-5', '1000001'];
-            for (let i = 0; i < BAD.length; i++) {
-                const bad = new E2EHarness(XChainVM);
-                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
-                const r = await bad.deploy({
-                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:9',
-                    params: [SELLER, ITEM, '10', BID, '50', BAD[i]]
-                });
-                assert.strictEqual(r.success, false,
-                    'deploy with deadlineBlocks ' + JSON.stringify(BAD[i]) + ' should revert');
-            }
-        });
-
-        it('accepts a canonical deadlineBlocks and stores it verbatim', async function () {
-            const ok = new E2EHarness(XChainVM);
-            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
-            const r = await ok.deploy({
-                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:4',
-                params: [SELLER, ITEM, '10', BID, '50', '1000']
-            });
-            assertSuccess(r);
-            assertContractState(ok.ledger, 'C:BTC:4', 'window', '1000');
-        });
-
-        // itemAmount is stored verbatim and fed to floorToDecimals at fund(), which
-        // is string surgery presupposing fixed notation: on '2.5e-2' it returns the
-        // string unchanged, so the grid check would pass an amount the ledger reads
-        // as 0.025. The notation gate has to run before either.
-        it('rejects an itemAmount that is not a plain fixed-notation decimal', async function () {
-            const BAD = ['2.5e-2', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
-                         '1.2.3', '', ' 10', 'abc', '-10'];
-            for (let i = 0; i < BAD.length; i++) {
-                const bad = new E2EHarness(XChainVM);
-                bad.seedBalance(SELLER, 'XCHAIN', '1000000');
-                const r = await bad.deploy({
-                    code: CODE, deployer: SELLER, contractAddress: 'C:BTC:11',
-                    params: [SELLER, ITEM, BAD[i], BID, '50', '5']
-                });
-                assert.strictEqual(r.success, false,
-                    'deploy with itemAmount ' + JSON.stringify(BAD[i]) + ' should revert');
-            }
-        });
-
-        it('accepts an off-grid but plainly spelled itemAmount and stores it verbatim', async function () {
-            const ok = new E2EHarness(XChainVM);
-            ok.seedBalance(SELLER, 'XCHAIN', '1000000');
-            const r = await ok.deploy({
-                code: CODE, deployer: SELLER, contractAddress: 'C:BTC:12',
-                params: [SELLER, ITEM, '0.25', BID, '50', '5']
-            });
-            assertSuccess(r);
-            assertContractState(ok.ledger, 'C:BTC:12', 'itemAmount', '0.25');
-        });
-    });
+    const tests = {
+        assert, XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
+        assertBalance, assertContractBalance, assertContractState,
+        CODE, SELLER, ITEM, BID, ADDR, env, deployAuction, depositAndFund, bid
+    };
+    registerHappyPathTests(tests);
+    registerAttackTests(tests);
+    registerExactCustodyTests(tests);
+    registerDeployValidationTests(tests);
 });

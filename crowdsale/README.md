@@ -7,9 +7,10 @@ the owner withdraws the proceeds. If it misses the soft cap by the deadline it
 fails - every buyer refunds in full.
 
 This is the first template where **the contract creates and distributes a token**:
-it `emit.issue`s the sale token at deploy (becoming its owner) and `emit.mint`s to
-each buyer on claim. Pick a `saleTick` name that isn't already taken - ticks are a
-global namespace, and the deploy's constructor issue fails on a name collision.
+it `emit.issue`s and pre-mints the full sale supply into contract custody at deploy,
+locks further minting, and `emit.send`s each buyer's allocation on claim. Pick a
+`saleTick` name that isn't already taken - ticks are a global namespace, and the
+deploy's constructor issue fails on a name collision.
 
 ## Custody model - note the footgun
 
@@ -36,10 +37,10 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues the sale token (max supply `hardCap*rate`, contract-owned); opens the sale. |
-| `buy()` | buyer (BATCHed after DEPOSIT) | Records the caller's contribution; reverts past the deadline or hard cap. |
+| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`) into contract custody, locks minting, and opens the sale. |
+| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
-| `claim()` | buyer (SUCCESS) | Mints `contribution * rate` sale tokens to the buyer. |
+| `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
 | `withdraw()` | owner (SUCCESS, once) | Sends the raised proceeds to the owner. |
 | `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline }`. |
@@ -60,20 +61,43 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   SUCCESS-only, `refund()` is FAILED-only.
 - **Unauthorized or repeated withdrawal.** `withdraw()` is owner-only and guarded
   by a `withdrawn` flag.
-- **Token supply.** The sale token is issued with `maxSupply = maxMint =
-  hardCap*rate`, so total mintable can never exceed what the sale could sell.
+- **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
+  custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
+  `MINT` cannot consume the cap or create unbacked supply, and claims only send
+  tokens from the fixed inventory. Whatever claims do not take stays in custody
+  for good (see Known limitations).
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
+  `claim()` floors `contribution * rate` onto the sale token's grid, so a
+  payment off that grid would buy fewer tokens than it paid for, with the
+  difference going to the owner at `withdraw()`. `buy()` therefore keeps only
+  the smallest pay-tick amount that buys the same whole units, computed on the
+  running total for top-ups, and sends the rest back to the buyer at once;
+  every recorded contribution receives exactly its purchased tokens. It returns
+  change rather than reverting because a reverted `buy()` would leave the whole
+  deposit behind.
 
 ## Known limitations (teaching baseline)
 
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
   in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
-- **Whole-payment caps.** A contribution that would exceed the hard cap is rejected
-  outright (no partial accept + change). Buyers size their own deposits. Both
+- **Whole-payment caps.** A contribution whose accepted part would exceed the
+  hard cap is rejected outright (only grid change is returned, never a partial
+  fill of the cap). Buyers size their own deposits. Both
   caps compare exactly, not within a tolerance, so `raised` can never pass the
   hard cap by even one base unit and outrun the sale token's `maxSupply`.
+- **Sub-base-unit overpay.** When `rate` times one pay-tick base unit does not
+  land on the sale token's grid, the accepted amount can exceed the exact
+  price by less than one pay-tick base unit per buyer, and that goes to the
+  owner. For the same reason `raised` may never land exactly on the hard cap,
+  in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
+- **Unsold inventory stays locked.** The template has no burn or sweep path, so
+  the sale tokens no claim takes stay in contract custody permanently:
+  `(hardCap - raised) * rate` after a success under the hard cap, and the whole
+  `hardCap * rate` after a failed sale. They never circulate, but the tick's
+  `MAX_SUPPLY` and supply figures still count them, and explorers list the
+  contract as a holder of that balance.
 
 ## Tests
 
@@ -81,9 +105,9 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/crowdsale/crowdsale.test.js
 ```
 
-The E2E MockIndexer applies `SEND` against balances but treats `MINT`/`ISSUE`
-loosely, so token delivery is asserted via the emitted `MINT` action and payment
-movements via resulting balances.
+The E2E MockIndexer applies `SEND` against balances but treats `ISSUE` loosely.
+The suite mirrors the production indexer's initial `mintSupply` custody credit,
+then asserts token delivery and payment movements via resulting balances.
 
 ## License
 

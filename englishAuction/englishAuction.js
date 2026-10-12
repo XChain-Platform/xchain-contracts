@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.2.0'
+        version:     '1.2.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -216,7 +216,9 @@ module.exports = {
         // minBid (only checked > 0 at deploy) unreachable.
         var minBid = xchain.state.get('minBid');
         xchain.require(xchain.math.gte(newBid, minBid) && isAtLeastExact(xchain, newBid, minBid), 'bid below the minimum');
-        xchain.require(xchain.math.gt(newBid, highBid), 'bid must exceed the current high bid');
+        // Compare the raise exactly; both operands are finite here, since highBid only
+        // ever holds a newBid that passed the reserve check above.
+        xchain.require(exceedsExactly(xchain, newBid, highBid), 'bid must exceed the current high bid');
 
         if (prevBidder) {
             xchain.emit.send({ destination: prevBidder, tick: bidTick, quantity: highBid });
@@ -359,4 +361,17 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+// Return true when a > b exactly, by the sign and digits of the exact subtract.
+// xchain.math.gt treats values within a 1e-12 relative tolerance as equal, so a raise
+// one base unit over a large high bid would read as no raise. Same helper as treasury.js.
+function exceedsExactly(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) === '-') return false;
+    for (var i = 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+    }
+    return false;
 }

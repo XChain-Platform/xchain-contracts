@@ -148,17 +148,55 @@ const TICK    = 'TEST';
             assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
         });
 
-        it('fund() never arms against a non-finite amount', async function () {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(BUYER, 'XCHAIN', '1000000');
-            h.seedBalance(BUYER, TICK, '2000000');
-            assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
-                params: [BUYER, SELLER, ARBITER, TICK, 'Infinity', '3'] }));
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER }),
-                'insufficient deposit');
+        it('initialize() refuses a non-finite or non-plain amount', async function () {
+            for (const v of ['Infinity', 'NaN', '1e3', '0x10', '-5', '+5', '5.', '.5', '1.2.3', ' 5', '']) {
+                h = new E2EHarness(XChainVM);
+                h.seedBalance(BUYER, 'XCHAIN', '1000000');
+                const r = await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+                    params: [BUYER, SELLER, ARBITER, TICK, v, '3'] });
+                assert.strictEqual(r.success, false, `amount ${JSON.stringify(v)} must not deploy`);
+            }
+        });
+    });
+
+    describe('cancel() while INIT', function () {
+        it('buyer withdraws an underfunded deposit and the escrow closes', async function () {
+            await deployEscrow();
+            assertReverted(await depositAndFund('100'), 'insufficient deposit');
+            const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER });
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: '100' } }]);
+            assertBalance(h.ledger, BUYER, TICK, '200');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+            assertReverted(await depositAndFund('200'), 'not awaiting funds');
+        });
+
+        it('reverts when nothing is held', async function () {
+            await deployEscrow();
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+                'nothing to cancel');
             assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            assertReverted(await depositAndFund('200'), 'insufficient deposit');
+        });
+
+        it('is buyer-only', async function () {
+            await deployEscrow();
+            h.deposit(BUYER, ADDR, TICK, '100');
+            for (const who of [SELLER, ARBITER, STRANGER]) {
+                assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: who }),
+                    'not authorized');
+            }
             assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        });
+
+        it('is unavailable once funded or settled', async function () {
+            await deployEscrow();
+            await depositAndFund();
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+                'not awaiting funds');
+            await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+                'not awaiting funds');
         });
     });
 

@@ -29,13 +29,14 @@ demonstrates in isolation:
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker)` | deployer | Sets immutable terms; status → `INIT`. |
+| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker)` | deployer | Sets immutable terms; `amount` must be a plain decimal (no exponent, sign, `Infinity`); status → `INIT`. |
 | `fund()` | buyer (BATCHed after DEPOSIT) | Same as `escrow`: verifies the on-chain balance, arms the reclaim deadline; status → `FUNDED`. |
 | `requestDelivery(trackingUrl)` | anyone | Emits an `http_get` attestation request (`redundancy: 3`, `deadlineBlocks: 20`) against `trackingUrl`; reverts if one is already pending. |
 | `onDelivery(request_id)` | indexer callback | If the settled body contains `deliveryMarker`: pays the seller, status → `DELIVERED`. Otherwise: no-op, `pending` clears for a retry. |
 | `release()` | buyer or arbiter | Manual fallback, same as `escrow`. |
 | `refund()` | seller or arbiter | Manual fallback, same as `escrow`. |
 | `timeout()` | buyer | After the deadline, if nothing settled. Same as `escrow`. |
+| `cancel()` | buyer | While `INIT`, returns a deposit held by the contract to the buyer; status → `CANCELLED`. Reverts when nothing is held. |
 | `status()` | anyone (read-only) | Current status string. |
 
 **The manual paths never go away.** Automated delivery detection is a

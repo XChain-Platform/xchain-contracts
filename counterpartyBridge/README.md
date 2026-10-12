@@ -2,8 +2,10 @@
 
 A genuinely 1:1 bridge for holders of a single [Counterparty](https://counterparty.io/)
 asset. A holder sends (burns) their Counterparty asset to a well-known,
-unspendable Counterparty address, and once that burn confirms, mints the
-same amount of a brand-new XChain tick to the same address.
+unspendable Counterparty address, and once that burn confirms, receives the
+same amount of a brand-new XChain tick at the same address. The tick's whole
+supply is pre-minted into the contract's own custody at deploy with public
+`MINT` locked, so a claim is the only way new bridged tokens reach anyone.
 
 Counterparty rides on top of Bitcoin: its state is computed by Counterparty
 nodes from OP_RETURN/bare-multisig data embedded in ordinary Bitcoin
@@ -49,7 +51,7 @@ source+asset-filtered endpoint):
 first) against `BURN_ADDRESS`; `onClaim` scans `data` for rows whose
 `source` is the claiming address, whose `asset` matches the deployed
 `cpAsset`, and whose `status` is `valid`, sums every one whose `tx_hash`
-has not already been credited, and mints the total in one shot.
+has not already been credited, and sends the total from custody in one shot.
 `quantity` is already a normalized decimal string (no separate
 raw-integer field to divide by divisibility).
 
@@ -86,8 +88,9 @@ address grows.
                                  agreed response on-chain.
 3. onClaim(request_id, address) -> the indexer calls this back. Every
                                  settled burn from `address` of `cpAsset`
-                                 not already credited is summed and MINTS
-                                 that total of `xchainTick` to `address`;
+                                 not already credited is summed and SENDS
+                                 that total of `xchainTick` from custody to
+                                 `address`;
                                  each burn's tx_hash is then marked
                                  credited, permanently, individually.
 ```
@@ -95,15 +98,15 @@ address grows.
 Because a Counterparty holder's Bitcoin address **is** their XChain address
 on that chain (XChain transactions are themselves Bitcoin/Dogecoin/Litecoin
 transactions), the claim needs no separate registration step: the address
-that burned the asset is the address the minted tokens land on. Nobody can
-trigger a check on someone else's behalf that then mints to a third party.
+that burned the asset is the address the claimed tokens land on. Nobody can
+trigger a check on someone else's behalf that then pays a third party.
 
 ## Methods
 
 | Method | Who | Effect |
 |---|---|---|
 | `requestClaim()` | anyone (self-serve) | Emits an `http_get` attestation request listing every Send on `BURN_ADDRESS` (`redundancy: 3`, `deadlineBlocks: 20`); reverts if the caller already has a check pending. Callable again later, once new burns exist. |
-| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and mints the total. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. |
+| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and sends the total from custody. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. |
 | `claimedTotal(address)` | anyone | Read-only: how much `address` has been credited in total so far (`'0'` if none). |
 | `burned(tx_hash)` | anyone | Read-only: whether a specific Counterparty burn transaction has already been credited. |
 | `info()` | anyone | `{ cpAsset, xchainTick, decimals, maxSupply, totalClaimed, burnAddress }`. |
@@ -156,23 +159,32 @@ bridge multiple assets, deploy one instance per asset.
   old or different address's request cannot be replayed.
 - **Double-crediting the same burn.** Each Counterparty `tx_hash` is
   nullified individually (`burned:<tx_hash>`) the moment it is credited,
-  BEFORE the mint is emitted. A burn reported again in a later
+  BEFORE the `SEND` is emitted. A burn reported again in a later
   `requestClaim()` round, or replayed via a stale settled response, is
   silently skipped rather than minted again.
 - **Forged burn.** `onClaim` reads the burn list from
   `xchain.attestation.getResponse(request_id)`, indexer-side consensus
   state; a caller cannot supply the payload directly.
+- **Public MINT of the bridged tick.** An XChain `MINT` is not
+  issuer-gated: any address may mint a tick that sets no `LOCK_MINT` or
+  allow list. Left open, anyone could mint the bridged asset with no burn
+  behind it, and an attacker who minted up to `maxSupply` would make every
+  real claim fail at the indexer's supply cap. So `initialize()` issues the
+  tick with `mintSupply = maxSupply` (credited to the contract itself),
+  `lockMint` and `lockMintSupply`, and `onClaim` pays by `SEND` from that
+  custody. An allow list is not used instead because `SEND` also checks the
+  destination against it, which would stop holders moving the token freely.
 - **Claiming and also keeping/selling the original asset ("double
   value").** This is the reason the design is burn-to-mint rather than a
   balance snapshot: the mint is gated on a Send to an address nobody holds
   the key to, which is irreversible the moment it confirms on
   Counterparty. See "Why burn-to-mint" above.
-- **Minting past the Counterparty-side supply.** `maxSupply` (set at
-  deploy from `cpAsset`'s real total supply) hard-caps `emit.issue`, and
-  `onClaim` also checks `totalClaimed + amount <= maxSupply` itself with a
-  clear revert message before minting, rather than relying on the
-  indexer's cap enforcement to reject (and roll back) the whole claim.
-- **Rounding a mint above the cap.** Claimed amounts are floored onto
+- **Claiming past the Counterparty-side supply.** `maxSupply` (set at
+  deploy from `cpAsset`'s real total supply) is both the token's cap and
+  the pre-minted custody, and `onClaim` checks `totalClaimed + amount <=
+  maxSupply` itself with a clear revert message before sending, so custody
+  can never be overdrawn by claims.
+- **Rounding a claim above the cap.** Claimed amounts are floored onto
   `xchainTick`'s decimal grid before minting (same footgun and fix as
   `crowdsale.claim()`): the indexer re-normalises every emitted quantity to
   the tick's decimals with half-up rounding (its bcmath is half-up, not
@@ -185,6 +197,18 @@ bridge multiple assets, deploy one instance per asset.
 
 ## Known limitations (this is a teaching example)
 
+- **The deployer can still WITHDRAW custody where owner WITHDRAW is
+  allowed.** A raw `WITHDRAW` moves a contract's custody to its deployer
+  without running contract code. From the `OWNER_WITHDRAW_OPT_IN`
+  activation a contract that does not declare `meta.ownerWithdraw` (this
+  one does not) refuses it, but on a network where that rule is not yet
+  active, or for a bridge deployed before it, the deployer could take
+  pre-minted supply that no burn backs. Holders on such a network are
+  trusting the deployer.
+- **Bridges deployed from version 1.0.x stay publicly mintable.** Deployed
+  code is immutable, so an instance deployed before the pre-mint change
+  still issues an unlocked tick. Redeploy from this version and migrate
+  holders rather than keep using one.
 - **`BURN_ADDRESS` is a shared, industry-wide address, not exclusive to
   this bridge - and the on-chain payload cap means only the most recent
   ~15 sends to it are ever visible to `onClaim`.** `1BitcoinEaterAddressDontSendf59kuE`

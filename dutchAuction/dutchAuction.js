@@ -41,17 +41,20 @@
 //
 //     BATCH( DEPOSIT(auction, BID_TICK, quotedPrice), EXECUTE(auction, "buy") )
 //
-// A BATCH is NOT atomic: its sub-actions settle independently, so an underpaying
-// buy() strands its DEPOSIT in custody (see the README's Known limitations).
+// A BATCH is NOT atomic: its sub-actions settle independently, so a buy() that
+// REVERTS leaves its DEPOSIT in custody (see the README's Known limitations).
 //
 // buy() never trusts a caller-supplied amount: it reads the contract's actual
 // bidTick balance and compares it to the price in effect this block. Anything
 // deposited above that price is refunded to the buyer in the same execution, so
 // a slightly-stale quote (price ticked down between the caller reading it and
-// the transaction landing) never overcharges - it can only ever undercharge if
-// the deposit falls short, in which case buy() reverts and the deposit sits in
-// the contract until either a corrected buy() or the seller's cancel() (which
-// only ever returns the ITEM, not stray bidTick - see Known limitations).
+// the transaction landing) never overcharges. A deposit that falls SHORT is
+// refunded the same way and buy() returns 'underpaid' instead of reverting: a
+// revert would leave it in custody, where the falling price lets any later
+// caller take the item with it as their payment. A stray still remains when
+// buy() reverts ('auction not active', 'price is below one unit') or bidTick
+// arrives by a plain DEPOSIT; while ACTIVE the next buy() caller receives it,
+// and cancel() never returns it (it only returns the ITEM).
 // ---------------------------------------------------------------------------
 
 // Upper bound for the duration constructor param. A sanity ceiling, not a
@@ -103,7 +106,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -111,7 +114,7 @@ module.exports = {
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         fund:   { summary: 'Seller deposits the item and starts the price clock (BATCH after a DEPOSIT)', params: [] },
-        buy:    { summary: 'Pay the current asking price (BATCH after a DEPOSIT); first caller wins the item', params: [] },
+        buy:    { summary: 'Pay the current asking price (BATCH after a DEPOSIT); first caller wins the item, and a short deposit is refunded with the result "underpaid"', params: [] },
         cancel: { summary: 'Seller reclaims the item: before any purchase, or from the pre-funded state after fund() rejected the terms', params: [] },
         info:   { summary: 'Read the auction status and the current asking price', params: [], view: true }
     } },
@@ -209,8 +212,8 @@ module.exports = {
         xchain.state.set('status', 'ACTIVE');
     },
 
-    // buy(): pay the current asking price. BATCH after a DEPOSIT of bidTick
-    // (at least the current price - any excess is refunded in this same call).
+    // buy(): pay the current asking price. BATCH after a DEPOSIT of bidTick; any
+    // excess is refunded in this same call, and so is a deposit that falls short.
     buy: function (xchain) {
         xchain.require(xchain.state.get('status') === 'ACTIVE', 'auction not active');
 
@@ -224,10 +227,18 @@ module.exports = {
         // zero price and hands the item to a caller who deposited nothing.
         xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
 
-        // Compare the payment exactly, so a dust-short one fails here and not on the seller SEND.
-        xchain.require(isAtLeastExact(xchain, held, price), 'insufficient payment for the current price (' + price + ')');
-
         var caller = xchain.getSourceAddress();
+
+        // Refund a short payment to the caller instead of reverting, so no deposit is
+        // left for a later caller to collect once the price falls to it. Compared
+        // exactly, so even one base unit short is refunded rather than accepted.
+        if (!isAtLeastExact(xchain, held, price)) {
+            if (xchain.math.gt(held, '0')) {
+                xchain.emit.send({ destination: caller, tick: bidTick, quantity: held });
+            }
+            return 'underpaid';
+        }
+
         var excess = xchain.math.subtract(held, price);
 
         // Mark terminal BEFORE emitting: the item and the payment settle in

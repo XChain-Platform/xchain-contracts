@@ -9,33 +9,48 @@
 // (isolated-vm / Node 22). Run from the xchain-vm package:
 //   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/crowdsale/crowdsale.test.js
 //
-// Note on assertions: the E2E MockIndexer applies SEND (custody -> recipient) but
-// its MINT handler credits the contract and ignores `destination`, and ISSUE is a
-// no-op. So token DELIVERY (mint to buyer) is checked via the emitted MINT action
-// (the contract's logic), while payTick movements (refund/withdraw via SEND) are
-// checked against resulting balances.
+// Note on assertions: the E2E MockIndexer applies SEND but treats ISSUE as a no-op.
+// The local harness wrapper credits ISSUE mintSupply to contract custody, matching
+// the production indexer, so sale-token delivery is checked end to end.
 
 'use strict';
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerOffGridPaymentTests = require('./crowdsale_test/off_grid_payments');
+const registerDustContributionSuite = require('./crowdsale_test/dust_contribution');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
-let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance;
+let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
+    assertContractBalance;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
-    ({ assertSuccess, assertReverted, assertEmittedActions, assertBalance }
+    ({ assertSuccess, assertReverted, assertEmittedActions, assertBalance, assertContractBalance }
        = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
 } catch (e) { XChainVM = null; console.log('Skipping crowdsale tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
+
+if (E2EHarness) {
+    const BaseHarness = E2EHarness;
+    E2EHarness = class extends BaseHarness {
+        async deploy(opts) {
+            const deployed = await super.deploy(opts);
+            if (deployed.success && deployed.result) {
+                const issue = deployed.result.emittedActions.find(e => e.action === 'ISSUE');
+                if (issue && issue.params.mintSupply)
+                    this.ledger.creditContractBalance(opts.contractAddress, issue.params.tick, issue.params.mintSupply);
+            }
+            return deployed;
+        }
+    };
+}
 
 const CODE = fs.readFileSync(path.join(__dirname, 'crowdsale.js'), 'utf8');
 
 const OWNER = 'owner', B1 = 'buyer1', B2 = 'buyer2', STRANGER = 'stranger';
 const ADDR = 'C:BTC:1', PAY = 'PAY', SALE = 'SALE';
 const RATE = '10', SOFT = '100', HARD = '200', DURATION = 50;
-const DEADLINE = 1 + DURATION; // deploy at height 1
 
 (XChainVM ? describe : describe.skip)('Template: crowdsale', function () {
     this.timeout(0);
@@ -45,6 +60,8 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         over = over || {};
         h = new E2EHarness(XChainVM);
         for (const a of [OWNER, B1, B2]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
+        // A held tick always carries token info on a real node; buy() reads it for change.
+        h.ledger.setTokenDecimals(PAY, 8);
         return h.deploy({
             code: CODE, deployer: OWNER, contractAddress: ADDR,
             params: [OWNER, PAY, SALE, over.rate || RATE, over.soft || SOFT, over.hard || HARD,
@@ -57,7 +74,8 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         return h.execute({ contractAddress: ADDR, method: 'buy', params: [], caller: who });
     }
     function call(method, who) { return h.execute({ contractAddress: ADDR, method, params: [], caller: who }); }
-    function close() { h.ledger.blockHeight = DEADLINE; }
+    // init sets the deadline DURATION blocks past the height the sale was deployed at.
+    function close() { h.ledger.blockHeight = h.ledger.getContract(ADDR).blockIndex + DURATION; }
 
     describe('successful sale', function () {
         it('buyers fund past the soft cap, finalize, claim tokens, owner withdraws', async function () {
@@ -67,10 +85,11 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             close();
             assertSuccess(await call('finalize', B1));
 
-            // Buyer claims sale tokens: 60 * 10 = 600 minted to B1.
+            // Buyer claims sale tokens: 60 * 10 = 600 sent to B1.
             const c = await call('claim', B1);
             assertSuccess(c);
-            assertEmittedActions(c, [{ action: 'MINT', params: { tick: SALE, quantity: '600', destination: B1 } }]);
+            assertEmittedActions(c, [{ action: 'SEND', params: { tick: SALE, quantity: '600', destination: B1 } }]);
+            assertBalance(h.ledger, B1, SALE, '600');
             assertReverted(await call('claim', B1), 'nothing to claim'); // no double claim
 
             // Owner withdraws the proceeds (120 PAY).
@@ -101,6 +120,20 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
     });
 
     describe('attacks we considered', function () {
+        it('locks public minting and pre-mints the sale supply into custody', async function () {
+            const deployed = await deploy();
+            assertSuccess(deployed);
+            const issues = deployed.result.emittedActions.filter(e => e.action === 'ISSUE');
+            assert.strictEqual(issues.length, 1);
+            assert.strictEqual(issues[0].params.maxSupply, '2000');
+            assert.strictEqual(issues[0].params.maxMint, '2000');
+            assert.strictEqual(issues[0].params.mintSupply, '2000');
+            assert.strictEqual(issues[0].params.lockMint, '1');
+            assert.strictEqual(issues[0].params.lockMintSupply, '1');
+            assertContractBalance(h.ledger, ADDR, SALE, '2000');
+            assert.strictEqual(CODE.indexOf('emit.mint'), -1);
+        });
+
         it('buy() with no deposit reverts', async function () {
             await deploy();
             assertReverted(await call('buy', B1), 'no payment received');
@@ -148,15 +181,19 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
     describe('precision (indexer half-up round-up over-issuance)', function () {
         it('floors the claim mint onto the saleTick decimal grid instead of over-issuing', async function () {
             // saleTick has 0 decimals; a contribution whose paid*rate lands on .5 would
-            // half-up round UP at ledger-write (101.5 -> 102), minting more than paid*rate
-            // and eventually past maxMint. The contract must EMIT the floored '101'.
+            // half-up round UP at ledger-write (101.5 -> 102), delivering more than paid*rate
+            // and eventually past custody. The contract must EMIT the floored '101'.
             h = new E2EHarness(XChainVM);
             for (const a of [OWNER, B1]) { h.seedBalance(a, 'XCHAIN', '1000000'); h.seedBalance(a, PAY, '500'); }
+            h.ledger.setTokenDecimals(PAY, 8);
             assertSuccess(await h.deploy({
                 code: CODE, deployer: OWNER, contractAddress: ADDR,
                 params: [OWNER, PAY, SALE, '10', '1', '200', String(DURATION), '0'] // rate 10, soft 1, hard 200, saleDecimals 0
             }));
-            assertSuccess(await buy(B1, '10.15')); // paid 10.15 -> tokens 101.5
+            // paid 10.15 -> 101.5 tokens: buy() keeps 10.1 (101 whole tokens) and returns 0.05.
+            const b = await buy(B1, '10.15');
+            assertSuccess(b);
+            assertEmittedActions(b, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '0.05' } }]);
             close();
             assertSuccess(await call('finalize', B1));
 
@@ -164,7 +201,7 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             assertSuccess(c);
             // Floored DOWN to the 0dp grid -> '101', never the half-up round-up '102'
             // (and never the unfloored '101.5' the indexer would re-normalise upward).
-            assertEmittedActions(c, [{ action: 'MINT', params: { tick: SALE, quantity: '101', destination: B1 } }]);
+            assertEmittedActions(c, [{ action: 'SEND', params: { tick: SALE, quantity: '101', destination: B1 } }]);
         });
     });
 
@@ -241,6 +278,13 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
         it('rejects rate <= 0', async function () {
             assert.strictEqual((await bad([OWNER, PAY, SALE, '0', SOFT, HARD, '50', '8'])).success, false);
         });
+        it('rejects a non-finite rate', async function () {
+            for (const rate of ['Infinity', '-Infinity', 'NaN', '1e3']) {
+                const res = await bad([OWNER, PAY, SALE, rate, SOFT, HARD, '50', '8']);
+                assert.strictEqual(res.success, false, 'rate ' + rate + ' deployed');
+                assert(String(res.error).includes('rate must be a plain decimal'), 'got: ' + res.error);
+            }
+        });
         // saleDecimals validation (finding 2705): it feeds both the permanent
         // emit.issue grid and claim()'s floor; a malformed value must fail the
         // deploy instead of desyncing the two.
@@ -296,13 +340,30 @@ const DEADLINE = 1 + DURATION; // deploy at height 1
             assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, SOFT, HARD, '1000001', '8'])).success, false);
 
             // '1000' means 1000 blocks in the deadline, not the 1 a parseInt of
-            // '1e3' gave. The harness deploys at height 1.
+            // '1e3' gave, counted from the height the harness deploys at.
             const b4 = new E2EHarness(XChainVM);
             b4.seedBalance(OWNER, 'XCHAIN', '1000000');
             const r = await b4.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
                 params: [OWNER, PAY, SALE, RATE, SOFT, HARD, '1000', '8'] });
             assert.strictEqual(r.success, true);
-            assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'), '1001');
+            assert.strictEqual(b4.ledger.getContractStateKey('C:BTC:9', 'deadline'),
+                String(b4.ledger.getContract('C:BTC:9').blockIndex + 1000));
         });
+    });
+
+    const assertDeliveredActions = function (result, expected) {
+        assertEmittedActions(result, expected.map(function (entry) {
+            if (entry.action !== 'MINT') return entry;
+            return { action: 'SEND', params: entry.params };
+        }));
+    };
+
+    registerOffGridPaymentTests({
+        OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions: assertDeliveredActions, assertBalance, assertContractBalance
+    });
+    registerDustContributionSuite({
+        OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions: assertDeliveredActions, assertBalance, assertContractBalance
     });
 });

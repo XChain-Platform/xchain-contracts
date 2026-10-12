@@ -47,9 +47,17 @@
 //   3. onClaim(request_id, address) -> the indexer calls this back. Every
 //      settled send whose `source` is `address`, whose `asset` is `cpAsset`,
 //      and whose Counterparty `tx_hash` has not already been credited is
-//      summed and minted in one shot; each `tx_hash` is then marked
-//      permanently credited (the nullifier - keyed by burn transaction, not
-//      by address, so the same address can burn-and-claim again later).
+//      summed and sent from the contract's custody in one shot; each
+//      `tx_hash` is then marked permanently credited (the nullifier - keyed
+//      by burn transaction, not by address, so the same address can
+//      burn-and-claim again later).
+//
+// CUSTODY MODEL: an XChain MINT is not issuer-gated (any address may MINT a
+// tick that sets no LOCK_MINT or allow list), so the deploy pre-mints the
+// whole maxSupply into this contract with LOCK_MINT and LOCK_MINT_SUPPLY set,
+// and claims are paid by SEND. No outside MINT can then create unbacked
+// supply or fill the cap ahead of a real claimant. (Owner WITHDRAW of this
+// custody is the remaining trust edge; see "Known limitations" in the README.)
 //
 // Because the Counterparty holder's Bitcoin address IS the caller's XChain
 // address on that chain (XChain transactions ARE Bitcoin/Dogecoin/Litecoin
@@ -116,6 +124,20 @@ function floorToDecimals(value, decimals) {
     return neg ? '-' + out : out;
 }
 
+// Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
+// xchain.math.gte is tolerant (1e-12 relative). Same helper as amm.js.
+function isAtLeastExact(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    var neg = diff.charAt(0) === '-';
+    var nonzero = false;
+    for (var i = neg ? 1 : 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') nonzero = true;
+        else if (c !== '0' && c !== '.') return false;
+    }
+    return !(neg && nonzero);
+}
+
 // Pull every Counterparty "Send" of `asset` FROM `source` out of a
 // tokenscan.io GET /api/sends/{destination}/{page}/{limit} body:
 //   { "data": [ { "asset": "...", "source": "...", "destination": "...",
@@ -168,8 +190,8 @@ module.exports = {
     // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
     meta: {
         name:        'Counterparty Bridge',
-        description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then mints the migrated tokens one for one.',
-        version:     '1.0.0'
+        description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
+        version:     '1.1.0'
     },
 
     abi: { version: 1, methods: {
@@ -177,7 +199,7 @@ module.exports = {
         // onClaim's first four params are the indexer's fixed attestation preamble
         // (attest/index.js injectCallbackExecute); requestClaim() appends [caller], so the
         // credited address is slot 4 and the whole list is machine-supplied.
-        onClaim:      { summary: 'Callback: mints the equivalent xchainTick for every newly-found burn transaction; the indexer supplies the attestation preamble and the credited address (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'json' }, { name: 'address', type: 'address' } ] },
+        onClaim:      { summary: 'Callback: sends the equivalent xchainTick from custody for every newly-found burn transaction; the indexer supplies the attestation preamble and the credited address (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'json' }, { name: 'address', type: 'address' } ] },
         claimedTotal: { summary: 'Read how much an address has been credited in total so far', params: [ { name: 'address', type: 'address' } ], view: true },
         burned:       { summary: 'Check whether a specific Counterparty burn tx_hash has already been credited', params: [ { name: 'txHash', type: 'string' } ], view: true },
         info:         { summary: 'Read the bridge configuration and progress', params: [], view: true }
@@ -211,12 +233,17 @@ module.exports = {
         xchain.state.set('decimals', decimals);
         xchain.state.set('totalClaimed', '0');
 
+        // Pre-mint the whole supply into this contract's custody and lock MINT
+        // (and any further MINT_SUPPLY), so claims below are the only way out.
         xchain.emit.issue({
             tick: xchainTick,
             maxSupply: maxSupply,
             maxMint: maxSupply,
             decimals: decimals,
-            description: 'XChain bridge of Counterparty asset ' + cpAsset + ' (burn-to-mint via ' + BURN_ADDRESS + ')'
+            description: 'XChain bridge of Counterparty asset ' + cpAsset + ' (burn-to-mint via ' + BURN_ADDRESS + ')',
+            mintSupply: maxSupply,
+            lockMint: '1',
+            lockMintSupply: '1'
         });
     },
 
@@ -259,7 +286,8 @@ module.exports = {
     // list settles. Pinned to the outstanding request for THIS address (like
     // escrowDelivery's onDelivery, not urlOracle's teaching-example gap) so a
     // stale settled response for an earlier request can't be replayed. Sums
-    // every not-yet-credited burn found for `address`, mints once, and
+    // every not-yet-credited burn found for `address`, sends it once from
+    // custody, and
     // nullifies each burn's tx_hash individually. Finding zero new burns, or
     // a failed attestation, is a no-op - pending clears and the address can
     // requestClaim() again later once they actually burn something.
@@ -311,12 +339,12 @@ module.exports = {
         }
 
         var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), totalNew);
-        xchain.require(xchain.math.lte(newTotalClaimed, xchain.state.get('maxSupply')),
+        xchain.require(isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed),
             'bridge maxSupply exhausted');
 
         // Mark every burn tx credited BEFORE emitting, so a defense-in-depth
         // replay of the same settled response (see attacks-considered test)
-        // can never double-mint against the same burn.
+        // can never double-credit the same burn.
         for (var j = 0; j < newTxHashes.length; j++) {
             xchain.state.set('burned:' + newTxHashes[j], true);
         }
@@ -324,10 +352,13 @@ module.exports = {
         xchain.state.set('claimedTotal:' + address,
             xchain.math.add(xchain.state.get('claimedTotal:' + address) || '0', totalNew));
 
-        xchain.emit.mint({
+        // Pay from custody (MINT is locked). totalClaimed <= maxSupply above also
+        // bounds custody; the memo satisfies a destination's REQUIRE_MEMO preference.
+        xchain.emit.send({
+            destination: address,
             tick: xchain.state.get('xchainTick'),
             quantity: totalNew,
-            destination: address
+            memo: 'counterpartyBridge claim'
         });
         xchain.log('claimed', address, totalNew, newTxHashes.length);
         return totalNew;

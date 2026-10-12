@@ -32,8 +32,25 @@ of truth; caller-supplied funding amounts are never trusted.
 - `getPrice(coinPair)`: latest finalized round, production object shape
   `{ price, roundNumber, timestamp }` (a bare string is also accepted).
 - Price-sensitive ops (**borrow / withdraw-with-debt / liquidate**) require
-  `getSnapshotAge() <= maxSnapshotAge` blocks: nobody acts on a stale price
-  during an oracle outage.
+  `getSnapshotAge() <= maxSnapshotAge` seconds, and, for the object shape,
+  `getBlockTimestamp() - timestamp <= maxSnapshotAge` on the configured pair's
+  own round. `getSnapshotAge()` is the newest round across every pair, so the
+  second check is what stops a stalled pair hiding behind a fleet that keeps
+  publishing. Set `maxSnapshotAge` above the pair's normal round interval, or
+  these ops revert between rounds. A vault deployed from a revision before
+  1.2.0 has only the fleet-wide check and must be redeployed to get the
+  per-pair one.
+- **Interim unit on live hosts.** The age is in seconds only once the host
+  indexer's `oracle_snapshot_age_seconds_activation` is armed on the network.
+  Before that the host returns a block count. On BTC that makes the window
+  about 600x looser than its face value. On LTC and DOGE the value is the
+  chain's own height minus a BTC reference height (millions), not an age, so
+  `borrow`, `withdraw` with debt and `liquidate` revert `oracle price is
+  stale` and an under-water vault cannot be liquidated. Do not deploy on LTC
+  or DOGE before the activation is armed, and do not widen `maxSnapshotAge`
+  into the millions to get around it, because that turns the freshness check
+  off. A vault deployed from an earlier revision that measured
+  `maxSnapshotAge` in blocks must be redeployed once the activation is armed.
 - De-risking (**deposit / repay**) never touches the oracle: making a vault
   safer must never be blocked. A debt-free `withdraw` skips the oracle too.
 
@@ -60,12 +77,12 @@ and the ledger's HALF-UP re-rounding moves half a base unit more than the
 books recorded, on every call.
 
 `initialize(...)` requires `maxSnapshotAge` to be a canonical base-10 integer
-in `[1, 1000000]` blocks. That is a shape check, not a value parse: a
+in `[1, 31536000]` seconds. That is a shape check, not a value parse: a
 radix-less `parseInt` silently re-measures `'1e3'` as `1` and `'0x10'` as
-`16`, so a deployer who asked for a 1000-block staleness window would have
-got a 1-block one, and `freshPrice` would then revert `borrow`, `withdraw`
+`16`, so a deployer who asked for a 1000-second staleness window would have
+got a 1-second one, and `freshPrice` would then revert `borrow`, `withdraw`
 and `liquidate` on every call whenever the oracle publishes less often than
-once per block.
+once per second.
 
 `stableDecimals` (optional, default `8`) is the decimal grid of the stable this
 contract issues, and gets the same integer-shape check in `[0, 18]`. It is a
@@ -109,9 +126,10 @@ that one.
   next caller (same footgun as the crowdsale template). Always
   `BATCH(DEPOSIT, deposit/repay/liquidate)`.
 - **Borrowing or withdrawing on a stale price.** Price-sensitive operations
-  (`borrow`, `withdraw` with debt, `liquidate`) require
-  `getSnapshotAge() <= maxSnapshotAge`; nobody can mint against or seize on a
-  price frozen by an oracle outage. De-risking (`deposit`/`repay`, debt-free
+  (`borrow`, `withdraw` with debt, `liquidate`) require both
+  `getSnapshotAge() <= maxSnapshotAge` and the configured pair's own round
+  to be no older than `maxSnapshotAge`; nobody can mint against or seize on a
+  price frozen by an oracle outage, even one confined to this pair. De-risking (`deposit`/`repay`, debt-free
   `withdraw`) deliberately skips the oracle so a vault can always be made
   safer.
 - **Under-collateralized mint / exit.** `borrow()` and `withdraw()` check
@@ -123,6 +141,12 @@ that one.
   cover the *full* debt (burned), and caps the seizure at the vault's actual
   collateral. Excess stable is returned to the liquidator; leftover
   collateral stays credited to the owner.
+- **Overdrawing the shared pool by a tolerance band.** `xchain.math.gte`
+  treats values within 1e-12 relative of each other as equal, which at a
+  1,000,000 balance is 100 base units of an 8-decimal tick. `withdraw()`'s
+  collateral check and `liquidate()`'s full-debt check therefore compare
+  exactly (`isAtLeastExact`), so a debt-free vault cannot take collateral
+  that belongs to other vaults.
 - **Self-liquidation for the bonus.** `liquidate()` rejects
   `liquidator === vaultOwner`.
 - **Rounding shortfall drains other vaults.** Every amount-bearing method

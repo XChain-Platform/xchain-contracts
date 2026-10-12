@@ -83,7 +83,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -224,15 +224,20 @@ module.exports = {
 
         var strike = xchain.state.get('strike');
 
+        // Compare exactly: math.eq/gt treat values within 1e-12 relative as equal,
+        // so a price one base unit off a large strike would otherwise settle as a push.
+        var atOrAbove = isAtLeastExact(xchain, price, strike);
+        var atOrBelow = isAtLeastExact(xchain, strike, price);
+
         // Exactly at the strike: a push. Both stakes go back.
-        if (xchain.math.eq(price, strike)) {
+        if (atOrAbove && atOrBelow) {
             xchain.state.set('status', 'PUSH');
             refundBoth(xchain);
             return;
         }
 
         // Strictly above the strike -> OVER wins; strictly below -> UNDER.
-        var overWon = xchain.math.gt(price, strike);
+        var overWon = atOrAbove;
         var makerIsOver = xchain.state.get('side') === 'OVER';
         var winner = (overWon === makerIsOver) ? xchain.state.get('maker') : xchain.state.get('taker');
 
@@ -315,7 +320,7 @@ module.exports = {
 // Price of the agreed settle round, normalized to a bignumber string, or null
 // if the round is not yet published. The production accessor returns a
 // { price, roundNumber, timestamp } object (indexer's getOracleDataForVM via
-// xchain-vm/src/readonly_accessors.js); older/mocked accessors may return the
+// xchain-vm/src/readonly-accessors.js); older/mocked accessors may return the
 // bare price string. Accept both.
 function roundPrice(xchain) {
     var r = readRound(xchain, xchain.state.get('coinPair'),

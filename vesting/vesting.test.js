@@ -14,6 +14,8 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerOffGridTotalTests = require('./vesting_test/off_grid_total');
+const registerFundAccessAndRevokeCapTests = require('./vesting_test/fund_access_and_revoke_cap');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -36,32 +38,38 @@ const TICK    = 'TEST';
 // total=1000, cliff=10, duration=100 → linear; clean round numbers.
 const TOTAL = '1000', CLIFF = 10, DURATION = 100;
 
-(XChainVM ? describe : describe.skip)('Template: vesting', function () {
-    this.timeout(0);
-    let h;
+// Created by deploy()/deployOffGrid() at test time; the register* groups read them.
+let h, base;
 
-    async function deploy(revocable, total) {
-        h = new E2EHarness(XChainVM);
-        h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
-        h.seedBalance(GRANTOR, TICK, '1000');
-        // The real indexer knows every issued tick's decimals: it exposes them
-        // to the contract (getTokenInfo, which claim/revoke use to floor their
-        // payouts onto the grid) and normalises emitted amounts to them at
-        // write time. Register the grant tick at 8 dp so the harness models both.
-        h.ledger.setTokenDecimals(TICK, 8);
-        await h.deploy({
-            code: CODE, deployer: GRANTOR, contractAddress: ADDR,
-            params: [GRANTOR, BENE, TICK, total || TOTAL, String(CLIFF), String(DURATION), revocable || 'false']
-        });
-    }
-    async function fund(amount) {
-        h.deposit(GRANTOR, ADDR, TICK, amount || TOTAL);
-        return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
-    }
-    // Jump to a precise elapsed-since-start block (fund() starts the clock at height 1).
-    function atElapsed(e) { h.ledger.blockHeight = 1 + e; }
-    function claim(who) { return h.execute({ contractAddress: ADDR, method: 'claim', params: [], caller: who || BENE }); }
+async function deploy(revocable, total) {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
+    h.seedBalance(GRANTOR, TICK, '1000');
+    // The real indexer knows every issued tick's decimals: it exposes them
+    // to the contract (getTokenInfo, which claim/revoke use to floor their
+    // payouts onto the grid) and normalises emitted amounts to them at
+    // write time. Register the grant tick at 8 dp so the harness models both.
+    h.ledger.setTokenDecimals(TICK, 8);
+    await h.deploy({
+        code: CODE, deployer: GRANTOR, contractAddress: ADDR,
+        params: [GRANTOR, BENE, TICK, total || TOTAL, String(CLIFF), String(DURATION), revocable || 'false']
+    });
+    base = h.ledger.blockHeight;
+}
+async function fund(amount) {
+    h.deposit(GRANTOR, ADDR, TICK, amount || TOTAL);
+    return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
+}
+// Jump to a precise elapsed-since-start block (fund() starts the clock at the deploy height).
+function atElapsed(e) { h.ledger.blockHeight = base + e; }
+function claim(who) { return h.execute({ contractAddress: ADDR, method: 'claim', params: [], caller: who || BENE }); }
+async function badDeploy(params) {
+    const b = new E2EHarness(XChainVM);
+    b.seedBalance(GRANTOR, 'XCHAIN', '1000000');
+    return b.deploy({ code: CODE, deployer: GRANTOR, contractAddress: 'C:BTC:9', params });
+}
 
+function registerLinearAccrual() {
     describe('linear accrual', function () {
         it('nothing is claimable before the cliff', async function () {
             await deploy(); await fund();
@@ -95,7 +103,9 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '1000' } }]);
         });
     });
+}
 
+function registerAttacks() {
     describe('attacks we considered', function () {
         it('fund() rejects an underfunded deposit', async function () {
             await deploy();
@@ -149,7 +159,9 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             });
         });
     });
+}
 
+function registerRevocation() {
     describe('revocation', function () {
         it('grantor reclaims the unvested portion; beneficiary keeps the vested', async function () {
             await deploy('true'); await fund();
@@ -183,13 +195,10 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
                 'nothing to revoke');
         });
     });
+}
 
+function registerDeployValidation() {
     describe('deploy-time validation', function () {
-        async function badDeploy(params) {
-            const b = new E2EHarness(XChainVM);
-            b.seedBalance(GRANTOR, 'XCHAIN', '1000000');
-            return b.deploy({ code: CODE, deployer: GRANTOR, contractAddress: 'C:BTC:9', params });
-        }
         it('rejects total <= 0', async function () {
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '0', '10', '100', 'false'])).success, false);
         });
@@ -243,28 +252,30 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assert.strictEqual((await badDeploy([GRANTOR, BENE, TICK, '1000', '0', '1000000', 'false'])).success, true);
         });
     });
+}
 
-    // Regression: payouts must be floored onto the tick's decimal grid before
-    // emission. total=8 over duration=3 on a 0-decimal tick makes every tranche
-    // off-grid (2.666...): unfloored, the ledger's half-up normalisation
-    // rounded each SEND up to 3, over-drew custody, and the final claim
-    // reverted with 2 tokens permanently stranded.
+// Regression: payouts must be floored onto the tick's decimal grid before
+// emission. total=8 over duration=3 on a 0-decimal tick makes every tranche
+// off-grid (2.666...): unfloored, the ledger's half-up normalisation
+// rounded each SEND up to 3, over-drew custody, and the final claim
+// reverted with 2 tokens permanently stranded.
+const TOTAL8 = '8', DUR3 = 3;
+
+async function deployOffGrid(revocable) {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
+    h.seedBalance(GRANTOR, TICK, TOTAL8);
+    h.ledger.setTokenDecimals(TICK, 0); // integer-only grid
+    await h.deploy({
+        code: CODE, deployer: GRANTOR, contractAddress: ADDR,
+        params: [GRANTOR, BENE, TICK, TOTAL8, '0', String(DUR3), revocable || 'false']
+    });
+    h.deposit(GRANTOR, ADDR, TICK, TOTAL8);
+    await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
+}
+
+function registerOffGrid() {
     describe('off-grid schedules (payout flooring)', function () {
-        const TOTAL8 = '8', DUR3 = 3;
-
-        async function deployOffGrid(revocable) {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(GRANTOR, 'XCHAIN', '1000000');
-            h.seedBalance(GRANTOR, TICK, TOTAL8);
-            h.ledger.setTokenDecimals(TICK, 0); // integer-only grid
-            await h.deploy({
-                code: CODE, deployer: GRANTOR, contractAddress: ADDR,
-                params: [GRANTOR, BENE, TICK, TOTAL8, '0', String(DUR3), revocable || 'false']
-            });
-            h.deposit(GRANTOR, ADDR, TICK, TOTAL8);
-            await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: GRANTOR });
-        }
-
         it('every tranche is floored, custody is never over-drawn, and the final claim succeeds', async function () {
             await deployOffGrid();
 
@@ -305,16 +316,34 @@ const TOTAL = '1000', CLIFF = 10, DURATION = 100;
             assertSuccess(r);
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '5' } }]);
 
-            atElapsed(DUR3);                  // cap frozen at 2.666... → beneficiary claims 2
+            atElapsed(DUR3);                  // cap frozen at 8 - 5 = 3 → beneficiary claims 3
             const c = await claim();
             assertSuccess(c);
-            assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '2' } }]);
+            assertEmittedActions(c, [{ action: 'SEND', params: { destination: BENE, tick: TICK, quantity: '3' } }]);
 
-            // Custody retains only sub-grid dust (< 1 tick unit) and never went negative.
+            // The two payouts sum to exactly the grant, so nothing is stranded in custody.
             assertBalance(h.ledger, GRANTOR, TICK, '5');
-            assertBalance(h.ledger, BENE, TICK, '2');
-            assertContractBalance(h.ledger, ADDR, TICK, '1');
+            assertBalance(h.ledger, BENE, TICK, '3');
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
             assertReverted(await claim(), 'nothing to claim');
         });
+    });
+}
+
+(XChainVM ? describe : describe.skip)('Template: vesting', function () {
+    this.timeout(0);
+
+    registerLinearAccrual();
+    registerAttacks();
+    registerRevocation();
+    registerDeployValidation();
+    registerOffGrid();
+    registerOffGridTotalTests({
+        GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions, assertBalance, assertContractBalance
+    });
+    registerFundAccessAndRevokeCapTests({
+        GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
+        assertReverted, assertEmittedActions, assertBalance, assertContractBalance
     });
 });

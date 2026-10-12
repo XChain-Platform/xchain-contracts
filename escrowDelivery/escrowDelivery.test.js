@@ -169,10 +169,41 @@ const TRACKING_URL = 'https://carrier.example.com/track/1Z999';
             assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
         });
 
-        it('fund() never arms against a non-finite amount', async function () {
-            assertSuccess(await deployAmount('Infinity'));
-            assertReverted(await depositAndFund('200'), 'insufficient deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        it('initialize() rejects a non-plain-decimal amount', async function () {
+            for (const bad of ['Infinity', 'NaN', '1e3', '-5', '0x10', '1.', '.5', '1.2.3', '']) {
+                assert.strictEqual((await deployAmount(bad)).success, false, 'amount ' + JSON.stringify(bad));
+            }
+        });
+    });
+
+    describe('cancel(): buyer reclaims a stranded deposit while INIT', function () {
+        it('returns the held deposit to the buyer and closes the escrow', async function () {
+            await deployEscrow();
+            h.deposit(BUYER, ADDR, TICK, '200');
+            const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER });
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: '200' } }]);
+            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+            assertReverted(await depositAndFund('200'), 'not awaiting funds');
+        });
+
+        it('reverts with nothing held', async function () {
+            await deployEscrow();
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }), 'nothing to settle');
+        });
+
+        it('rejects a non-buyer caller', async function () {
+            await deployEscrow();
+            h.deposit(BUYER, ADDR, TICK, '200');
+            for (const who of [SELLER, ARBITER, STRANGER]) {
+                assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: who }), 'not authorized');
+            }
+        });
+
+        it('is unavailable once FUNDED', async function () {
+            await deployEscrow();
+            await depositAndFund();
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }), 'not awaiting funds');
         });
     });
 
