@@ -83,6 +83,16 @@ function registerCancelTests(ctx, kit) {
             assertBalance(kit.h.ledger, GRANTOR, TICK, '1000');
         });
 
+        it('returns a sub-tolerance deposit at 18 decimals instead of refusing it as empty', async function () {
+            await kit.deployAt(18, '1000');
+            assertReverted(await kit.fundWith('0.000000000000000001'), 'insufficient deposit');
+            const r = await kit.call('cancel');
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: GRANTOR, tick: TICK, quantity: '0.000000000000000001' } }]);
+            assertContractBalance(kit.h.ledger, ADDR, TICK, '0');
+            assertBalance(kit.h.ledger, GRANTOR, TICK, '1000');
+        });
+
         it('is grantor-only, INIT-only, and refuses an empty contract', async function () {
             await kit.deployAt(8, '1000');
             assertReverted(await kit.call('cancel'), 'nothing to reclaim');

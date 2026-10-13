@@ -101,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -198,7 +198,7 @@ module.exports = {
         var tick = xchain.state.get('tick');
         var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
         // Refuse an empty cancel so it cannot burn the INIT state for nothing.
-        xchain.require(xchain.math.gt(held, '0'), 'nothing to reclaim');
+        xchain.require(isPositiveExact(held), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({ destination: xchain.state.get('grantor'), tick: tick, quantity: held });
@@ -378,7 +378,7 @@ function isAtLeastExact(xchain, a, b) {
 // Return true when v > 0 exactly, by the sign and digits of the value itself.
 // xchain.math.gt treats a value within the absolute tolerance of zero as equal to
 // it, so a real sub-tolerance payout would be refused as "nothing". Used by the
-// claim and revoke payout guards.
+// cancel, claim and revoke payout guards.
 function isPositiveExact(v) {
     var s = String(v);
     if (s.charAt(0) === '-') return false;
