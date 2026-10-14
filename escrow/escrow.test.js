@@ -37,269 +37,293 @@ const STRANGER = 'stranger';
 const ADDR    = 'C:BTC:1';
 const TICK    = 'TEST';
 
-(XChainVM ? describe : describe.skip)('Template: escrow', function () {
-    this.timeout(0);
-    let h;
+let h;
 
-    // Deploy a fresh escrow for TICK/200 with a 3-block reclaim window, the buyer
-    // pre-funded with 200 TEST. Most tests then deposit + fund before settling.
-    async function deployEscrow(window) {
+// Deploy a fresh escrow for TICK/200 with a 3-block reclaim window, the buyer
+// pre-funded with 200 TEST. Most tests then deposit + fund before settling.
+async function deployEscrow(window) {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(BUYER, 'XCHAIN', '1000000');
+    h.seedBalance(BUYER, TICK, '200');
+    await h.deploy({
+        code: CODE, deployer: BUYER, contractAddress: ADDR,
+        params: [BUYER, SELLER, ARBITER, TICK, '200', String(window || 3)]
+    });
+}
+
+// Same-batch fund: deposit then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
+async function depositAndFund(amount) {
+    h.deposit(BUYER, ADDR, TICK, amount || '200');
+    return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER });
+}
+
+function settleTests() {
+    it('buyer releases funded escrow to the seller', async function () {
+        await deployEscrow();
+        assertSuccess(await depositAndFund());
+        assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
+
+        const r = await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: SELLER, tick: TICK, quantity: '200' } }]);
+        assertContractBalance(h.ledger, ADDR, TICK, '0');
+        assertBalance(h.ledger, SELLER, TICK, '200');
+        assertContractState(h.ledger, ADDR, 'status', 'RELEASED');
+    });
+
+    it('seller refunds the buyer', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        const r = await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: SELLER });
+        assertSuccess(r);
+        assertBalance(h.ledger, BUYER, TICK, '200'); // returned in full
+        assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
+    });
+
+    it('arbiter can release OR refund a dispute', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        const r = await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: ARBITER });
+        assertSuccess(r);
+        assertBalance(h.ledger, SELLER, TICK, '200');
+    });
+
+}
+
+function timeoutTests() {
+    it('buyer reclaims after the deadline via timeout()', async function () {
+        await deployEscrow(3);
+        await depositAndFund();
+        // before the deadline: rejected
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
+            'deadline not reached');
+        h.mineBlock(); h.mineBlock(); h.mineBlock(); // height 1 -> 4 >= deadline(4)
+        const r = await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER });
+        assertSuccess(r);
+        assertBalance(h.ledger, BUYER, TICK, '200');
+        assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
+    });
+
+    // Regression: the reclaim deadline is anchored at fund(), not deploy.
+    // When the deadline was set in initialize(), any deploy-to-funding delay
+    // ate the seller's window, and funding at/after the deploy-anchored
+    // deadline armed an escrow the buyer could timeout()-reclaim in the
+    // same block, bypassing the seller/arbiter settlement path entirely.
+    it('delayed funding still gives the seller the full reclaim window', async function () {
+        await deployEscrow(3); // deployed at height 1
+        // Negotiation drags on: 5 blocks pass before the buyer funds, well
+        // past the old deploy-anchored deadline (1 + 3 = 4).
+        for (let i = 0; i < 5; i++) h.mineBlock(); // height 6
+        assertSuccess(await depositAndFund());
+
+        // A just-funded escrow must NOT be instantly reclaimable.
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
+            'deadline not reached');
+
+        // The seller/arbiter settlement path stays alive for the full window...
+        h.mineBlock(); h.mineBlock(); // height 8 < deadline (6 + 3 = 9)
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
+            'deadline not reached');
+
+        // ...and reclaim opens exactly at fund_height + window.
+        h.mineBlock(); // height 9 >= deadline(9)
+        const r = await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER });
+        assertSuccess(r);
+        assertBalance(h.ledger, BUYER, TICK, '200');
+        assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
+    });
+}
+
+function custodyTests() {
+    it('fund() rejects a deposit one base unit short of a large amount', async function () {
         h = new E2EHarness(XChainVM);
         h.seedBalance(BUYER, 'XCHAIN', '1000000');
-        h.seedBalance(BUYER, TICK, '200');
-        await h.deploy({
-            code: CODE, deployer: BUYER, contractAddress: ADDR,
-            params: [BUYER, SELLER, ARBITER, TICK, '200', String(window || 3)]
-        });
+        h.seedBalance(BUYER, TICK, '2000000');
+        assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+            params: [BUYER, SELLER, ARBITER, TICK, '1000000', '3'] }));
+        assertReverted(await depositAndFund('999999.99999999'), 'insufficient deposit');
+        assertContractState(h.ledger, ADDR, 'status', 'INIT');
+        assertSuccess(await depositAndFund('0.00000001'));
+        assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
+    });
+
+    it('initialize() refuses a non-finite or non-plain amount', async function () {
+        for (const v of ['Infinity', 'NaN', '1e3', '0x10', '-5', '+5', '5.', '.5', '1.2.3', ' 5', '']) {
+            h = new E2EHarness(XChainVM);
+            h.seedBalance(BUYER, 'XCHAIN', '1000000');
+            const r = await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+                params: [BUYER, SELLER, ARBITER, TICK, v, '3'] });
+            assert.strictEqual(r.success, false, `amount ${JSON.stringify(v)} must not deploy`);
+        }
+    });
+}
+
+function cancelTests() {
+    it('buyer withdraws an underfunded deposit and the escrow closes', async function () {
+        await deployEscrow();
+        assertReverted(await depositAndFund('100'), 'insufficient deposit');
+        const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: '100' } }]);
+        assertBalance(h.ledger, BUYER, TICK, '200');
+        assertContractBalance(h.ledger, ADDR, TICK, '0');
+        assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+        assertReverted(await depositAndFund('200'), 'not awaiting funds');
+    });
+
+    it('reverts when nothing is held', async function () {
+        await deployEscrow();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+            'nothing to cancel');
+        assertContractState(h.ledger, ADDR, 'status', 'INIT');
+    });
+
+    it('is buyer-only', async function () {
+        await deployEscrow();
+        h.deposit(BUYER, ADDR, TICK, '100');
+        for (const who of [SELLER, ARBITER, STRANGER]) {
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: who }),
+                'not authorized');
+        }
+        assertContractState(h.ledger, ADDR, 'status', 'INIT');
+    });
+
+    it('is unavailable once funded or settled', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+            'not awaiting funds');
+        await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
+            'not awaiting funds');
+    });
+}
+
+function attackTests() {
+    attackFundingTests();
+    attackSettlementTests();
+}
+
+function attackFundingTests() {
+    it('fund() rejects an underfunded deposit (no trust in caller-supplied amount)', async function () {
+        await deployEscrow();
+        assertReverted(await depositAndFund('100'), 'insufficient deposit');
+        assertContractState(h.ledger, ADDR, 'status', 'INIT');
+    });
+}
+
+function attackSettlementTests() {
+    it('a stranger cannot release or refund', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: STRANGER }),
+            'not authorized');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: STRANGER }),
+            'not authorized');
+        assertContractState(h.ledger, ADDR, 'status', 'FUNDED'); // untouched
+    });
+
+    it('the seller cannot release to themselves; the buyer cannot refund to themselves', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: SELLER }),
+            'not authorized');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: BUYER }),
+            'not authorized');
+    });
+
+    it('double-settle is impossible: second settlement reverts on the status guard', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }));
+        // any further settlement attempt (by anyone, any path) is blocked
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }),
+            'not funded');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: ARBITER }),
+            'not funded');
+        assertContractBalance(h.ledger, ADDR, TICK, '0'); // no second payout
+    });
+
+    it('settling before funding reverts', async function () {
+        await deployEscrow();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }),
+            'not funded');
+    });
+
+    it('timeout() is buyer-only', async function () {
+        await deployEscrow(3);
+        await depositAndFund();
+        h.mineBlock(); h.mineBlock(); h.mineBlock();
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: SELLER }),
+            'not authorized');
+    });
+
+    it('fund() cannot re-arm a settled escrow', async function () {
+        await deployEscrow();
+        await depositAndFund();
+        await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER }),
+            'not awaiting funds');
+    });
+}
+
+function deployValidationTests() {
+    async function deployWith(params) {
+        const bad = new E2EHarness(XChainVM);
+        bad.seedBalance(BUYER, 'XCHAIN', '1000000');
+        return bad.deploy({ code: CODE, deployer: BUYER, contractAddress: 'C:BTC:2', params: params });
     }
 
-    // Same-batch fund: deposit then fund(). Mirrors BATCH(DEPOSIT, EXECUTE("fund")).
-    async function depositAndFund(amount) {
-        h.deposit(BUYER, ADDR, TICK, amount || '200');
-        return h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER });
-    }
+    it('rejects a non-positive amount', async function () {
+        const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '0', '3']);
+        assert.strictEqual(r.success, false, 'deploy with amount=0 should revert in initialize');
+    });
+
+    // Integer-shape gate on deadlineBlocks. It is raw deployer text, and a
+    // radix-less parseInt MEASURES it as something else entirely: '1e9' is 1,
+    // '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5. The old
+    // `parseInt(x) > 0` check then passed on the mis-measured value and
+    // initialize() stored it, so a seller reading '1e9' off the DEPLOY action
+    // as a ~19,000-year protection window actually got a 1-block one: the
+    // buyer could fund(), take delivery, and reclaim the whole balance via
+    // timeout() one block later, bypassing the settlement path entirely.
+    it('rejects a deadlineBlocks a radix-less parseInt would silently re-measure', async function () {
+        const BAD = ['1e9', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
+                     '+7', '', 'abc', '-', 'Infinity', 'NaN'];
+        for (const v of BAD) {
+            assert.strictEqual(
+                (await deployWith([BUYER, SELLER, ARBITER, TICK, '200', v])).success, false,
+                `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
+        }
+    });
+
+    it('rejects a deadlineBlocks outside its range and stores an accepted one verbatim', async function () {
+        assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '0'])).success, false);
+        assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '-10'])).success, false);
+        assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000001'])).success, false);
+        assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000000'])).success, true);
+
+        // '10' means 10 blocks in state, not the 1 a parseInt of '1e1' gave.
+        await deployEscrow(10);
+        assertContractState(h.ledger, ADDR, 'window', '10');
+    });
+}
+
+(XChainVM ? describe : describe.skip)('Template: escrow', function () {
+    this.timeout(0);
 
     describe('happy paths', function () {
-        it('buyer releases funded escrow to the seller', async function () {
-            await deployEscrow();
-            assertSuccess(await depositAndFund());
-            assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
-
-            const r = await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: SELLER, tick: TICK, quantity: '200' } }]);
-            assertContractBalance(h.ledger, ADDR, TICK, '0');
-            assertBalance(h.ledger, SELLER, TICK, '200');
-            assertContractState(h.ledger, ADDR, 'status', 'RELEASED');
-        });
-
-        it('seller refunds the buyer', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            const r = await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: SELLER });
-            assertSuccess(r);
-            assertBalance(h.ledger, BUYER, TICK, '200'); // returned in full
-            assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
-        });
-
-        it('arbiter can release OR refund a dispute', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            const r = await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: ARBITER });
-            assertSuccess(r);
-            assertBalance(h.ledger, SELLER, TICK, '200');
-        });
-
-        it('buyer reclaims after the deadline via timeout()', async function () {
-            await deployEscrow(3);
-            await depositAndFund();
-            // before the deadline: rejected
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
-                'deadline not reached');
-            h.mineBlock(); h.mineBlock(); h.mineBlock(); // height 1 -> 4 >= deadline(4)
-            const r = await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER });
-            assertSuccess(r);
-            assertBalance(h.ledger, BUYER, TICK, '200');
-            assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
-        });
-
-        // Regression: the reclaim deadline is anchored at fund(), not deploy.
-        // When the deadline was set in initialize(), any deploy-to-funding delay
-        // ate the seller's window, and funding at/after the deploy-anchored
-        // deadline armed an escrow the buyer could timeout()-reclaim in the
-        // same block, bypassing the seller/arbiter settlement path entirely.
-        it('delayed funding still gives the seller the full reclaim window', async function () {
-            await deployEscrow(3); // deployed at height 1
-            // Negotiation drags on: 5 blocks pass before the buyer funds, well
-            // past the old deploy-anchored deadline (1 + 3 = 4).
-            for (let i = 0; i < 5; i++) h.mineBlock(); // height 6
-            assertSuccess(await depositAndFund());
-
-            // A just-funded escrow must NOT be instantly reclaimable.
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
-                'deadline not reached');
-
-            // The seller/arbiter settlement path stays alive for the full window...
-            h.mineBlock(); h.mineBlock(); // height 8 < deadline (6 + 3 = 9)
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER }),
-                'deadline not reached');
-
-            // ...and reclaim opens exactly at fund_height + window.
-            h.mineBlock(); // height 9 >= deadline(9)
-            const r = await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: BUYER });
-            assertSuccess(r);
-            assertBalance(h.ledger, BUYER, TICK, '200');
-            assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
-        });
+        settleTests();
+        timeoutTests();
     });
 
     // The custody check is exact: a tolerant gte admits up to 1e-12 relative short,
     // which on a 1,000,000 amount is 100 base units the payee would never receive.
-    describe('fund() custody check is exact (no mathjs tolerance)', function () {
-        it('fund() rejects a deposit one base unit short of a large amount', async function () {
-            h = new E2EHarness(XChainVM);
-            h.seedBalance(BUYER, 'XCHAIN', '1000000');
-            h.seedBalance(BUYER, TICK, '2000000');
-            assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
-                params: [BUYER, SELLER, ARBITER, TICK, '1000000', '3'] }));
-            assertReverted(await depositAndFund('999999.99999999'), 'insufficient deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-            assertSuccess(await depositAndFund('0.00000001'));
-            assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
-        });
+    describe('fund() custody check is exact (no mathjs tolerance)', custodyTests);
 
-        it('initialize() refuses a non-finite or non-plain amount', async function () {
-            for (const v of ['Infinity', 'NaN', '1e3', '0x10', '-5', '+5', '5.', '.5', '1.2.3', ' 5', '']) {
-                h = new E2EHarness(XChainVM);
-                h.seedBalance(BUYER, 'XCHAIN', '1000000');
-                const r = await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
-                    params: [BUYER, SELLER, ARBITER, TICK, v, '3'] });
-                assert.strictEqual(r.success, false, `amount ${JSON.stringify(v)} must not deploy`);
-            }
-        });
-    });
+    describe('cancel() while INIT', cancelTests);
 
-    describe('cancel() while INIT', function () {
-        it('buyer withdraws an underfunded deposit and the escrow closes', async function () {
-            await deployEscrow();
-            assertReverted(await depositAndFund('100'), 'insufficient deposit');
-            const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER });
-            assertSuccess(r);
-            assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: '100' } }]);
-            assertBalance(h.ledger, BUYER, TICK, '200');
-            assertContractBalance(h.ledger, ADDR, TICK, '0');
-            assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
-            assertReverted(await depositAndFund('200'), 'not awaiting funds');
-        });
+    describe('attacks we considered', attackTests);
 
-        it('reverts when nothing is held', async function () {
-            await deployEscrow();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
-                'nothing to cancel');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        it('is buyer-only', async function () {
-            await deployEscrow();
-            h.deposit(BUYER, ADDR, TICK, '100');
-            for (const who of [SELLER, ARBITER, STRANGER]) {
-                assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: who }),
-                    'not authorized');
-            }
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        it('is unavailable once funded or settled', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
-                'not awaiting funds');
-            await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER }),
-                'not awaiting funds');
-        });
-    });
-
-    describe('attacks we considered', function () {
-        it('fund() rejects an underfunded deposit (no trust in caller-supplied amount)', async function () {
-            await deployEscrow();
-            assertReverted(await depositAndFund('100'), 'insufficient deposit');
-            assertContractState(h.ledger, ADDR, 'status', 'INIT');
-        });
-
-        it('a stranger cannot release or refund', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: STRANGER }),
-                'not authorized');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: STRANGER }),
-                'not authorized');
-            assertContractState(h.ledger, ADDR, 'status', 'FUNDED'); // untouched
-        });
-
-        it('the seller cannot release to themselves; the buyer cannot refund to themselves', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: SELLER }),
-                'not authorized');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: BUYER }),
-                'not authorized');
-        });
-
-        it('double-settle is impossible: second settlement reverts on the status guard', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }));
-            // any further settlement attempt (by anyone, any path) is blocked
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }),
-                'not funded');
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: ARBITER }),
-                'not funded');
-            assertContractBalance(h.ledger, ADDR, TICK, '0'); // no second payout
-        });
-
-        it('settling before funding reverts', async function () {
-            await deployEscrow();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER }),
-                'not funded');
-        });
-
-        it('timeout() is buyer-only', async function () {
-            await deployEscrow(3);
-            await depositAndFund();
-            h.mineBlock(); h.mineBlock(); h.mineBlock();
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'timeout', params: [], caller: SELLER }),
-                'not authorized');
-        });
-
-        it('fund() cannot re-arm a settled escrow', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            await h.execute({ contractAddress: ADDR, method: 'release', params: [], caller: BUYER });
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: BUYER }),
-                'not awaiting funds');
-        });
-    });
-
-    describe('deploy-time validation', function () {
-        async function deployWith(params) {
-            const bad = new E2EHarness(XChainVM);
-            bad.seedBalance(BUYER, 'XCHAIN', '1000000');
-            return bad.deploy({ code: CODE, deployer: BUYER, contractAddress: 'C:BTC:2', params: params });
-        }
-
-        it('rejects a non-positive amount', async function () {
-            const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '0', '3']);
-            assert.strictEqual(r.success, false, 'deploy with amount=0 should revert in initialize');
-        });
-
-        // Integer-shape gate on deadlineBlocks. It is raw deployer text, and a
-        // radix-less parseInt MEASURES it as something else entirely: '1e9' is 1,
-        // '0x10' is 16, '7abc' is 7, ' 7' is 7, '5.99' is 5. The old
-        // `parseInt(x) > 0` check then passed on the mis-measured value and
-        // initialize() stored it, so a seller reading '1e9' off the DEPLOY action
-        // as a ~19,000-year protection window actually got a 1-block one: the
-        // buyer could fund(), take delivery, and reclaim the whole balance via
-        // timeout() one block later, bypassing the settlement path entirely.
-        it('rejects a deadlineBlocks a radix-less parseInt would silently re-measure', async function () {
-            const BAD = ['1e9', '0x10', '0b101', '0o17', '7abc', ' 7', '5.99', '1_000',
-                         '+7', '', 'abc', '-', 'Infinity', 'NaN'];
-            for (const v of BAD) {
-                assert.strictEqual(
-                    (await deployWith([BUYER, SELLER, ARBITER, TICK, '200', v])).success, false,
-                    `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
-            }
-        });
-
-        it('rejects a deadlineBlocks outside its range and stores an accepted one verbatim', async function () {
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '0'])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '-10'])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000001'])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000000'])).success, true);
-
-            // '10' means 10 blocks in state, not the 1 a parseInt of '1e1' gave.
-            await deployEscrow(10);
-            assertContractState(h.ledger, ADDR, 'window', '10');
-        });
-    });
+    describe('deploy-time validation', deployValidationTests);
 });
