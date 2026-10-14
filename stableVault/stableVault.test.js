@@ -22,6 +22,7 @@ const registerFixedNotationAmountTests = require('./stable_vault_test/fixed_nota
 const registerDeployValidationTests = require('./stable_vault_test/deploy_validation');
 const registerEmptyTokenInfoTests = require('./stable_vault_test/empty_token_info');
 const registerExactCustodyTests = require('./stable_vault_test/exact_custody');
+const registerWithheldOraclePriceTests = require('./stable_vault_test/withheld_oracle_prices');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
@@ -165,6 +166,7 @@ function registerDustPayoutTests(ctx) {
     registerDeployValidationTests(ctx);
     registerEmptyTokenInfoTests(ctx);
     registerExactCustodyTests(ctx);
+    registerWithheldOraclePriceTests(ctx);
 
     registerDustPayoutTests(ctx);
 });

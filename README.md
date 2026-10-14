@@ -122,7 +122,7 @@ The generated header and the printed bind hints repeat this whenever a
 |---|---|---|---|---|
 | **Escrow** | [escrow.js](./escrow/escrow.js) | [README](./escrow/README.md) | [tests](./escrow/escrow.test.js) | The custody baseline: DEPOSIT funding verified on-chain, conditional release/refund, an arbiter, and a deadline so funds can't be locked forever. The buyer can `cancel()` while still in `INIT` to recover an early deposit, and `amount` must be a plain decimal. |
 | **Vesting** | [vesting.js](./vesting/vesting.js) | [README](./vesting/README.md) | [tests](./vesting/vesting.test.js) | Linear release with a cliff, partial-claim accounting, and optional revocation. |
-| **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds, plus a **contract that issues its own token** and mints it to buyers. |
+| **Crowdsale** | [crowdsale.js](./crowdsale/crowdsale.js) | [README](./crowdsale/README.md) | [tests](./crowdsale/crowdsale.test.js) | A capped raise with a soft cap, deadline, and refunds, plus a **contract that issues its own token**: it pre-mints the full sale supply into its own custody at deploy, locks further minting, and sends each buyer's allocation on claim. |
 | **AMM** | [amm.js](./amm/amm.js) | [README](./amm/README.md) | [tests](./amm/amm.test.js) | A constant-product market maker. LP positions are **real, tradeable ticks**; 0.3% fee; slippage protection; the `k`-invariant is fuzz-tested. |
 | **Treasury** | [treasury.js](./treasury/treasury.js) | [README](./treasury/README.md) | [tests](./treasury/treasury.test.js) | A poll-governed treasury hardened against low-turnout governance raids: binding `VOTE` polls, a timelock between "passed" and "paid", and a guardian veto. |
 | **Card dispenser** | [cardDispenser.js](./cardDispenser/cardDispenser.js) | [README](./cardDispenser/README.md) | [tests](./cardDispenser/cardDispenser.test.js) | A random card-pack dispenser backed by the contract's own token inventory (no mint): stock-weighted rarity, deterministic on-chain randomness and its limits. |
@@ -181,15 +181,28 @@ XChain has **no `msg.value`**, so a contract call carries no tokens. Instead:
 
 The two commands still settle independently: a `BATCH` is **not** atomic, so an
 `EXECUTE` that fails does not undo the `DEPOSIT` before it. The deposit stays in
-the contract's custody and is **not recoverable by its sender**. Where a template
-attributes tokens by balance delta (`amm`, `crowdsale`, `stableVault`,
-`cardDispenser`, the auctions) it is folded into the next caller's credited
-amount; where a template instead verifies an absolute balance (`escrow`,
-`escrowDelivery`, `vesting`) it sits untracked until settlement sweeps the
-contract's whole balance to whoever that template pays. Each template's own README
-names its case. Size the call to clear before batching the deposit behind
-it. ("Atomic" in these templates means the intra-`EXECUTE` scope, where a method's
-state writes and its deferred emissions commit or roll back together.)
+the contract's custody, and there is **no generic way for its sender to pull it
+back**. What happens to it depends on the template:
+
+- Where a template attributes tokens by balance delta (`amm`, `crowdsale`,
+  `stableVault`, `cardDispenser`, the auctions), it is folded into the next
+  caller's credited amount.
+- `escrow` and `escrowDelivery` verify an absolute balance. While the escrow is
+  still `INIT`, the buyer can `cancel()` to take back everything the contract
+  holds of the configured tick. Once funded, the deposit sits untracked until
+  settlement sweeps the contract's whole balance of that tick to whoever the
+  escrow pays; a deposit made after settlement stays in custody for good.
+- `vesting` also verifies an absolute balance, but it never sweeps. While the
+  grant is still `INIT`, the grantor can `cancel()` to take back everything the
+  contract holds of the configured tick. Once `fund()` has run, it pays exact
+  floored amounts that sum to `total`, so any surplus above `total` and any later
+  deposit stay in custody for good, as does any other tick at any time. Deposit
+  exactly `total`.
+
+Each template's own README names its case. Size the call to clear before
+batching the deposit behind it. ("Atomic" in these templates means the
+intra-`EXECUTE` scope, where a method's state writes and its deferred emissions
+commit or roll back together.)
 
 A safe contract **never trusts a caller-supplied amount**: it reads its own balance
 with `xchain.getBalance(xchain.getContractAddress(), tick)`. Every template here
