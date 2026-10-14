@@ -79,26 +79,29 @@ module.exports = {
 const OWNER = 'owner', STRANGER = 'stranger', RECIPIENT = 'recipient';
 const ADDR = 'C:BTC:1', TICK = 'TEST';
 
+const run = (h, method, params, caller) => h.execute({ contractAddress: ADDR, method, params, caller });
+
+let h;
+
+async function deployVault() {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(OWNER, 'XCHAIN', '1000000');
+    h.seedBalance(STRANGER, 'XCHAIN', '1000000');
+    h.seedBalance(OWNER, TICK, '500');
+    await h.deploy({ code: VAULT, deployer: OWNER, contractAddress: ADDR, params: [OWNER, TICK] });
+}
+
+async function fund(amount) {
+    h.deposit(OWNER, ADDR, TICK, amount || '500');
+}
+
 (XChainVM ? describe : describe.skip)('Patterns: composed vault (helpers execute)', function () {
     this.timeout(0);
-    let h;
-
-    async function deployVault() {
-        h = new E2EHarness(XChainVM);
-        h.seedBalance(OWNER, 'XCHAIN', '1000000');
-        h.seedBalance(STRANGER, 'XCHAIN', '1000000');
-        h.seedBalance(OWNER, TICK, '500');
-        await h.deploy({ code: VAULT, deployer: OWNER, contractAddress: ADDR, params: [OWNER, TICK] });
-    }
-
-    async function fund(amount) {
-        h.deposit(OWNER, ADDR, TICK, amount || '500');
-    }
 
     it('happy path: owner withdraws the held balance (safe-transfer + state-machine)', async function () {
         await deployVault();
         await fund('500');
-        const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER });
+        const r = await run(h, 'withdraw', [RECIPIENT], OWNER);
         assertSuccess(r);
         assertEmittedActions(r, [{ action: 'SEND', params: { destination: RECIPIENT, tick: TICK, quantity: '500' } }]);
         assertContractBalance(h.ledger, ADDR, TICK, '0');
@@ -109,34 +112,30 @@ const ADDR = 'C:BTC:1', TICK = 'TEST';
     it('onlyOwner: a stranger cannot withdraw', async function () {
         await deployVault();
         await fund('500');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [STRANGER], caller: STRANGER }),
-            'not the owner');
+        assertReverted(await run(h, 'withdraw', [STRANGER], STRANGER), 'not the owner');
         assertContractBalance(h.ledger, ADDR, TICK, '500'); // untouched
     });
 
     it('whenNotPaused: paused vault blocks withdraw, unpause restores it', async function () {
         await deployVault();
         await fund('500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'paused');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'unpause', params: [], caller: OWNER }));
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }));
+        assertSuccess(await run(h, 'pause', [], OWNER));
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'paused');
+        assertSuccess(await run(h, 'unpause', [], OWNER));
+        assertSuccess(await run(h, 'withdraw', [RECIPIENT], OWNER));
         assertBalance(h.ledger, RECIPIENT, TICK, '500');
     });
 
     it('requireStatus: withdraw is once-only (CLOSED blocks a second sweep)', async function () {
         await deployVault();
         await fund('500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'invalid state');
+        assertSuccess(await run(h, 'withdraw', [RECIPIENT], OWNER));
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'invalid state');
     });
 
     it('requirePositive: withdraw with nothing deposited reverts', async function () {
         await deployVault();
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'nothing to withdraw');
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'nothing to withdraw');
     });
 
     it('requireAddress: initialize rejects an empty owner', async function () {
@@ -292,23 +291,68 @@ module.exports = {
 
 const ARBITER = 'arbiter';
 
+// `mode` is passed through verbatim, never defaulted with `||`: an empty mode is
+// one of the cases under test, and a falsy default would quietly deploy 'STRICT'
+// instead and turn that assertion into a test of nothing.
+async function deployRoleVault(mode) {
+    h = new E2EHarness(XChainVM);
+    for (const a of [OWNER, ARBITER, STRANGER]) h.seedBalance(a, 'XCHAIN', '1000000');
+    h.seedBalance(OWNER, TICK, '1000');
+    return h.deploy({
+        code: ROLEVAULT, deployer: OWNER, contractAddress: ADDR,
+        params: [OWNER, ARBITER, TICK, mode === undefined ? 'STRICT' : mode]
+    });
+}
+
+async function snapshotForms() {
+    await deployRoleVault();
+    assertSuccess(await run(h, 'snapshot', [], OWNER));
+    assertContractState(h.ledger, ADDR, 'sawOwner', 'true');
+    assertContractState(h.ledger, ADDR, 'sawPaused', 'false');
+
+    assertSuccess(await run(h, 'snapshot', [], STRANGER));
+    assertContractState(h.ledger, ADDR, 'sawOwner', 'false');
+
+    assertSuccess(await run(h, 'pause', [], ARBITER));
+    assertSuccess(await run(h, 'snapshot', [], OWNER));
+    assertContractState(h.ledger, ADDR, 'sawPaused', 'true');
+}
+
+// A tolerant gte reads 100000 as covering 100000.00000001 (1e-12 relative), so
+// pin that isAtLeastExact and requireHeld decide by the exact sign, per base unit.
+async function atLeastExact() {
+    await deployRoleVault();
+    const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
+        ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true'],
+        ['0', 'Infinity', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false'], ['0', 'NaN', 'false']];
+    for (const [a, b, want] of CASES) {
+        assertSuccess(await run(h, 'atLeast', [a, b], OWNER));
+        assertContractState(h.ledger, ADDR, 'atLeast', want);
+    }
+    h.seedBalance(OWNER, TICK, '200000');
+    h.deposit(OWNER, ADDR, TICK, '100000');
+    assertReverted(await run(h, 'settle', ['100000.00000001'], ARBITER), 'insufficient contract balance of ' + TICK);
+    assertSuccess(await run(h, 'settle', ['100000'], ARBITER));
+}
+
+async function depositedSinceReserve() {
+    await deployRoleVault();
+    h.deposit(OWNER, ADDR, TICK, '500');
+    // No reserve has ever been written, so the helper's `reserve || '0'`
+    // default is what makes this the full held balance.
+    assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+    assertContractState(h.ledger, ADDR, 'fresh', '500');
+
+    await deployRoleVault();
+    h.deposit(OWNER, ADDR, TICK, '200');
+    assertSuccess(await run(h, 'mark', [], OWNER));
+    h.deposit(OWNER, ADDR, TICK, '300');
+    assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+    assertContractState(h.ledger, ADDR, 'fresh', '300');
+}
+
 (XChainVM ? describe : describe.skip)('Patterns: role vault (the branch-form and multi-state helpers)', function () {
     this.timeout(0);
-    let h;
-
-    // `mode` is passed through verbatim, never defaulted with `||`: an empty mode is
-    // one of the cases under test, and a falsy default would quietly deploy 'STRICT'
-    // instead and turn that assertion into a test of nothing.
-    async function deployRoleVault(mode) {
-        h = new E2EHarness(XChainVM);
-        for (const a of [OWNER, ARBITER, STRANGER]) h.seedBalance(a, 'XCHAIN', '1000000');
-        h.seedBalance(OWNER, TICK, '1000');
-        return h.deploy({
-            code: ROLEVAULT, deployer: OWNER, contractAddress: ADDR,
-            params: [OWNER, ARBITER, TICK, mode === undefined ? 'STRICT' : mode]
-        });
-    }
-
     it('requireEnum: a mode outside the allowed set is rejected at deploy', async function () {
         assertSuccess(await deployRoleVault('STRICT'));
         assertSuccess(await deployRoleVault('LENIENT'));
@@ -316,81 +360,34 @@ const ARBITER = 'arbiter';
         assert.strictEqual((await deployRoleVault('')).success, false, 'an empty mode should not deploy');
     });
 
-    it('isOwner / isPaused: the non-throwing forms report the caller and the flag', async function () {
-        await deployRoleVault();
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
-        assertContractState(h.ledger, ADDR, 'sawOwner', 'true');
-        assertContractState(h.ledger, ADDR, 'sawPaused', 'false');
-
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: STRANGER }));
-        assertContractState(h.ledger, ADDR, 'sawOwner', 'false');
-
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
-        assertContractState(h.ledger, ADDR, 'sawPaused', 'true');
-    });
+    it('isOwner / isPaused: the non-throwing forms report the caller and the flag', snapshotForms);
 
     it('onlyRole: the role holder passes and the owner does not inherit the role', async function () {
         await deployRoleVault();
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER }),
-            'not authorized (arbiter)');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: STRANGER }),
-            'not authorized (arbiter)');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
+        assertReverted(await run(h, 'pause', [], OWNER), 'not authorized (arbiter)');
+        assertReverted(await run(h, 'pause', [], STRANGER), 'not authorized (arbiter)');
+        assertSuccess(await run(h, 'pause', [], ARBITER));
     });
 
     it('requireHeld: settling more than the contract holds reverts', async function () {
         await deployRoleVault();
         h.deposit(OWNER, ADDR, TICK, '400');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }),
-            'insufficient contract balance of ' + TICK);
+        assertReverted(await run(h, 'settle', ['500'], ARBITER), 'insufficient contract balance of ' + TICK);
         assertContractState(h.ledger, ADDR, 'status', 'OPEN');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['400'], caller: ARBITER }));
+        assertSuccess(await run(h, 'settle', ['400'], ARBITER));
         assertContractState(h.ledger, ADDR, 'status', 'CLOSED');
     });
 
-    // A tolerant gte reads 100000 as covering 100000.00000001 (1e-12 relative), so
-    // pin that isAtLeastExact and requireHeld decide by the exact sign, per base unit.
-    it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', async function () {
-        await deployRoleVault();
-        const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
-            ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true'],
-            ['0', 'Infinity', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false'], ['0', 'NaN', 'false']];
-        for (const [a, b, want] of CASES) {
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'atLeast', params: [a, b], caller: OWNER }));
-            assertContractState(h.ledger, ADDR, 'atLeast', want);
-        }
-        h.seedBalance(OWNER, TICK, '200000');
-        h.deposit(OWNER, ADDR, TICK, '100000');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000.00000001'], caller: ARBITER }),
-            'insufficient contract balance of ' + TICK);
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000'], caller: ARBITER }));
-    });
+    it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', atLeastExact);
 
-    it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', async function () {
-        await deployRoleVault();
-        h.deposit(OWNER, ADDR, TICK, '500');
-        // No reserve has ever been written, so the helper's `reserve || '0'`
-        // default is what makes this the full held balance.
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertContractState(h.ledger, ADDR, 'fresh', '500');
-
-        await deployRoleVault();
-        h.deposit(OWNER, ADDR, TICK, '200');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'mark', params: [], caller: OWNER }));
-        h.deposit(OWNER, ADDR, TICK, '300');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertContractState(h.ledger, ADDR, 'fresh', '300');
-    });
+    it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', depositedSinceReserve);
 
     it('requireStatusIn: OPEN and HELD both settle, CLOSED does not', async function () {
         await deployRoleVault();
         h.deposit(OWNER, ADDR, TICK, '500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'hold', params: [], caller: ARBITER }));
+        assertSuccess(await run(h, 'hold', [], ARBITER));
         assertContractState(h.ledger, ADDR, 'status', 'HELD');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['1'], caller: ARBITER }),
-            'CLOSED not in [OPEN, HELD]');
+        assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+        assertReverted(await run(h, 'settle', ['1'], ARBITER), 'CLOSED not in [OPEN, HELD]');
     });
 });
-
