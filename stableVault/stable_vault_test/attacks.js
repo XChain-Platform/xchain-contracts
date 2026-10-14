@@ -6,7 +6,7 @@ module.exports = function registerAttackTests(ctx) {
         setPrice, depositColl, borrow, repay, withdraw, liquidate
     } = ctx;
 
-    describe('attacks we considered', function () {
+    function registerLiquidationAttacks() {
         it('liquidating a healthy vault reverts', async function () {
             await deployVault();
             setPrice('100');
@@ -37,7 +37,9 @@ module.exports = function registerAttackTests(ctx) {
             ctx.h.seedBalance(LIQ, STABLE, '200');
             assertReverted(await liquidate(LIQ, BOB, '200'), 'vault has no debt');
         });
+    }
 
+    function registerStaleOracleAttacks() {
         it('a stale oracle blocks borrow/withdraw/liquidate but never deposit/repay', async function () {
             await deployVault();
             setPrice('100');
@@ -88,7 +90,9 @@ module.exports = function registerAttackTests(ctx) {
                 { price: '100', roundNumber: 3, timestamp: ctx.h.ledger.blockTimestamp - 11 }, 0, {});
             assertReverted(await borrow(ALICE, '10'), 'oracle price is stale');
         });
+    }
 
+    function registerEmptyVaultAttacks() {
         it('a bare string price falls back to the global snapshot age alone', async function () {
             await deployVault();
             ctx.h.ledger.seedOracle(ctx.PAIR, '100', 0, {});
@@ -107,5 +111,11 @@ module.exports = function registerAttackTests(ctx) {
             const r = await ctx.h.execute({ contractAddress: ADDR, method: 'deposit', params: [], caller: ALICE });
             assertReverted(r, 'no collateral received');
         });
+    }
+
+    describe('attacks we considered', function () {
+        registerLiquidationAttacks();
+        registerStaleOracleAttacks();
+        registerEmptyVaultAttacks();
     });
 };
