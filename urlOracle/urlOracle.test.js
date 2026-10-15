@@ -230,3 +230,6 @@ function registerOnPrice() {
     registerRequestPrice();
     registerOnPrice();
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./urlOracle_test/invariants');
