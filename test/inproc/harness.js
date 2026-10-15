@@ -46,6 +46,7 @@ function fixed(b) {
 
 function tolerantCompare(a, b) {
     const x = bn(a), y = bn(b);
+    if (!x.isFinite() || !y.isFinite()) return x.gt(y) ? 1 : (x.lt(y) ? -1 : 0);
     // Decimal methods compare exactly; mathjs max() would apply its own epsilon.
     const larger = x.abs().gte(y.abs()) ? x.abs() : y.abs();
     const rel = larger.times('1e-12');
