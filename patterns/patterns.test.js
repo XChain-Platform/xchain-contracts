@@ -273,3 +273,6 @@ describe('safe-transfer exact payout recommendation', function () {
         assert.ok(/!isAtLeastExact\(xchain, '0', amount\)/.test(source));
     });
 });
+
+// Seeded invariant suite for the helpers on the in-process harness (runs without the VM sibling).
+require('./patterns_test/invariants');
