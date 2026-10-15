@@ -351,3 +351,6 @@ function registerDeployValidation() {
     registerAttacks();
     registerDeployValidation();
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./escrowDelivery_test/invariants');
