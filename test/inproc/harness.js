@@ -46,8 +46,11 @@ function fixed(b) {
 
 function tolerantCompare(a, b) {
     const x = bn(a), y = bn(b);
-    const larger = M.max(x.abs(), y.abs());
-    const band = M.max(larger.times('1e-12'), M.bignumber('1e-15'));
+    // Decimal methods compare exactly; mathjs max() would apply its own epsilon.
+    const larger = x.abs().gte(y.abs()) ? x.abs() : y.abs();
+    const rel = larger.times('1e-12');
+    const floor = M.bignumber('1e-15');
+    const band = rel.gte(floor) ? rel : floor;
     if (x.minus(y).abs().lte(band)) return 0;
     return x.gt(y) ? 1 : -1;
 }
