@@ -101,7 +101,7 @@ discard the cursor advance (state writes only commit on success).
 |---|---|---|
 | `initialize(maker, coinPair, strike, side, tick, amount, settleTime, deadlineBlocks)` | deployer | Immutable terms; `settleTime` must be in the future; status → `INIT`. |
 | `fund()` | maker (BATCH after DEPOSIT) | Escrows the stake; status → `OPEN`. |
-| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair; anchors cursor + void deadline; status → `MATCHED`. |
+| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair whose timestamp is still before `settleTime`; anchors cursor + void deadline; status → `MATCHED`. |
 | `settle()` | anyone | See table above. |
 | `cancel()` | maker | Reclaims the stake while unmatched. |
 | `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match. The guard reads the cursor-to-tip range, capped like `settle()`'s walk; if the cap stops it short it refuses and asks for a `settle()` call to page the cursor forward. |
@@ -147,6 +147,11 @@ translation adds its own surface:
   so rounds finalized before the match can never decide the bet (their
   consensus timestamps predate it). The current round stays in scope as slack
   for clock skew between round consensus time and block time.
+- **Sniping a match after the deciding round is published.** Round timestamps
+  can run ahead of block time, so block time < `settleTime` alone does not prove
+  the outcome is open. The scan starts at the tip, so `accept()` also requires the
+  tip's timestamp to be before `settleTime` (`settle round already published`);
+  otherwise a taker could match a bet whose deciding price is already public.
 - **Gas exhaustion on a long round backlog.** The `settle()` walk is capped at
   200 `getPriceAtRound` reads per call (each a metered VM_STATE-class charge)
   and the cursor persists between calls, so an arbitrarily long stretch of

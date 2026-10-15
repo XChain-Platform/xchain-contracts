@@ -183,3 +183,6 @@ function registerExactPayoutGuardTests(context) {
     registerDeployValidationTests(context);
     registerExactPayoutGuardTests(context);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./price_bet_timed_test/invariants');

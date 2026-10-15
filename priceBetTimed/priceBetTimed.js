@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.4.1'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -198,8 +198,10 @@ module.exports = {
     // liveness deadline AND the scan cursor: rounds already finalized at the
     // match can never qualify (their timestamps predate this block, which
     // predates settleTime), so the scan starts at the round current NOW. The
-    // current round itself stays in scope (cursor = its number, not +1) as
-    // slack for any clock skew between round consensus time and block time.
+    // current round itself stays in scope (cursor = its number, not +1), and
+    // because the scan reads it first, a tip whose timestamp already reaches
+    // settleTime is the deciding round published before the match: accept()
+    // refuses it, the same rule priceBet applies to its settle round.
     accept: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'bet not open');
 
@@ -231,6 +233,13 @@ module.exports = {
             !roundOutsideWindow(xchain, xchain.state.get('coinPair'), latest.roundNumber),
             'tip round is outside the retrievable oracle window'
         );
+        // Round timestamps can run ahead of block time (clock skew, non-monotonic BTC
+        // header times), so block time < settleTime does not prove the outcome is
+        // open. The tip is the first round settle() reads; at/after settleTime its
+        // price is already public and a match would be a free option on the maker's
+        // stake.
+        xchain.require(latest.timestamp < parseInt(xchain.state.get('settleTime')),
+            'settle round already published');
         var cursor = latest.roundNumber;
 
         xchain.state.set('taker', taker);
