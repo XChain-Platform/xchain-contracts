@@ -5,7 +5,7 @@
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
-// Two modelling choices sit on top of test/inproc/harness.js, both taken from the
+// Two modelling choices sit on top of test/helpers/harness.js, both taken from the
 // repo's own documentation of the VM:
 //   - a SEND whose quantity normalises to exactly zero is a valid SEND that moves
 //     nothing (cardDispenser.js, englishAuction.js), so it is skipped instead of
@@ -19,7 +19,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness, rng, M, bn, fixed, roundHalfUp } = require('../../test/inproc/harness.js');
+const { available, Harness, rng, M, bn, fixed, roundHalfUp } = require('../../test/helpers/harness.js');
 
 const CODE = fs.readFileSync(path.join(__dirname, '..', 'priceBet.js'), 'utf8');
 const ADDR = 'C:BTC:1';

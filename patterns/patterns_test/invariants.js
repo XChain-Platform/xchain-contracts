@@ -16,7 +16,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness, rng, bn } = require('../../test/inproc/harness.js');
+const { available, Harness, rng, bn } = require('../../test/helpers/harness.js');
 
 // The shared harness builds its tolerance band with mathjs max(), which is itself
 // tolerance-aware: near zero it returns 1e-12 x larger instead of the 1e-15 floor,

@@ -10,7 +10,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness, rng } = require('../../test/inproc/harness.js');
+const { available, Harness, rng } = require('../../test/helpers/harness.js');
 
 const CODE = fs.readFileSync(path.join(__dirname, '..', 'escrow.js'), 'utf8');
 const ADDR = 'C:BTC:1';

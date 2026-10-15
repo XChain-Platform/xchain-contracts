@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// test/inproc/harness.js: in-process model of the contract API for property tests
+// test/helpers/harness.js: in-process model of the contract API for property tests
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //

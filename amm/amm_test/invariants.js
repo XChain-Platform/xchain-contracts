@@ -10,7 +10,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness: BaseHarness, rng, bn } = require('../../test/inproc/harness.js');
+const { available, Harness: BaseHarness, rng, bn } = require('../../test/helpers/harness.js');
 // The shared harness picks its tolerance band with mathjs M.max, which is itself
 // tolerant, so for operands below about 1e-15 it returns 1e-12 x larger instead of
 // the documented max(1e-12 x larger, 1e-15) floor. This subclass swaps in the

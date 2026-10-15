@@ -17,7 +17,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness, rng, bn } = require('../../test/inproc/harness.js');
+const { available, Harness, rng, bn } = require('../../test/helpers/harness.js');
 
 const CODE = fs.readFileSync(path.join(__dirname, '..', 'treasury.js'), 'utf8');
 const ADDR = 'C:BTC:1';

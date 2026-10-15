@@ -10,7 +10,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness: BaseHarness, rng, bn } = require('../../test/inproc/harness.js');
+const { available, Harness: BaseHarness, rng, M, bn } = require('../../test/helpers/harness.js');
 // The shared harness picks its tolerance band with mathjs M.max, which is itself
 // tolerant, so for operands below about 1e-15 it returns 1e-12 x larger instead of
 // the documented max(1e-12 x larger, 1e-15) floor. This subclass swaps in the
@@ -323,7 +323,6 @@ function randAmt(R, dec, maxWhole) {
     });
 
     it('the suite compare matches mathjs native tolerant compare (the documented band)', function () {
-        const { M } = require('../../test/inproc/harness.js');
         const pairs = [['1e-18', '0'], ['1e-15', '0'], ['1.1e-15', '0'], ['0', '7.5e-16'], ['0', '1.5e-14'],
             ['300', '300.0000000001'], ['1', '1.000000000002'], ['150000000', '150000000.0001485'], ['-1', '1']];
         for (const [a, b] of pairs) assert.strictEqual(documentedCompare(a, b), M.compare(bn(a), bn(b)).toNumber(), a + ' vs ' + b);

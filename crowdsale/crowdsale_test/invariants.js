@@ -10,7 +10,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const inproc = require('../../test/inproc/harness.js');
+const inproc = require('../../test/helpers/harness.js');
 const { available, rng, M, bn, fixed, roundHalfUp } = inproc;
 
 // The shared harness builds its tolerance band with mathjs max(), which compares within
