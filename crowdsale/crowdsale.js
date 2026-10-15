@@ -202,7 +202,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -303,7 +303,9 @@ module.exports = {
         var balance      = xchain.getBalance(xchain.getContractAddress(), payTick) || '0';
         var accountedPay = xchain.state.get('accountedPay');
         var contributed  = xchain.math.subtract(balance, accountedPay);
-        xchain.require(xchain.math.gt(contributed, '0'), 'no payment received (DEPOSIT in the same BATCH)');
+        // Test the payment exactly: gt reads any amount <= 1e-15 as zero, which on an
+        // 18-decimal payTick refuses a real deposit and leaves it for the next buyer.
+        xchain.require(!isAtLeastExact(xchain, '0', contributed), 'no payment received (DEPOSIT in the same BATCH)');
 
         var caller = xchain.getSourceAddress();
         var prior  = xchain.state.get('c:' + caller) || '0';

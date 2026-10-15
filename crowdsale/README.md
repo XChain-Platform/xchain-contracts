@@ -77,7 +77,9 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   running total for top-ups, and sends the rest back to the buyer at once;
   every recorded contribution receives exactly its purchased tokens. It returns
   change rather than reverting because a reverted `buy()` would leave the whole
-  deposit behind.
+  deposit behind. For the same reason `buy()` tests the payment for zero
+  exactly, not with the tolerant `gt`, so a deposit of a few base units of an
+  18-decimal `payTick` (at most 1e-15) is still attributed to its payer.
 
 ## Known limitations (teaching baseline)
 

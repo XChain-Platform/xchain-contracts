@@ -108,3 +108,6 @@ const assertDeliveredActions = function (result, expected) {
     registerOffGridPaymentTests(deliveredCtx);
     registerDustContributionSuite(deliveredCtx);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./crowdsale_test/invariants');
