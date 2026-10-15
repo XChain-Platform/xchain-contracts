@@ -395,3 +395,6 @@ function makeFixtures(ctx) {
     });
     registerDeployValidationSuite(ctx);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./priceBet_test/invariants');
