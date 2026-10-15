@@ -146,7 +146,13 @@ that one.
   1,000,000 balance is 100 base units of an 8-decimal tick. `withdraw()`'s
   collateral check and `liquidate()`'s full-debt check therefore compare
   exactly (`isAtLeastExact`), so a debt-free vault cannot take collateral
-  that belongs to other vaults.
+  that belongs to other vaults. The collateral ratio check in `borrow()`,
+  `withdraw()` and `liquidate()` is exact too, so no vault is left up to
+  1e-12 relative below `minRatioPct`, and the "has debt" checks use the exact
+  `exceedsExactly`: with `stableDecimals` above 15 a tolerant `gt` reads a
+  debt at or below 1e-15 as zero, letting `withdraw()` empty a vault that
+  still owes it and leaving that debt unliquidatable. Vaults deployed before 1.3.0
+  keep the tolerant comparisons.
 - **Self-liquidation for the bonus.** `liquidate()` rejects
   `liquidator === vaultOwner`.
 - **Rounding shortfall drains other vaults.** Every amount-bearing method

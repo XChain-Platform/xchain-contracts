@@ -170,3 +170,6 @@ function registerDustPayoutTests(ctx) {
 
     registerDustPayoutTests(ctx);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./stable_vault_test/invariants');

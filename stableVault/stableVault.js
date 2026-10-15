@@ -97,7 +97,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.2.1'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -297,7 +297,8 @@ module.exports = {
         var left = xchain.math.subtract(coll, amount);
 
         var debt = getVault(xchain, addr, 'debt');
-        if (xchain.math.gt(debt, '0')) {
+        // Exact: a tolerant gt reads a debt at or below 1e-15 as zero and skips the ratio check.
+        if (exceedsExactly(xchain, debt, '0')) {
             var price = freshPrice(xchain);
             xchain.require(ratioOk(xchain, left, debt, price), 'vault would be under-collateralized');
         }
@@ -325,7 +326,7 @@ module.exports = {
         xchain.require(liquidator !== owner, 'cannot liquidate your own vault');
 
         var debt = getVault(xchain, owner, 'debt');
-        xchain.require(xchain.math.gt(debt, '0'), 'vault has no debt');
+        xchain.require(exceedsExactly(xchain, debt, '0'), 'vault has no debt');
 
         var price = freshPrice(xchain);
         var coll  = getVault(xchain, owner, 'coll');
@@ -591,10 +592,11 @@ function exceedsExactly(xchain, a, b) {
 
 // Collateralization check without division:
 //     coll * price * 100  >=  debt * minRatioPct
-// Zero debt is always healthy.
+// Zero debt is always healthy. Both comparisons are exact: the ratio is a cap
+// guard, and a tolerant gte would pass a vault up to 1e-12 relative below it.
 function ratioOk(xchain, coll, debt, price) {
-    if (!xchain.math.gt(debt, '0')) return true;
+    if (!exceedsExactly(xchain, debt, '0')) return true;
     var lhs = xchain.math.multiply(xchain.math.multiply(coll, price), '100');
     var rhs = xchain.math.multiply(debt, xchain.state.get('minRatioPct'));
-    return xchain.math.gte(lhs, rhs);
+    return isAtLeastExact(xchain, lhs, rhs);
 }
