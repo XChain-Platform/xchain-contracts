@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.2.1'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -237,14 +237,21 @@ module.exports = {
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
         var highBidder = xchain.state.get('highBidder');
+        // fund() accepts custody at or above itemAmount; the seller receives every item
+        // unit the winner does not, since no method can reach it after settlement.
+        var itemHeld   = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var itemSurplus = xchain.math.subtract(itemHeld, itemAmount);
 
         if (highBidder) {
             xchain.state.set('status', 'SOLD');
             xchain.emit.send({ destination: highBidder, tick: itemTick, quantity: itemAmount });
             xchain.emit.send({ destination: xchain.state.get('seller'), tick: xchain.state.get('bidTick'), quantity: xchain.state.get('highBid') });
+            if (!isAtLeastExact(xchain, '0', itemSurplus)) {
+                xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemSurplus });
+            }
         } else {
             xchain.state.set('status', 'UNSOLD');
-            xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemAmount });
+            xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemHeld });
         }
     },
 
@@ -252,10 +259,11 @@ module.exports = {
     // live auction or from the pre-funded INIT state after fund() rejected the
     // terms. The INIT leg exists because a rejected fund() does NOT roll back the
     // DEPOSIT that reached it, batched or not, so without it the item is stranded.
-    // It sweeps the contract's HELD item balance rather than the stored itemAmount:
-    // off the tick's grid itemAmount is exactly the unusable value fund() refused
-    // (the ledger re-quantises it at write time, possibly to zero), and after an
-    // 'insufficient item deposit' rejection the held balance is the smaller truth.
+    // In both states it sweeps the contract's HELD item balance rather than the
+    // stored itemAmount: off the tick's grid itemAmount is exactly the unusable value
+    // fund() refused (the ledger re-quantises it at write time, possibly to zero),
+    // after an 'insufficient item deposit' rejection the held balance is the smaller
+    // truth, and on a live auction it also returns any surplus fund() accepted.
     // cancel() is terminal - a seller who was short and would rather top up should
     // deposit the remainder and call fund() again instead of cancelling.
     cancel: function (xchain) {
@@ -265,9 +273,7 @@ module.exports = {
         xchain.require(!xchain.state.get('highBidder'), 'cannot cancel: a bid has already been placed');
 
         var itemTick = xchain.state.get('itemTick');
-        var quantity = status === 'ACTIVE'
-            ? xchain.state.get('itemAmount')
-            : (xchain.getBalance(xchain.getContractAddress(), itemTick) || '0');
+        var quantity = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
         // seller can no longer fund the auction they deployed.

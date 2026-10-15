@@ -87,3 +87,6 @@ const ADDR   = 'C:BTC:1';
     registerExactCustodyTests(tests);
     registerDeployValidationTests(tests);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./english_auction_test/invariants');

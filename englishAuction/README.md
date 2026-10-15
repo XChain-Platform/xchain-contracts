@@ -42,8 +42,8 @@ considered](#attacks-we-considered).
 | `initialize(seller, itemTick, itemAmount, bidTick, minBid, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; anchors the bidding deadline from **this** block; status → `ACTIVE`. |
 | `bid()` | anyone except the current leader (BATCHed after DEPOSIT) | Must be at least `minBid` and strictly exceed the current high bid; refunds the previous leader in the same call. |
-| `settle()` | anyone, after the deadline | Item → high bidder, winning bid → seller (status → `SOLD`); or item → seller if nobody bid (status → `UNSOLD`). |
-| `cancel()` | seller, only before any bid | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
+| `settle()` | anyone, after the deadline | `itemAmount` → high bidder, winning bid → seller, any item held above `itemAmount` → seller (status → `SOLD`); or the whole held item balance → seller if nobody bid (status → `UNSOLD`). |
+| `cancel()` | seller, only before any bid | Returns the contract's **held** item balance (at least `itemAmount` on a live auction, including any surplus `fund()` accepted) to the seller; status → `CANCELLED`. Reachable from `INIT` too, so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, highBid, highBidder, minBid, deadline }`. |
 
 ## Using it (SDK)
