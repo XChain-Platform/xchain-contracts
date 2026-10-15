@@ -387,3 +387,6 @@ function unitNotationTests() {
         unitNotationTests();
     });
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./cardDispenser_test/invariants');

@@ -53,7 +53,7 @@
 // ---------------------------------------------------------------------------
 
 // Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
-// whether `unit` is already on a card's grid (floor === value), never to rewrite
+// whether `unit` is already on a card's grid (floor equals value numerically), never to rewrite
 // it. Same helper and rationale as amm.js/dutchAuction.js:floorToDecimals.
 function floorToDecimals(value, decimals) {
     var s = String(value);
@@ -92,7 +92,8 @@ function deliverableCopies(xchain, self, tick, unit) {
     if (xchain.math.isZero(copies)) return copies;
     var info = xchain.getTokenInfo(tick);
     if (!info || info.DECIMALS === null || info.DECIMALS === undefined) return '0';
-    if (floorToDecimals(unit, info.DECIMALS) !== unit) return '0';
+    // Numeric, not string, equality: '1.00000000' is on a 0-decimal grid.
+    if (!isAtLeastExact(xchain, floorToDecimals(unit, info.DECIMALS), unit)) return '0';
     return copies;
 }
 
@@ -104,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:

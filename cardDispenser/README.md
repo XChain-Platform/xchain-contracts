@@ -93,6 +93,9 @@ de-correlate same-block draws.
   deploy, when the contract holds none of them; `initialize` still rejects a
   `unit` that is not a plain fixed-notation decimal, since `"2.5e-1"` would
   pass the grid check unchanged and the ledger would read it as `0.25`.
+  The grid check compares values, not spellings, so a `unit` written with
+  trailing zeros (`"1.00000000"` on a zero-decimal card) is on the grid and
+  draws normally.
 - **Unauthorized sweep.** `withdraw(tick)` is owner-only
   (`getSourceAddress()` checked against the stored deployer).
 - **Rounding / float drift.** All arithmetic uses `xchain.math` bignumber ops;
