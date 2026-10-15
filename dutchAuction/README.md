@@ -41,8 +41,8 @@ Attacks we considered.
 |---|---|---|
 | `initialize(seller, itemTick, itemAmount, bidTick, startPrice, endPrice, durationBlocks)` | deployer | Sets immutable terms (`startPrice > endPrice > 0`); status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; starts the price clock from **this** block; status → `ACTIVE`. |
-| `buy()` | anyone (BATCHed after DEPOSIT) | Must deposit ≥ the current asking price; item → buyer, price → seller, any excess → buyer, all in one call; status → `SOLD`. A short deposit is refunded to the caller instead, the call returns `'underpaid'` and status stays `ACTIVE`. |
-| `cancel()` | seller, only before any purchase | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
+| `buy()` | anyone (BATCHed after DEPOSIT) | Must deposit ≥ the current asking price; item → buyer, price → seller, any excess → buyer, any item held above `itemAmount` → seller, all in one call; status → `SOLD`. A short deposit is refunded to the caller instead, the call returns `'underpaid'` and status stays `ACTIVE`. |
+| `cancel()` | seller, only before any purchase | Returns the contract's **held** item balance (at least `itemAmount` on a live auction, including any surplus `fund()` accepted) to the seller; status → `CANCELLED`. Reachable from `INIT` too, so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, currentPrice, startPrice, endPrice }`. |
 
 **Price spelling:** `startPrice` and `endPrice` must be plain fixed-notation
