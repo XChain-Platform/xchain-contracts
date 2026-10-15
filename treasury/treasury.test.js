@@ -157,3 +157,6 @@ Object.assign(context, {
     registerProposalIdTests(context);
     registerPollIndexTests(context);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./treasury_test/invariants');
