@@ -398,3 +398,6 @@ describe('Template: amm abi', function () {
     describe('precision reconciliation (finding: reserves/totalShares drift)', precisionTests);
     describe('k-invariant fuzz', fuzzTests);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./amm_test/invariants');
