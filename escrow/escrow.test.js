@@ -327,3 +327,6 @@ function deployValidationTests() {
 
     describe('deploy-time validation', deployValidationTests);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./escrow_test/invariants');
