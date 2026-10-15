@@ -378,3 +378,6 @@ function registerExactPayoutGuards() {
         assertReverted, assertEmittedActions, assertBalance, assertContractBalance
     });
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./vesting_test/invariants');
