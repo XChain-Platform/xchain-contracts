@@ -179,7 +179,7 @@ translation adds its own surface:
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/priceBetTimed.test.js
+npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/price_bet_timed.test.js
 ```
 
 Requires Node 22 (`isolated-vm`).

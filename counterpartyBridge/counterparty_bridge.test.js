@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// counterpartyBridge.test.js: behavioral + adversarial tests for counterpartyBridge.js
+// counterparty_bridge.test.js: behavioral + adversarial tests for counterpartyBridge.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -10,7 +10,7 @@
 // never drift.
 //
 // Run from the xchain-vm package so its deps (mocha, isolated-vm, mathjs) resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterpartyBridge.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterparty_bridge.test.js
 
 'use strict';
 

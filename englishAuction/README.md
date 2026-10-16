@@ -164,11 +164,11 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
 
 ## Tests
 
-`englishAuction.test.js` runs the real template through the VM (Node 22 /
+`english_auction.test.js` runs the real template through the VM (Node 22 /
 isolated-vm):
 
 ```
-cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/englishAuction.test.js
+cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/english_auction.test.js
 ```
 
 ## License

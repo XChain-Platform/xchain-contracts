@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// policy-matrix.js: the shared policy-gen config matrix.
+// policy_matrix.js: the shared policy generator config matrix.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
 // Two suites exercise the SAME representative configs from opposite sides:
-// lib/policy-gen.test.js (acorn lint + mock-xchain behaviour, runs on any Node)
-// and lib/policy-gen.e2e.test.js (the real V8 compile / isolated-vm deploy gate,
+// lib/policy_gen.test.js (acorn lint + mock-xchain behaviour, runs on any Node)
+// and lib/policy_gen_e2e.test.js (the real V8 compile / isolated-vm deploy gate,
 // Node 22 only). Held here so a config added for one is covered by both; a copy
 // in each file would let the real-VM half silently fall behind.
 //
@@ -19,7 +19,7 @@
 const OWNER = '1OwnerAddress';
 const NOTOWNER = '1SomebodyElse';
 
-// Royalty recipients are the ONE config value the chain re-validates: policy-gen
+// Royalty recipients are the ONE config value the chain re-validates: policy generator
 // gates a leg "to" with a real base58check/bech32 decode, because the indexer
 // denies every trade-class action whose guard returns an undecodable leg. So
 // these two are real checksum-valid addresses (the well-known genesis P2PKH and

@@ -57,7 +57,7 @@ jobs:
           ssh-key: ${{ secrets.XCHAIN_VM_DEPLOY_KEY }}
           path: xchain-vm
 
-      # Required, not optional: test/poll-callback-wiring.test.js pins treasury.arm
+      # Required, not optional: test/poll_callback_wiring.test.js pins treasury.arm
       # to the poll callback wire the indexer declares, and fails when it is absent.
       # Read as source only (builtins-only module), so it needs no install step.
       - name: Check out the xchain-indexer sibling

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// readme-lint-rules.test.js: the README's lint rule list tracks the VM linter.
+// readme_lint_rules.test.js: the README's lint rule list tracks the VM linter.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -12,7 +12,7 @@
 // This file reads the deploy-blocking set and the code-size cap from the lint core
 // itself and fails when the README section stops naming one of them.
 //
-//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme-lint-rules.test.js
+//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme_lint_rules.test.js
 
 'use strict';
 
@@ -23,7 +23,7 @@ const path   = require('path');
 const REPO_DIR = path.join(__dirname, '..');
 const README   = fs.readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
 
-// Try both spellings of xchain-vm's lint core, current one first, as lib/policy-gen.test.js does.
+// Try both spellings of xchain-vm's lint core, current one first, as lib/policy_gen.test.js does.
 const LINT_CORE_SPELLINGS = [path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint-core.js'),
                              path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint_core.js')];
 

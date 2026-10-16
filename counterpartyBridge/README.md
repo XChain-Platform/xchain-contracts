@@ -258,7 +258,7 @@ bridge multiple assets, deploy one instance per asset.
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterpartyBridge.test.js
+npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterparty_bridge.test.js
 ```
 
 Requires Node 22 (`isolated-vm`).

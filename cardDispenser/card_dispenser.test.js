@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// cardDispenser.test.js: behavioral + adversarial tests for cardDispenser.js
+// card_dispenser.test.js: behavioral + adversarial tests for cardDispenser.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -9,7 +9,7 @@
 // Loads the ACTUAL cardDispenser.js template (no copy), so the test can't drift.
 //
 // Run from the xchain-vm package so its deps resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/cardDispenser/card_dispenser.test.js
 
 'use strict';
 
