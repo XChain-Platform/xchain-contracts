@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// poll-callback-wiring.test.js: treasury.arm's arity is the indexer's poll wire.
+// poll_callback_wiring.test.js: treasury.arm's arity is the indexer's poll wire.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -16,7 +16,7 @@
 // The indexer checkout is a REQUIRED sibling (.ci-siblings, ci.yml): when it is
 // absent this file fails, it never skips.
 //
-//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/poll-callback-wiring.test.js
+//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/poll_callback_wiring.test.js
 
 'use strict';
 

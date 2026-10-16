@@ -102,7 +102,7 @@ de-correlate same-block draws.
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
+npx mocha --timeout 0 ../xchain-contracts/cardDispenser/card_dispenser.test.js
 ```
 
 > **On-chain deployment note.** `getBalance()`/`getTokenInfo()` are wired in

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// urlOracle.test.js: proves the attestation (off-chain URL) round-trip.
+// url_oracle.test.js: proves the attestation (off-chain URL) round-trip.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -9,7 +9,7 @@
 // ACTUAL urlOracle.js template so the test can't drift.
 //
 // Run from the xchain-vm package so its deps resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/urlOracle/urlOracle.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/urlOracle/url_oracle.test.js
 
 'use strict';
 

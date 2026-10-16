@@ -158,11 +158,11 @@ await sdk.batch()
 
 ## Tests
 
-`dutchAuction.test.js` runs the real template through the VM (Node 22 /
+`dutch_auction.test.js` runs the real template through the VM (Node 22 /
 isolated-vm):
 
 ```
-cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/dutchAuction/dutchAuction.test.js
+cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/dutchAuction/dutch_auction.test.js
 ```
 
 ## License

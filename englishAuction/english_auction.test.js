@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// englishAuction.test.js: behavioral + adversarial tests for englishAuction.js
+// english_auction.test.js: behavioral + adversarial tests for englishAuction.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -9,7 +9,7 @@
 // Loads the ACTUAL englishAuction.js template (no copy), so the test can never drift.
 //
 // Run from the xchain-vm package so its deps (mocha, isolated-vm, mathjs) resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/englishAuction.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/english_auction.test.js
 
 'use strict';
 

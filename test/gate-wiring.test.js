@@ -28,6 +28,12 @@ const tplPath    = (n) => path.join(REPO_DIR, n, n + '.js');
 const abiMethods = (mod) => (mod && mod.abi && mod.abi.methods) || {};
 const none       = (offenders, msg) => assert.deepStrictEqual(offenders, [], msg + offenders.join(', '));
 
+function suitePath(name) {
+    const snake = name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+    const modern = path.join(REPO_DIR, name, snake + '.test.js');
+    return fs.existsSync(modern) ? modern : path.join(REPO_DIR, name, name + '.test.js');
+}
+
 const testScriptSpecs = () => String(PKG.scripts.test || '').split(/\s+/).filter(t => t.endsWith('.test.js'));
 
 function discoverTestFiles(dir, out) {
@@ -164,7 +170,7 @@ function skippingSuitesAreGated() {
 function templatesHaveSuites() {
     const templates = discoverTemplates();
     assert.ok(templates.length > 0, 'template discovery found nothing; the <name>/<name>.js predicate has drifted');
-    none(templates.filter(n => !fs.existsSync(path.join(REPO_DIR, n, n + '.test.js'))),
+    none(templates.filter(n => !fs.existsSync(suitePath(n))),
         'these templates are linted but have no suite, so their VM coverage is imaginary: ');
 }
 
@@ -230,7 +236,7 @@ function metaIsFirstKey() {
 function suitesDeployThroughVm() {
     const offenders = [];
     for (const name of discoverTemplates()) {
-        const spec = path.join(REPO_DIR, name, name + '.test.js');
+        const spec = suitePath(name);
         if (!fs.existsSync(spec)) continue;   // named by the suite check above
         const src = blankComments(fs.readFileSync(spec, 'utf8'));
         const bootsVm = /E2EHarness/.test(src) || /e2e[\/\\]helpers[\/\\]harness/.test(src);
@@ -290,7 +296,7 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
     it('every spec listed in scripts.test exists on disk', listedSpecsExist);
     it('every test file in the repo is inside the gated run', everyTestFileIsGated);
     it('every suite that degrades to describe.skip is inside the gated run', skippingSuitesAreGated);
-    it('every discovered template has an adjacent <name>.test.js', templatesHaveSuites);
+    it('every discovered template has an adjacent test suite', templatesHaveSuites);
     it('every discovered template declares an advisory abi block', templatesDeclareAbi);
     it('every abi method declares its params as { name, type } object literals', abiParamsAreObjects);
     it('every discovered template declares a consensus-required meta block', templatesDeclareMeta);
