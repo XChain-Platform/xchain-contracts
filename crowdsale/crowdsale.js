@@ -168,12 +168,21 @@ function buysUnits(xchain, a, rate, saleDec, tokens) {
     return isAtLeastExact(xchain, floorToDecimals(xchain.math.multiply(a, rate), saleDec), tokens);
 }
 
+function saleGridOf(xchain) {
+    var stored = xchain.state.get('saleDecimals');
+    if (stored === null || stored === undefined) return 8;
+    var decimals = parseInt(stored, 10);
+    xchain.require(String(decimals) === String(stored) && decimals >= 0 && decimals <= 18,
+        'saleDecimals must be an integer 0-18');
+    return decimals;
+}
+
 // Return the smallest pay-grid amount, at most `total`, that mints what `total` mints,
 // or '0' below one sale unit. An exact on-grid total returns at once, reading no token
 // info. The estimate is walked at most two units each way (the divide rounds at 64 digits).
 function acceptedFor(xchain, total) {
     var rate = xchain.state.get('rate');
-    var saleDec = parseInt(xchain.state.get('saleDecimals') || '8', 10);
+    var saleDec = saleGridOf(xchain);
     var product = xchain.math.multiply(total, rate);
     var tokens = floorToDecimals(product, saleDec);
     if (isAtLeastExact(xchain, tokens, product)) return total;
@@ -202,7 +211,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.5.0'
+        version:     '1.5.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -317,7 +326,7 @@ module.exports = {
         var change = xchain.math.subtract(total, accepted);
         var delta  = xchain.math.isZero(change) ? contributed : xchain.math.subtract(accepted, prior);
 
-        var saleDecimals = parseInt(xchain.state.get('saleDecimals'), 10);
+        var saleDecimals = saleGridOf(xchain);
         var priorTokens = floorToDecimals(xchain.math.multiply(prior, xchain.state.get('rate')), saleDecimals);
         var acceptedTokens = floorToDecimals(xchain.math.multiply(accepted, xchain.state.get('rate')), saleDecimals);
         var tokenDelta = xchain.math.subtract(acceptedTokens, priorTokens);
@@ -385,7 +394,7 @@ module.exports = {
         // buyers, past maxMint - which would revert a later claim and, on the rollback,
         // permanently strand that buyer's contribution). Legacy pre-fix deploys have no
         // saleDecimals key; default to the 8dp the issue used so old contracts still claim.
-        var saleDecimals = parseInt(xchain.state.get('saleDecimals') || '8', 10);
+        var saleDecimals = saleGridOf(xchain);
         var tokens = floorToDecimals(xchain.math.multiply(paid, xchain.state.get('rate')), saleDecimals);
         // Defence in depth (buy() records only amounts that mint whole units): a mint that
         // floors to '0' reverts before the record is deleted, so a payment is never silently

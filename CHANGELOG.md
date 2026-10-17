@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - escrow and escrowDelivery `initialize()` now reject an `amount` that is not a plain decimal string, because an exponent or signed form could never be matched by a deposit.
 
 ### Fixed
+- crowdsale reads its sale-token grid through one checked helper, so corrupt persisted decimals cannot silently change buy or claim rounding.
 - vesting's `claim()` and `revoke()` payout guards now test the floored amount exactly instead of through the tolerant `math.gt`, so a real sub-tolerance payout is no longer refused as nothing to pay.
 - vesting's `fund()` is now grantor-only, `info()` reports the same grid-floored `claimable` amount that `claim()` can pay, and `revoke()` preserves every whole tick unit for the grantor or beneficiary instead of stranding rounding dust.
 - crowdsale's `claim()` and `refund()` now recognize every nonzero accepted contribution exactly, including amounts below the math comparison tolerance; its permanently locked unsold sale-token inventory is also documented as a known limitation.
