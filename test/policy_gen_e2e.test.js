@@ -9,7 +9,7 @@
 // --------------------
 // lib/policy_gen.js is the one DEPLOYABLE output this library ships that nobody
 // hand-wrote: `xchain-contracts policy` prints it and users deploy it verbatim.
-// Its sibling in lib/policy_gen.test.js checks the generated source two ways,
+// Its sibling in test/policy_gen.test.js checks the generated source two ways,
 // and neither is the deploy gate:
 //   - lintSource() from xchain-vm/src/lint-core.js is acorn-only. Its own header
 //     says it carries every deploy-time check EXCEPT the V8 syntax compile.
@@ -32,14 +32,14 @@
 // degrades to describe.skip elsewhere, and test/preflight.test.js is what turns
 // that skip red on a venue that is supposed to have the harness.
 //
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/lib/policy_gen_e2e.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/test/policy_gen_e2e.test.js
 
 'use strict';
 
 const assert = require('assert');
 const path = require('path');
-const { generatePolicy } = require('./policy_gen.js');
-const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('../test/helpers/policy_matrix.js');
+const { generatePolicy } = require('../lib/policy_gen.js');
+const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('./helpers/policy_matrix.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness;

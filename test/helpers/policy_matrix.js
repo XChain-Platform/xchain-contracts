@@ -6,8 +6,8 @@
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
 // Two suites exercise the SAME representative configs from opposite sides:
-// lib/policy_gen.test.js (acorn lint + mock-xchain behaviour, runs on any Node)
-// and lib/policy_gen_e2e.test.js (the real V8 compile / isolated-vm deploy gate,
+// test/policy_gen.test.js (acorn lint + mock-xchain behaviour, runs on any Node)
+// and test/policy_gen_e2e.test.js (the real V8 compile / isolated-vm deploy gate,
 // Node 22 only). Held here so a config added for one is covered by both; a copy
 // in each file would let the real-VM half silently fall behind.
 //

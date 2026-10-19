@@ -15,24 +15,24 @@
 //      not the isolate and not the real sandbox.
 //
 // The REAL deploy gate (vm.validateSyntax through E2EHarness.deploy, plus
-// execution on the isolate) is lib/policy_gen_e2e.test.js, which needs Node 22
+// execution on the isolate) is test/policy_gen_e2e.test.js, which needs Node 22
 // and a built isolated-vm. Neither file alone is deploy parity; together they
 // are, and both drive the same configs from test/helpers/policy_matrix.js.
 //
-//   node ../xchain-vm/node_modules/mocha/bin/mocha.js lib/policy_gen.test.js
+//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/policy_gen.test.js
 //   (or, from the repo test script, as part of `npm test`)
 
 'use strict';
 
 const assert = require('assert');
-const { generatePolicy, validateConfig, BINDABLE_CLASSES, MAX_BPS, PROTOCOL_MAX_TAKE_BPS } = require('./policy_gen.js');
-const POLICY_EXAMPLE = require('./policy.example.json');
-const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('../test/helpers/policy_matrix.js');
-const registerConfigValidation = require('./policy_gen_test/configuration_validation.js');
-const registerDeadHelperDetection = require('./policy_gen_test/dead_helper_detection.js');
-const registerGeneratedGuardBehavior = require('./policy_gen_test/generated_guard_behavior.js');
-const registerBindHints = require('./policy_gen_test/bind_hints.js');
-const registerMetadataIdentity = require('./policy_gen_test/metadata_identity.js');
+const { generatePolicy, validateConfig, BINDABLE_CLASSES, MAX_BPS, PROTOCOL_MAX_TAKE_BPS } = require('../lib/policy_gen.js');
+const POLICY_EXAMPLE = require('../lib/policy.example.json');
+const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('./helpers/policy_matrix.js');
+const registerConfigValidation = require('../lib/policy_gen_test/configuration_validation.js');
+const registerDeadHelperDetection = require('../lib/policy_gen_test/dead_helper_detection.js');
+const registerGeneratedGuardBehavior = require('../lib/policy_gen_test/generated_guard_behavior.js');
+const registerBindHints = require('../lib/policy_gen_test/bind_hints.js');
+const registerMetadataIdentity = require('../lib/policy_gen_test/metadata_identity.js');
 
 // Load xchain-vm's lint core at src/lint-core.js, falling back to src/lint_core.js,
 // the name an older adjacent checkout may still carry. Pinning one spelling would
