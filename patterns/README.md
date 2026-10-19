@@ -148,4 +148,4 @@ likewise does not gate bulk drops.
 
 ## License
 
-[MIT](../LICENSE), fork freely, including into closed-source contracts.
+[MIT](../LICENSE.md), fork freely, including into closed-source contracts.

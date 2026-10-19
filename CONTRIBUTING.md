@@ -11,7 +11,7 @@ If you're reporting a security issue, **stop here** and read [`SECURITY.md`](./S
 - Project overview: [`README.md`](./README.md)
 - Full component docs: the [`xchain-documentation`](https://github.com/XChain-Platform/xchain-documentation) repository (architecture, contract patterns, protocol spec)
 - Disclosure policy: [`SECURITY.md`](./SECURITY.md)
-- License: [`LICENSE`](./LICENSE) (MIT, intentionally permissive so you can build proprietary contracts on top)
+- License: [`LICENSE`](./LICENSE.md) (MIT, intentionally permissive so you can build proprietary contracts on top)
 
 ---
 

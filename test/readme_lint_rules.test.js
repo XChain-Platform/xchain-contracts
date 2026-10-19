@@ -23,7 +23,7 @@ const path   = require('path');
 const REPO_DIR = path.join(__dirname, '..');
 const README   = fs.readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
 
-// Try both spellings of xchain-vm's lint core, current one first, as lib/policy_gen.test.js does.
+// Try both spellings of xchain-vm's lint core, current one first, as test/policy_gen.test.js does.
 const LINT_CORE_SPELLINGS = [path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint-core.js'),
                              path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint_core.js')];
 
