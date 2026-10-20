@@ -106,7 +106,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -205,7 +205,8 @@ module.exports = {
         // top of this file), so the rejected seller reclaims it with cancel(), which
         // is reachable from INIT and returns the HELD balance.
         var itemGrid = tickDecimals(xchain, itemTick);
-        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+        // Numeric, not string, equality: '1.00000000' is on a 0-decimal grid.
+        xchain.require(isAtLeastExact(xchain, floorToDecimals(itemAmount, itemGrid), itemAmount),
             'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
 
         xchain.state.set('start', String(xchain.getBlockHeight()));
@@ -282,8 +283,9 @@ module.exports = {
         var quantity = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
-        // seller can no longer fund the auction they deployed.
-        xchain.require(xchain.math.gt(quantity, '0'), 'nothing to reclaim');
+        // seller can no longer fund the auction they deployed. Exact, because gt reads
+        // any amount <= 1e-15 as zero and would strand a dust deposit on an 18-decimal tick.
+        xchain.require(!isAtLeastExact(xchain, '0', quantity), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({

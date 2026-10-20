@@ -91,8 +91,9 @@ function referenceEligible(row) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
     if (row.asset !== CP_ASSET || row.source !== HOLDER || row.status !== 'valid') return false;
     if (typeof row.tx_hash !== 'string' || row.tx_hash.length === 0) return false;
-    if (row.quantity === undefined || row.quantity === null) return false;
-    return PLAIN_DECIMAL.test(String(row.quantity));
+    // A JSON number was already rounded to a double by JSON.parse, so only a string is creditable.
+    if (typeof row.quantity !== 'string') return false;
+    return PLAIN_DECIMAL.test(row.quantity);
 }
 
 // Generate a well-formed quantity, sometimes zero-padded, with 0-20 fraction digits.

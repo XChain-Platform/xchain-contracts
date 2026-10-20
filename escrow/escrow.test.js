@@ -178,6 +178,19 @@ function cancelTests() {
         assertContractState(h.ledger, ADDR, 'status', 'INIT');
     });
 
+    // One base unit of an 18-decimal tick sits under the math comparison tolerance of zero.
+    it('returns a held balance below the comparison tolerance', async function () {
+        const DUST = '0.000000000000000001';
+        await deployEscrow();
+        h.ledger.setTokenDecimals(TICK, 18);
+        h.deposit(BUYER, ADDR, TICK, DUST);
+        const r = await h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: BUYER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: DUST } }]);
+        assertContractBalance(h.ledger, ADDR, TICK, '0');
+        assertContractState(h.ledger, ADDR, 'status', 'CANCELLED');
+    });
+
     it('is buyer-only', async function () {
         await deployEscrow();
         h.deposit(BUYER, ADDR, TICK, '100');

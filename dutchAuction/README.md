@@ -142,7 +142,9 @@ await sdk.batch()
   not at deploy.** The item tick's decimals are unreadable while the contract
   holds none of it, so the constructor can only check that `itemAmount` is a
   plainly spelled positive decimal; the grid check runs at `fund()`, the first
-  point the ledger can answer and the last before the price clock starts. It is
+  point the ledger can answer and the last before the price clock starts. The
+  check compares values, not spellings, so an `itemAmount` written with
+  trailing zeros (`"10.00000000"` on a zero-decimal item) is on the grid. It is
   the item-leg counterpart of the price-leg floor in `buy()`, and it rejects
   rather than flooring: the ledger re-quantises every emitted amount at write
   time, so an off-grid `itemAmount` would deliver less than advertised -

@@ -6,7 +6,7 @@
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
 // Runs a template in a node:vm context against a small ledger model, so the
-// invariant suites under */<name>_props.test.js run without the sibling
+// invariant suites under */<name>_test/invariants.js run without the sibling
 // xchain-vm checkout. It models the surface the templates call, as their own
 // comments and READMEs document it:
 //   - xchain.math: 64 significant digit BigNumber, every result a fixed
@@ -17,9 +17,17 @@
 //   - any throw reverts state, balances and emissions together.
 //   - the sandbox replaces Date and Math.random with throwing stubs, so a
 //     template that reads wall-clock time or randomness fails its suite.
+//   - state.set/delete apply the VM StateManager rules with key NUL rejection
+//     and key normalisation active: key size, value size, the per-contract key
+//     count, and null/undefined/NaN/Infinity values. The caps default to the
+//     VM's and `new Harness({ limits })` lowers them for a growth test.
 // It is a model, not the VM: a finding taken from it is confirmed against the
 // real VM before it is treated as consensus behaviour. mathjs is resolved from
 // the sibling xchain-vm install, then from NODE_PATH; without it the suites skip.
+// The model clock opens at MODEL_START_HEIGHT / MODEL_START_TIMESTAMP, below every
+// armed block-time gate, and it has no network, gas metering, sandbox gating or
+// exec re-lint, so a passing invariant suite says nothing about gate-keyed
+// behaviour, which only a run on the real VM (E2EHarness) exercises.
 
 'use strict';
 
@@ -86,6 +94,54 @@ function roundHalfUp(v, decimals) {
 
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
+// VM state caps: maxStateKeys and maxStateValueSize as xchain-vm's limits_defaults.js
+// resolves them, maxStateKeySize as xchain-vm's state.js falls back to it.
+const STATE_LIMITS = { maxStateKeys: 10000, maxStateValueSize: 65536, maxStateKeySize: 1024 };
+
+// Coerce a state key as the VM does once key normalisation is active.
+function stateKey(key) {
+    const t = typeof key;
+    if (t === 'string') return key;
+    if (t === 'number' || t === 'boolean') return String(key);
+    throw new Error('state key must be a string, number, or boolean');
+}
+
+function checkKey(key, limits) {
+    if (Buffer.byteLength(key, 'utf8') > limits.maxStateKeySize)
+        throw new Error('state key exceeds max size (' + limits.maxStateKeySize + ' bytes)');
+    if (key.indexOf('\u0000') !== -1) throw new Error('state key contains a NUL (0x00) byte');
+}
+
+// Mirror xchain-vm StateManager.set and delete over one contract's state map.
+function makeState(st, limits) {
+    const has = (k) => Object.prototype.hasOwnProperty.call(st, k);
+    return {
+        get: (k) => { k = stateKey(k); return has(k) ? clone(st[k]) : null; },
+        set: (k, v) => {
+            k = stateKey(k);
+            checkKey(k, limits);
+            if (v === null || v === undefined)
+                throw new Error('state value cannot be null or undefined; use state.delete() to remove keys');
+            if (typeof v === 'number' && !isFinite(v))
+                throw new Error('state value cannot be NaN or Infinity; use xchain.math for numeric operations');
+            const serialized = JSON.stringify(v);
+            if (serialized === undefined) throw new Error('state value must be JSON-serializable');
+            if (Buffer.byteLength(serialized, 'utf8') > limits.maxStateValueSize)
+                throw new Error('state value exceeds max size (' + limits.maxStateValueSize + ' bytes)');
+            if (!has(k) && Object.keys(st).length >= limits.maxStateKeys)
+                throw new Error('contract exceeds max state keys (' + limits.maxStateKeys + ')');
+            st[k] = JSON.parse(serialized);
+        },
+        delete: (k) => {
+            k = stateKey(k);
+            checkKey(k, limits);
+            const live = has(k);
+            delete st[k];
+            return live;
+        }
+    };
+}
+
 function deny(name) {
     return function () { throw new Error('nondeterministic API used: ' + name); };
 }
@@ -100,13 +156,18 @@ function loadContract(code) {
     return module.exports;
 }
 
+// Arbitrary model clock origin, deliberately earlier than every armed
+// *_GATE_BLOCK_TIME in xchain-vm. Suites derive their times from these.
+const MODEL_START_HEIGHT = 100;
+const MODEL_START_TIMESTAMP = 1700000000;
+
 class Ledger {
     constructor() {
         this.balances = {};        // addr -> tick -> string
         this.tokens = {};          // tick -> { DECIMALS, SUPPLY, MAX_SUPPLY, OWNER, LOCK_MINT, ... }
         this.state = {};           // contract -> key -> value
-        this.blockHeight = 100;
-        this.blockTimestamp = 1700000000;
+        this.blockHeight = MODEL_START_HEIGHT;
+        this.blockTimestamp = MODEL_START_TIMESTAMP;
         this.blockHash = 'a'.repeat(64);
         this.oracle = { prices: {}, rounds: {}, snapshotAge: 0 };
         this.polls = {};
@@ -144,10 +205,11 @@ class Ledger {
 }
 
 class Harness {
-    constructor() {
+    constructor(opts) {
         this.ledger = new Ledger();
         this.contracts = {};
         this.log = [];
+        this.limits = Object.assign({}, STATE_LIMITS, opts && opts.limits);
     }
     seedBalance(addr, tick, q) { this.ledger.credit(addr, tick, q); }
     // DEPOSIT: an atomic transfer into contract custody ahead of an EXECUTE.
@@ -245,11 +307,7 @@ class Harness {
             getPollResult: (id) => (L.polls[id] === undefined ? null : clone(L.polls[id])),
             log: (m) => { self.log.push(m); },
             math: makeMath(),
-            state: {
-                get: (k) => (st[k] === undefined ? null : clone(st[k])),
-                set: (k, v) => { st[k] = clone(v); },
-                delete: (k) => { delete st[k]; }
-            },
+            state: makeState(st, self.limits),
             emit: {
                 send: push('SEND'), issue: push('ISSUE'), mint: push('MINT'), destroy: push('DESTROY')
             },
@@ -282,4 +340,7 @@ function rng(seed) {
     };
 }
 
-module.exports = { available, Harness, loadContract, rng, M, bn, fixed, roundHalfUp };
+module.exports = {
+    available, Harness, loadContract, rng, M, bn, fixed, roundHalfUp, STATE_LIMITS,
+    MODEL_START_HEIGHT, MODEL_START_TIMESTAMP
+};

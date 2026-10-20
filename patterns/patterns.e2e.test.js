@@ -36,7 +36,7 @@ try {
 // inside the isolate, with every gate green. Sorted for a deterministic blob;
 // the pattern files are all top-level function declarations, so concatenation
 // order does not affect resolution. test/gate-wiring.test.js asserts, VM-free,
-// that those names stay unique and that every file is actually exercised below.
+// that those names stay unique and that every helper is actually called below.
 const PATTERN_FILES = fs.readdirSync(__dirname)
     .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
     .sort();
@@ -234,16 +234,9 @@ module.exports = {
     });
 });
 
-// The vault above calls one helper from every pattern file, which is the scope
-// of the file-granular guard in test/gate-wiring.test.js, and that scope leaves
-// seven shipped helpers with lint and compile coverage only, among them the whole
-// XChain answer for the AccessControl (onlyRole), SafeERC20 (requireHeld,
-// depositedSince) and Enumerable (requireEnum) rows of oz-aliases.json, i.e. the
-// first things a Solidity reader pastes. This companion exercises exactly those
-// seven on the isolate: isOwner, onlyRole, isPaused, requireHeld, depositedSince,
-// requireStatusIn, requireEnum, plus the strict exact helpers exceedsExactly and
-// isPositiveExact. The guard is now per-HELPER, so a new helper that
-// never runs here reddens the gate instead of hiding behind a covered sibling.
+// test/gate-wiring.test.js fails on any patterns/*.js helper no contract here calls. This
+// companion calls the rest the vault and both validators above skip, among them onlyRole,
+// requireHeld, depositedSince and requireEnum (AccessControl, SafeERC20, Enumerable in oz-aliases).
 const ROLEVAULT = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
@@ -284,6 +277,10 @@ module.exports = {
     },
     positive: function (xchain) {
         xchain.state.set('positive', isPositiveExact(xchain.getInputParam(0)) ? 'true' : 'false');
+    },
+    // Record an amount floored onto the vault tick's grid, as read from the ledger.
+    floor: function (xchain) {
+        xchain.state.set('floored', floorToDecimals(xchain.getInputParam(0), tickDecimals(xchain, xchain.state.get('tick'))));
     },
     settle: function (xchain) {
         onlyRole(xchain, 'arbiter');
@@ -361,6 +358,25 @@ async function strictExact() {
     }
 }
 
+// The indexer rounds an off-grid emission half-up, so pin that the floor truncates
+// onto the ledger's grid and that tickDecimals refuses a tick with no token info.
+async function gridFloor() {
+    await deployRoleVault();
+    h.ledger.setTokenDecimals(TICK, 8);
+    const CASES = [['1.234567899', '1.23456789'], ['1.23456789', '1.23456789'], ['7', '7'],
+        ['0.000000009', '0.00000000'], ['-1.234567899', '-1.23456789']];
+    for (const [v, want] of CASES) {
+        assertSuccess(await run(h, 'floor', [v], OWNER));
+        assertContractState(h.ledger, ADDR, 'floored', want);
+    }
+    h.ledger.setTokenDecimals(TICK, 0);
+    assertSuccess(await run(h, 'floor', ['5.9'], OWNER));
+    assertContractState(h.ledger, ADDR, 'floored', '5');
+
+    await deployRoleVault();
+    assertReverted(await run(h, 'floor', ['1.5'], OWNER), 'token decimals unavailable: ' + TICK);
+}
+
 async function depositedSinceReserve() {
     await deployRoleVault();
     h.deposit(OWNER, ADDR, TICK, '500');
@@ -409,6 +425,8 @@ async function depositedSinceReserve() {
     it('exceedsExactly / isPositiveExact: strict and exact where gt is tolerant', strictExact);
 
     it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', depositedSinceReserve);
+
+    it('floorToDecimals / tickDecimals: truncate onto the ledger grid, refuse a tick with no info', gridFloor);
 
     it('requireStatusIn: OPEN and HELD both settle, CLOSED does not', async function () {
         await deployRoleVault();

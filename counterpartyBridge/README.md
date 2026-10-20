@@ -53,7 +53,9 @@ first) against `BURN_ADDRESS`; `onClaim` scans `data` for rows whose
 `cpAsset`, and whose `status` is `valid`, sums every one whose `tx_hash`
 has not already been credited, and sends the total from custody in one shot.
 `quantity` is already a normalized decimal string (no separate
-raw-integer field to divide by divisibility).
+raw-integer field to divide by divisibility). A row whose `quantity` is a
+JSON number rather than a string is dropped: `JSON.parse` has already
+rounded it to a double, so a large or long value would be credited wrong.
 
 A row whose `quantity` is not a **plain fixed-notation decimal** (digits,
 at most one decimal point with digits on both sides) is dropped rather

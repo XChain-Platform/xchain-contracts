@@ -49,9 +49,10 @@
 // treasury, "pass" it unanimously - is inert in BOTH modes.
 //
 // What no protocol surface reports is whether the poll's gates were REAL.
-// QUORUM and MIN_VOTERS read as met when they were never configured (see POLL
-// CONVENTIONS below), and nothing on-chain says which option index the poll's
-// own text called "approve", so a poll over the governance token itself can
+// The protocol makes a binding poll set QUORUM and MIN_VOTERS, but their size
+// is the poll creator's choice and arm() sees only met/not-met flags (see POLL
+// CONVENTIONS below). Nothing on-chain says which option index the poll's own
+// text called "approve" either, so a poll over the governance token itself can
 // still be shaped to pass on almost no turnout. Verifying that off-chain
 // before binding the poll via approvePoll() is what the guardian is for, and
 // it is why 'guardian' stays the recommended posture. In 'open' mode any
@@ -71,9 +72,12 @@
 //     executeProposal() then refuses to pay unless option 0 strictly outweighs
 //     every other option. Only a strict plurality is enforced; anything
 //     stronger has to come from the poll's QUORUM and option design.
-//   - Set QUORUM and MIN_VOTERS on the poll. The protocol reports both gates
-//     as met when they were never configured, so arm()'s gate check cannot
-//     tell "met" from "absent"; the guardian verifies them before binding.
+//   - Set QUORUM and MIN_VOTERS on the poll. The protocol requires both on a
+//     binding poll (QUORUM > 0, MIN_VOTERS >= 1) but leaves their size to the
+//     poll creator, and arm() gets only met/not-met flags, so it cannot tell a
+//     real gate from a token-sized one (QUORUM 0.000001, MIN_VOTERS 1). A poll
+//     created before that requirement activated can carry no gates at all,
+//     which also reads as met. The guardian verifies the sizes before binding.
 //   - CALLBACK_CONTRACT = this contract's deploy action index,
 //     CALLBACK_METHOD = "arm", CALLBACK_PARAMS = [proposalId] and nothing
 //     else (arm() pins the argument count, so a spare param reverts),
@@ -105,7 +109,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -153,6 +157,9 @@ module.exports = {
         requireIntInRange(xchain, windowRaw, 1, MAX_WINDOW_BLOCKS, 'executeWindowBlocks');
         var timelock = parseInt(timelockRaw, 10);
         var window   = parseInt(windowRaw, 10);
+        // Gate the notation first: math.gt passes 'Infinity', which isAtLeastExact
+        // then fails for every holder, so no proposal could ever spend a deposit.
+        requirePlainDecimal(xchain, minProp, 'minProposeBalance');
         xchain.require(minProp && xchain.math.gt(minProp, '0'),
             'minProposeBalance must be positive');
         xchain.require(mode === 'guardian' || mode === 'open',
@@ -180,8 +187,8 @@ module.exports = {
         xchain.require(caller !== xchain.getContractAddress(), 'contract cannot propose');
         xchain.require(recipient, 'recipient required');
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
-        // Notation gate at the door untrusted text comes through. `amount` is raw
+        // Notation gate at the door untrusted text comes through, ahead of the
+        // magnitude check so unparseable text gets the plain-decimal message. `amount` is raw
         // proposer text that is stored verbatim and only met by executeProposal()'s
         // floorToDecimals BLOCKS LATER, after a poll has approved it; the floor is
         // string surgery that presupposes fixed notation and math.gt() is no filter
@@ -189,6 +196,7 @@ module.exports = {
         // is deliberate: a proposal that fails the check at execute would be stuck
         // ARMED with a poll mandate behind it until its window expired.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
 
         var held = xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0';
         xchain.require(isAtLeastExact(xchain, held, xchain.state.get('min_propose')),

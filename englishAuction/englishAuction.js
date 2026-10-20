@@ -60,7 +60,7 @@
 var MAX_WINDOW_BLOCKS = 1000000;
 
 // Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
-// whether an amount is already on the grid (floor === value), never to rewrite
+// whether an amount is already on the grid (floor numerically equals value), never to rewrite
 // the seller's terms. Same helper and rationale as
 // dutchAuction.js/vesting.js/crowdsale.js/amm.js:floorToDecimals.
 function floorToDecimals(value, decimals) {
@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -185,7 +185,8 @@ module.exports = {
         // custody note at the top of this file), so the rejected seller reclaims it
         // with cancel(), which is reachable from INIT and returns the HELD balance.
         var itemGrid = tickDecimals(xchain, itemTick);
-        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+        // Numeric, not string, equality: '1.00000000' is on a 0-decimal grid.
+        xchain.require(isAtLeastExact(xchain, floorToDecimals(itemAmount, itemGrid), itemAmount),
             'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
 
         xchain.state.set('deadline', String(xchain.getBlockHeight() + parseInt(xchain.state.get('window'))));
@@ -277,8 +278,9 @@ module.exports = {
         var quantity = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
-        // seller can no longer fund the auction they deployed.
-        xchain.require(xchain.math.gt(quantity, '0'), 'nothing to reclaim');
+        // seller can no longer fund the auction they deployed. Exact, because gt reads
+        // any amount <= 1e-15 as zero and would strand a dust deposit on an 18-decimal tick.
+        xchain.require(exceedsExactly(xchain, quantity, '0'), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({
