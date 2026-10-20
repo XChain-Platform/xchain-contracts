@@ -76,6 +76,8 @@ module.exports = {
         return 'ok';
     },
     atLeast:   function (xchain) { return isAtLeastExact(xchain, xchain.getInputParam(0), xchain.getInputParam(1)); },
+    exceeds:   function (xchain) { return exceedsExactly(xchain, xchain.getInputParam(0), xchain.getInputParam(1)); },
+    positive:  function (xchain) { return isPositiveExact(xchain.getInputParam(0)); },
     held:      function (xchain) { return heldBalance(xchain, xchain.getInputParam(0)); },
     needHeld:  function (xchain) { requireHeld(xchain, xchain.getInputParam(0), xchain.getInputParam(1)); return 'ok'; },
     since:     function (xchain) { return depositedSince(xchain, xchain.getInputParam(0), xchain.getInputParam(1)); },
@@ -156,6 +158,39 @@ function randomDecimal(R) {
         assert.strictEqual(val(h, 'atLeast', ['999999.99999999', '1000000']), false);
         assert.strictEqual(val(h, 'atLeast', ['NaN', '1']), false);
         assert.strictEqual(val(h, 'atLeast', ['Infinity', '1']), false, 'non-finite difference fails closed (documented)');
+    });
+
+    it('exceedsExactly is strict exact greater-than, and fails closed on a non-finite difference', function () {
+        const h = setup();
+        const R = rng(14);
+        for (let i = 0; i < 400; i++) {
+            const a = randomDecimal(R);
+            let b;
+            const k = R.int(0, 3);
+            if (k === 0) b = randomDecimal(R);
+            else if (k === 1) b = a;
+            else b = bn(a).plus(bn(R.pick(['1e-18', '1e-8', '-1e-18', '-1e-8']))).toFixed();
+            assert.strictEqual(val(h, 'exceeds', [a, b]), bn(a).gt(bn(b)), a + ' > ' + b);
+        }
+        // Equal values in any spelling, signed zero and the fail-closed non-finite cases.
+        assert.strictEqual(val(h, 'exceeds', ['1.000', '1']), false);
+        assert.strictEqual(val(h, 'exceeds', ['0', '-0']), false);
+        assert.strictEqual(val(h, 'exceeds', ['1000000', '999999.99999999']), true);
+        assert.strictEqual(val(h, 'exceeds', ['Infinity', '1']), false, 'non-finite difference fails closed');
+        assert.strictEqual(val(h, 'exceeds', ['NaN', '1']), false, 'non-finite difference fails closed');
+    });
+
+    it('isPositiveExact is exact v > 0 on fixed-notation text and refuses anything else', function () {
+        const h = setup();
+        const R = rng(15);
+        for (let i = 0; i < 400; i++) {
+            const v = R.next() < 0.5 ? randomDecimal(R) : bn(randomDecimal(R)).negated().toFixed();
+            assert.strictEqual(val(h, 'positive', [v]), bn(v).gt(0), JSON.stringify(v));
+        }
+        for (const v of ['0.000000000000000001', '1', '00.5'])
+            assert.strictEqual(val(h, 'positive', [v]), true, v);
+        for (const v of ['0', '-0', '0.000', '-0.000000000000000001', 'Infinity', 'NaN', '-Infinity', ''])
+            assert.strictEqual(val(h, 'positive', [v]), false, JSON.stringify(v));
     });
 
     it('requireIntInRange accepts exactly canonical integer text inside the range', function () {

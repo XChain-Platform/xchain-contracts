@@ -370,6 +370,20 @@ function unitNotationTests() {
     });
 }
 
+function priceNotationTests() {
+    // price is stored verbatim and echoed by info(), and every spelling here passes
+    // the > 0 magnitude check, so only the notation gate can refuse it.
+    it('rejects a price that is not a plain fixed-notation decimal', async function () {
+        const BAD = ['1e3', '0x10', '+1.5', '.5', '5.', '1_000', 'Infinity'];
+        const accepted = [];
+        for (let i = 0; i < BAD.length; i++) {
+            const { r } = await bareDeploy('C:BTC:6', [PAY, BAD[i], UNIT, A]);
+            if (r.success || !String(r.error).includes('price')) accepted.push(BAD[i] + ' -> ' + (r.success ? 'deployed' : r.error));
+        }
+        assert.deepStrictEqual(accepted, [], 'price spellings not refused by the price gate');
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: cardDispenser', function () {
     this.timeout(0);
     describe('happy paths', happyPathTests);
@@ -385,6 +399,7 @@ function unitNotationTests() {
     describe('deploy-time validation', function () {
         deployValidationTests();
         unitNotationTests();
+        priceNotationTests();
     });
 });
 

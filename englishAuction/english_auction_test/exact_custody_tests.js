@@ -68,10 +68,10 @@ module.exports = function registerExactCustodyTests(tests) {
 
         registerExactRaiseTests(tests, deployExact);
 
-        it('an Infinity minBid never accepts a bid', async function () {
-            assertSuccess(await deployExact('10', 'Infinity'));
-            assertSuccess(await depositAndFund('10'));
-            assertReverted(await bid('alice', '100'), 'bid below the minimum');
+        it('an Infinity minBid is refused at deploy, so no auction can carry one', async function () {
+            const r = await deployExact('10', 'Infinity');
+            tests.assert.strictEqual(r.success, false, 'deploy with minBid Infinity should revert');
+            tests.assert.ok(String(r.error).includes('minBid must be a plain decimal'), 'got: ' + r.error);
         });
     });
 };

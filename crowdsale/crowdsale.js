@@ -211,7 +211,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.5.1'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -245,9 +245,15 @@ module.exports = {
         xchain.require(rate, 'rate must be positive');
         requirePlainDecimal(xchain, rate, 'rate');
         xchain.require(xchain.math.gt(rate, '0'), 'rate must be positive');
-        xchain.require(softCap && xchain.math.gt(softCap, '0'), 'softCap must be positive');
+        // Require both caps in plain decimal notation, as rate is: they are stored and
+        // echoed by info() verbatim, and hardCap sizes the issued supply.
+        xchain.require(softCap, 'softCap must be positive');
+        requirePlainDecimal(xchain, softCap, 'softCap');
+        xchain.require(hardCap, 'hardCap must be >= softCap');
+        requirePlainDecimal(xchain, hardCap, 'hardCap');
+        xchain.require(xchain.math.gt(softCap, '0'), 'softCap must be positive');
         // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
-        xchain.require(hardCap && isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
+        xchain.require(isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
         // Shape-check the window, do NOT parseInt-then-range-check it. This is the
         // same discipline saleDecimals gets nine lines below, and for the same
         // reason: durationBlocks is raw deployer text measured in the same deploy
@@ -288,7 +294,9 @@ module.exports = {
         // is not reliably readable by a contract that holds no saleTick balance).
         xchain.state.set('saleDecimals', decimals);
 
-        var maxSale = xchain.math.multiply(hardCap, rate);
+        // Floor the inventory onto the sale grid, as claim() floors each mint, so the
+        // issued supply is exactly what the contract counts rather than an indexer rounding.
+        var maxSale = floorToDecimals(xchain.math.multiply(hardCap, rate), decInt);
         xchain.emit.issue({
             tick: saleTick,
             maxSupply: maxSale,
@@ -369,7 +377,9 @@ module.exports = {
         xchain.require(status !== 'OPEN', 'sale not finalized');
         xchain.require(xchain.state.get('unsoldBurned') !== 'true', 'unsold inventory already burned');
 
-        var maxSale = xchain.math.multiply(xchain.state.get('hardCap'), xchain.state.get('rate'));
+        // Recompute the issued inventory with the same floor initialize() applied.
+        var maxSale = floorToDecimals(
+            xchain.math.multiply(xchain.state.get('hardCap'), xchain.state.get('rate')), saleGridOf(xchain));
         var unsold = status === 'FAILED'
             ? maxSale
             : xchain.math.subtract(maxSale, xchain.state.get('allocated'));

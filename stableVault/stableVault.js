@@ -97,7 +97,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -137,6 +137,11 @@ module.exports = {
         xchain.require(stableTick, 'stableTick required');
         xchain.require(collateralTick !== stableTick, 'collateral and stable must differ');
         xchain.require(coinPair, 'coinPair required');
+        // Require plain decimals for both percentage terms before the magnitude checks:
+        // math.gt/gte accept '1.5e2' or '0x96' and a sub-tolerance negative bonus, and
+        // info() echoes the stored text as the vault's terms. See requirePlainDecimal.
+        requirePlainDecimal(xchain, minRatioPct, 'minRatioPct');
+        requirePlainDecimal(xchain, liqBonusPct, 'liqBonusPct');
         // Below 100% the "stable" would be under-backed by construction.
         xchain.require(minRatioPct && xchain.math.gt(minRatioPct, '100'),
             'minRatioPct must exceed 100');
@@ -252,7 +257,9 @@ module.exports = {
         xchain.require(xchain.math.gt(received, '0'), 'no stable received');
 
         var debt   = getVault(xchain, addr, 'debt');
-        var burned = xchain.math.min(received, debt);
+        // Pick the smaller amount exactly: a tolerant min returns `received` within
+        // 1e-12 of the debt, burning the overpayment and booking a negative debt.
+        var burned = isAtLeastExact(xchain, debt, received) ? received : debt;
         var excess = xchain.math.subtract(received, burned);
 
         setVault(xchain, addr, 'debt', xchain.math.subtract(debt, burned));
@@ -354,8 +361,11 @@ module.exports = {
         // pooled shortfall other vaults would eat (bad-debt DoS on the last
         // full-balance withdrawal). Flooring makes the indexer's normalisation
         // a numeric no-op, so custody == books holds exactly.
+        // Cap at the collateral exactly: a tolerant min returns `owed` when it sits
+        // within 1e-12 above `coll`, seizing more than the vault holds.
+        var capped = isAtLeastExact(xchain, coll, owed) ? owed : coll;
         var seize = floorToDecimals(
-            xchain.math.min(owed, coll),
+            capped,
             tickDecimals(xchain, xchain.state.get('collateralTick'))
         );
 

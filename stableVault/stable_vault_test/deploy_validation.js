@@ -33,6 +33,25 @@ module.exports = function registerDeployValidationTests(ctx) {
             }
         });
 
+        // Notation gate on the two percentage terms: math.gt/gte accept every
+        // spelling mathjs parses, and info() echoes the stored text back as the terms.
+        it('rejects a minRatioPct or liqBonusPct that is not a plain decimal', async function () {
+            const BAD = ['1.5e2', '0x96', '0b10010110', '1_50', '+150', '150.', '.5e3',
+                         ' 150', 'Infinity', 'NaN', '1.2.3', ''];
+            for (const v of BAD) {
+                assert.strictEqual(
+                    (await deployWith([COLL, STABLE, PAIR, v, BONUS, MAXAGE])).success, false,
+                    `minRatioPct ${JSON.stringify(v)} must not deploy`);
+                assert.strictEqual(
+                    (await deployWith([COLL, STABLE, PAIR, RATIO, v, MAXAGE])).success, false,
+                    `liqBonusPct ${JSON.stringify(v)} must not deploy`);
+            }
+            const neg = await deployWith([COLL, STABLE, PAIR, RATIO, '-0.0000000000000001', MAXAGE]);
+            assert.strictEqual(neg.success, false, 'a negative liqBonusPct must not deploy');
+            const ok = await deployWith([COLL, STABLE, PAIR, '150.5', '0', MAXAGE]);
+            assert.strictEqual(ok.success, true, 'plain terms, including a zero bonus, still deploy');
+        });
+
         it('rejects a maxSnapshotAge outside its range and stores an accepted one verbatim', async function () {
             assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '0'])).success, false);
             assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '-10'])).success, false);

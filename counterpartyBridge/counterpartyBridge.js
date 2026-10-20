@@ -191,7 +191,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.1.0'
+        version:     '1.2.0'
     },
 
     abi: { version: 1, methods: {
@@ -221,6 +221,9 @@ module.exports = {
 
         xchain.require(typeof cpAsset === 'string' && cpAsset.length > 0, 'cpAsset required');
         xchain.require(typeof xchainTick === 'string' && xchainTick.length > 0, 'xchainTick required');
+        // Gate the notation of maxSupply: it is emitted verbatim as the ISSUE's supply.
+        xchain.require(isPlainDecimal(maxSupply),
+            'maxSupply must be a plain decimal: digits and one optional decimal point');
         xchain.require(maxSupply && xchain.math.gt(maxSupply, '0'), 'maxSupply must be positive');
 
         var decInt = parseInt(decimals, 10);
@@ -326,14 +329,17 @@ module.exports = {
             var s = sends[i];
             if (xchain.state.get('burned:' + s.txHash)) continue;
             var amount = floorToDecimals(s.quantity, decimals);
-            if (!xchain.math.gt(amount, '0')) continue;
+            // Skip unless the amount is above zero exactly: a tolerant gt reads any
+            // amount <= 1e-15 as zero, which on an 18-decimal tick drops a real burn.
+            if (isAtLeastExact(xchain, '0', amount)) continue;
             totalNew = xchain.math.add(totalNew, amount);
             newTxHashes.push(s.txHash);
         }
 
         xchain.state.delete('pending:' + address);
 
-        if (!xchain.math.gt(totalNew, '0')) {
+        // Same exact test on the total, so a sub-1e-15 sum is still paid.
+        if (isAtLeastExact(xchain, '0', totalNew)) {
             xchain.log('no new burns found', requestId);
             return 'no burns to claim';
         }

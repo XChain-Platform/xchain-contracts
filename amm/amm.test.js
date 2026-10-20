@@ -180,6 +180,19 @@ function liquidityMinimum() {
         assert.strictEqual(emitted(r, 'SEND', LP).params.quantity, '500');
         assert.deepStrictEqual(reserves(), { a: '1500', b: '1500', shares: '1500' });
     });
+
+    // One base unit short on either side is 1e-13 relative, inside the tolerant band of
+    // xchain.math.min, so only an exact pick credits the scarcer side.
+    it('credits the scarcer side when the other side is one base unit short inside the tolerant band', async function () {
+        for (const [a, b] of [['100000', '99999.99999999'], ['99999.99999999', '100000']]) {
+            await deploy();
+            assertSuccess(await addLiq(LP1, '1000000', '1000000'));
+            const r = await addLiq(LP2, a, b);
+            assertSuccess(r);
+            assert.strictEqual(emitted(r, 'SEND', LP).params.quantity, '99999.99999999', 'deposit ' + a + ' / ' + b);
+            assert.strictEqual(reserves().shares, '1099999.99999999', 'deposit ' + a + ' / ' + b);
+        }
+    });
 }
 function liquidityRemoval() {
     it('removeLiquidity burns shares and returns a proportional slice', async function () {
@@ -202,6 +215,18 @@ function liquidityRemoval() {
         assert.strictEqual(emitted(r, 'SEND', A).params.quantity, '400');
         assert.strictEqual(emitted(r, 'SEND', B).params.quantity, '400');
         assert.deepStrictEqual(reserves(), { a: '600', b: '600', shares: '600' });
+    });
+
+    // Forge totalShares one base unit under the deposit (relative 1e-14): the pre-mint
+    // model cannot reach this, but a fork that mints LP differently could.
+    it('refuses shares one base unit above totalShares inside the tolerant band', async function () {
+        await deploy();
+        assertSuccess(await addLiq(LP1, '1000000', '1000000'));
+        h.ledger.contractState[ADDR].totalShares = '999999.99899999';
+        h.deposit(LP1, ADDR, LP, '999999.999');
+        assertReverted(await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 }),
+            'shares exceed total');
+        assert.strictEqual(reserves().a, '1000000');
     });
 
     it('one-sided liquidity is rejected', async function () {

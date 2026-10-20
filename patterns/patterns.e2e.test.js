@@ -241,7 +241,8 @@ module.exports = {
 // depositedSince) and Enumerable (requireEnum) rows of oz-aliases.json, i.e. the
 // first things a Solidity reader pastes. This companion exercises exactly those
 // seven on the isolate: isOwner, onlyRole, isPaused, requireHeld, depositedSince,
-// requireStatusIn, requireEnum. The guard is now per-HELPER, so a new helper that
+// requireStatusIn, requireEnum, plus the strict exact helpers exceedsExactly and
+// isPositiveExact. The guard is now per-HELPER, so a new helper that
 // never runs here reddens the gate instead of hiding behind a covered sibling.
 const ROLEVAULT = HELPERS + '\n' + `
 module.exports = {
@@ -276,6 +277,13 @@ module.exports = {
     // Record isAtLeastExact's verdict on two amounts so a test can read it back.
     atLeast: function (xchain) {
         xchain.state.set('atLeast', isAtLeastExact(xchain, xchain.getInputParam(0), xchain.getInputParam(1)) ? 'true' : 'false');
+    },
+    // Record the strict exact helpers' verdicts the same way.
+    exceeds: function (xchain) {
+        xchain.state.set('exceeds', exceedsExactly(xchain, xchain.getInputParam(0), xchain.getInputParam(1)) ? 'true' : 'false');
+    },
+    positive: function (xchain) {
+        xchain.state.set('positive', isPositiveExact(xchain.getInputParam(0)) ? 'true' : 'false');
     },
     settle: function (xchain) {
         onlyRole(xchain, 'arbiter');
@@ -335,6 +343,24 @@ async function atLeastExact() {
     assertSuccess(await run(h, 'settle', ['100000'], ARBITER));
 }
 
+// A tolerant gt reads 100000.00000001 as no greater than 100000, and 1e-18 as zero, so
+// pin that exceedsExactly and isPositiveExact decide per base unit and fail closed.
+async function strictExact() {
+    await deployRoleVault();
+    const GT = [['100000.00000001', '100000', 'true'], ['100000', '100000', 'false'], ['1.10', '1.1', 'false'],
+        ['100000', '100000.00000001', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false']];
+    for (const [a, b, want] of GT) {
+        assertSuccess(await run(h, 'exceeds', [a, b], OWNER));
+        assertContractState(h.ledger, ADDR, 'exceeds', want);
+    }
+    const POS = [['0.000000000000000001', 'true'], ['1', 'true'], ['0', 'false'], ['0.000', 'false'],
+        ['-0.00000001', 'false'], ['Infinity', 'false'], ['NaN', 'false']];
+    for (const [v, want] of POS) {
+        assertSuccess(await run(h, 'positive', [v], OWNER));
+        assertContractState(h.ledger, ADDR, 'positive', want);
+    }
+}
+
 async function depositedSinceReserve() {
     await deployRoleVault();
     h.deposit(OWNER, ADDR, TICK, '500');
@@ -379,6 +405,8 @@ async function depositedSinceReserve() {
     });
 
     it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', atLeastExact);
+
+    it('exceedsExactly / isPositiveExact: strict and exact where gt is tolerant', strictExact);
 
     it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', depositedSinceReserve);
 

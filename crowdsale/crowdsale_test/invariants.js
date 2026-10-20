@@ -11,7 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const inproc = require('../../test/helpers/harness.js');
-const { available, rng, M, bn, fixed, roundHalfUp } = inproc;
+const { available, rng, M, bn, fixed } = inproc;
 
 // The shared harness builds its tolerance band with mathjs max(), which compares within
 // mathjs's own epsilon and so drops the 1e-15 absolute floor for operands below about
@@ -95,7 +95,8 @@ function runSeed(seed) {
     const h = setup(o);
     const tag = 'seed ' + seed + ' ' + JSON.stringify(o);
     const maxSale = fixed(bn(o.hard).times(bn(o.rate)));
-    const minted = roundHalfUp(maxSale, o.saleDec);
+    // The contract floors its inventory onto the sale grid before it issues it.
+    const minted = floorDec(maxSale, o.saleDec);
     const uPay = unit(o.payDec);
     const tokensFor = (c) => floorDec(fixed(bn(c).times(bn(o.rate))), o.saleDec);
 

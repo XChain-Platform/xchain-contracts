@@ -96,7 +96,8 @@ function registerExactCapTests(ctx, kit) {
                 const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
                     params: [OWNER, PAY, SALE, '1', soft, hard, '50', '8'] });
                 assert.strictEqual(res.success, false, 'softCap ' + soft + ' / hardCap ' + hard + ' deployed');
-                assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
+                // The notation gate refuses it before any magnitude check runs.
+                assert(String(res.error).includes('must be a plain decimal'), 'got: ' + res.error);
             }
         });
     });

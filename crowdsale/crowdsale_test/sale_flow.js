@@ -126,6 +126,28 @@ function registerBurnEdgeCases(ctx, kit) {
         assertContractBalance(kit.h.ledger, ADDR, SALE, '0');
     });
 
+    // hardCap 10.5 at rate 0.5 is 5.25 sale tokens, off a 0-decimal grid: the issue and
+    // the burn must both carry the floored 5, never a value the indexer would round.
+    it('issues and burns an off-grid hardCap*rate floored onto the sale grid', async function () {
+        const deployed = await deploy({ rate: '0.5', soft: '1', hard: '10.5', decimals: '0' });
+        assertSuccess(deployed);
+        const issue = deployed.result.emittedActions.filter(e => e.action === 'ISSUE')[0];
+        assert.deepStrictEqual([issue.params.maxSupply, issue.params.maxMint, issue.params.mintSupply],
+            ['5', '5', '5']);
+        assertSuccess(await buy(B1, '2'));
+        close();
+        assertSuccess(await call('finalize', B1));
+
+        const burned = await call('burnUnsold', OWNER);
+        assertSuccess(burned);
+        assertEmittedActions(burned, [
+            { action: 'DESTROY', params: { tick: SALE, quantity: '4' } }
+        ]);
+        assertContractBalance(kit.h.ledger, ADDR, SALE, '1');
+        assertSuccess(await call('claim', B1));
+        assertContractBalance(kit.h.ledger, ADDR, SALE, '0');
+    });
+
     it('rejects burning before finalization', async function () {
         assertSuccess(await deploy());
         assertReverted(await call('burnUnsold', OWNER), 'sale not finalized');

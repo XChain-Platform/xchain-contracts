@@ -293,6 +293,15 @@ function registerTermValidation(deployWith) {
             assert.strictEqual(await deploys(terms(v)), true, `stake ${JSON.stringify(v)} must deploy`);
         }
     });
+    // The notation gate runs before the positivity check, so text math cannot parse
+    // gets the plain-decimal message rather than a generic math error.
+    it('names the plain-decimal rule for an unparseable stake or strike', async function () {
+        for (const params of [terms('abc'), terms(STAKE, 'abc')]) {
+            const r = await deployWith(params);
+            assert.strictEqual(r.success, false);
+            assert.ok(/plain decimal/.test(String(r.error)), 'unexpected revert: ' + r.error);
+        }
+    });
 }
 
 // settleRound and deadlineBlocks: integer shape, range, and the value stored.

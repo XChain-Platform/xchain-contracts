@@ -105,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -128,6 +128,8 @@ module.exports = {
         var unit    = xchain.getInputParam(2);
 
         xchain.require(payTick, 'payTick required');
+        // Gate the notation of price too: it is stored verbatim and echoed by info().
+        requirePlainDecimal(xchain, price, 'price');
         xchain.require(price && xchain.math.gt(price, '0'), 'price must be > 0');
         // Gate the NOTATION of unit before the magnitude check. xchain.math accepts
         // every spelling mathjs parses ('2.5e-1', '0x10', '+1.5', '.5'), and unit is
@@ -173,9 +175,8 @@ module.exports = {
         // --- Payment: delta of the contract's payTick balance since last draw ---
         var curPay = xchain.getBalance(self, payTick) || '0';
         var paid   = xchain.math.subtract(curPay, xchain.state.get('acctPay'));
-        // Compare the payment exactly; the gte term independently keeps a non-finite
-        // price (only checked > 0 at deploy) unpayable.
-        xchain.require(xchain.math.gte(paid, price) && isAtLeastExact(xchain, paid, price), 'underpaid');
+        // Compare the payment exactly (price is a plain decimal, gated at deploy).
+        xchain.require(isAtLeastExact(xchain, paid, price), 'underpaid');
 
         // --- Build the in-stock weighted inventory: copies = floor(balance / unit) ---
         var cards   = xchain.state.get('cards').split('|');

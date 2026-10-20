@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -133,6 +133,8 @@ module.exports = {
         // Same gate and rationale as dutchAuction.js's price terms.
         requirePlainDecimal(xchain, itemAmount, 'itemAmount');
         xchain.require(itemAmount && xchain.math.gt(itemAmount, '0'), 'itemAmount must be positive');
+        // Gate the notation of minBid too: it is stored verbatim and echoed by info().
+        requirePlainDecimal(xchain, minBid, 'minBid');
         xchain.require(minBid && xchain.math.gt(minBid, '0'), 'minBid must be positive');
 
         // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
@@ -212,10 +214,9 @@ module.exports = {
         var newBid   = xchain.math.subtract(held, highBid);
 
         xchain.require(xchain.math.gt(newBid, '0'), 'no bid received (DEPOSIT in the same BATCH)');
-        // Compare the reserve exactly; the gte term independently keeps a non-finite
-        // minBid (only checked > 0 at deploy) unreachable.
+        // Compare the reserve exactly (minBid is a plain decimal, gated at deploy).
         var minBid = xchain.state.get('minBid');
-        xchain.require(xchain.math.gte(newBid, minBid) && isAtLeastExact(xchain, newBid, minBid), 'bid below the minimum');
+        xchain.require(isAtLeastExact(xchain, newBid, minBid), 'bid below the minimum');
         // Compare the raise exactly; both operands are finite here, since highBid only
         // ever holds a newBid that passed the reserve check above.
         xchain.require(exceedsExactly(xchain, newBid, highBid), 'bid must exceed the current high bid');

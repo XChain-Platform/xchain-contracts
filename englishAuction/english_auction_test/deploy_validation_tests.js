@@ -21,6 +21,18 @@ function registerTickAndBidTests(tests) {
         const { r } = await deployFresh(tests, 'C:BTC:3', [SELLER, ITEM, '10', BID, '0', '5']);
         assert.strictEqual(r.success, false, 'deploy with minBid=0 should revert');
     });
+
+    // minBid is stored verbatim and echoed by info(), and every spelling here
+    // passes the > 0 magnitude check, so only the notation gate can refuse it.
+    it('rejects a minBid that is not a plain fixed-notation decimal', async function () {
+        const BAD = ['1e3', '0x10', '+1.5', '.5', '5.', '1_000', 'Infinity'];
+        const accepted = [];
+        for (let i = 0; i < BAD.length; i++) {
+            const { r } = await deployFresh(tests, 'C:BTC:13', [SELLER, ITEM, '10', BID, BAD[i], '5']);
+            if (r.success || !String(r.error).includes('minBid')) accepted.push(BAD[i] + ' -> ' + (r.success ? 'deployed' : r.error));
+        }
+        assert.deepStrictEqual(accepted, [], 'minBid spellings not refused by the minBid gate');
+    });
 }
 
 function registerDeadlineTests(tests) {

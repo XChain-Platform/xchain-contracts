@@ -37,7 +37,7 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`) into contract custody, locks minting, and opens the sale. |
+| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`, floored onto the `saleDecimals` grid) into contract custody, locks minting, and opens the sale. `rate`, `softCap` and `hardCap` must be plain decimals (digits and one optional point). |
 | `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
 | `burnUnsold()` | anyone (after finalization, once) | Permanently burns every sale token not allocated to a buyer after a successful sale, or the entire inventory after a failed sale. Outstanding successful claims remain fully backed. |
@@ -62,7 +62,8 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   SUCCESS-only, `refund()` is FAILED-only.
 - **Unauthorized or repeated withdrawal.** `withdraw()` is owner-only and guarded
   by a `withdrawn` flag.
-- **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
+- **Token supply.** The full `hardCap*rate` supply, floored onto the sale
+  token's grid so the indexer never rounds it, is pre-minted into contract
   custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
   `MINT` cannot consume the cap or create unbacked supply, and claims only send
   tokens from the fixed inventory. After finalization, anyone can call

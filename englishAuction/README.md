@@ -145,6 +145,9 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   can win the item at that price.
 - **No bid increment schedule.** Any bid that clears `minBid` and exceeds the
   current high bid is accepted, however small the margin.
+- **`minBid` must be a plain fixed-notation decimal.** `initialize()` rejects
+  spellings such as `"1e3"`, `"0x10"` or `"Infinity"`, because `minBid` is
+  stored and echoed by `info()` exactly as written.
 - **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,
   not at deploy.** The item tick's decimals are unreadable while the contract
   holds none of it, so the constructor can only check that `itemAmount` is a

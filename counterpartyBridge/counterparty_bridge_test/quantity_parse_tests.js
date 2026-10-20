@@ -6,7 +6,45 @@ module.exports = function registerQuantityParseTests(context) {
         registerMixedPage(context);
         registerSpellingMatrix(context);
     });
+    describe('on-grid quantities below the tolerant comparison floor', function () {
+        registerSubToleranceQuantity(context);
+    });
 };
+
+// A tolerant gt reads any amount <= 1e-15 as zero; the 18-decimal grid holds 1e-18.
+function registerSubToleranceQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, nextTxHash
+    } = context;
+    const claimWith = makeClaimWith(context);
+
+    it('credits a one-base-unit burn on an 18-decimal deploy', async function () {
+        await deployBridge(undefined, '18');
+        const h = getHarness();
+        h.ledger.setTokenDecimals(XC_TICK, 18);
+        const txHash = nextTxHash();
+        const cb = await claimWith('0.000000000000000001', txHash);
+        assertSuccess(cb);
+        assertEmittedActions(cb, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '0.000000000000000001' } }]);
+        assertContractState(h.ledger, ADDR, 'burned:' + txHash, true);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0.000000000000000001');
+        assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '0.000000000000000001');
+    });
+
+    it('still skips dust that floors to zero on an 8-decimal deploy', async function () {
+        await deployBridge();
+        const h = getHarness();
+        const txHash = nextTxHash();
+        const cb = await claimWith('0.000000009', txHash);
+        assertSuccess(cb);
+        assertEmittedActions(cb, []);
+        assert.strictEqual(cb.returnValue, JSON.stringify('no burns to claim'));
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!('burned:' + txHash in h.ledger.getContractState(ADDR)),
+            'a dust row must not be marked credited');
+    });
+}
 
 function makeClaimWith(context) {
     const { ADDR, HOLDER, assertSuccess, getHarness, seedSendsResponse, sendsPayload } = context;

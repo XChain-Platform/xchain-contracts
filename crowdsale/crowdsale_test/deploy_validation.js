@@ -29,6 +29,20 @@ function registerShapeChecks(ctx, bad) {
             assert(String(res.error).includes('rate must be a plain decimal'), 'got: ' + res.error);
         }
     });
+    // Caps get the same notation gate as rate: math.gt and the exact compare accept
+    // these spellings, and the caps are stored and echoed by info() verbatim.
+    it('rejects a softCap or hardCap that is not a plain decimal', async function () {
+        for (const v of ['1e3', '0x10', '1_000', '+100', '100.', '.5e3', ' 100', '1.2.3']) {
+            const soft = await bad([OWNER, PAY, SALE, RATE, v, '100000', '50', '8']);
+            assert.strictEqual(soft.success, false, 'softCap ' + JSON.stringify(v) + ' deployed');
+            assert(String(soft.error).includes('softCap'), 'got: ' + soft.error);
+            const hard = await bad([OWNER, PAY, SALE, RATE, '1', v, '50', '8']);
+            assert.strictEqual(hard.success, false, 'hardCap ' + JSON.stringify(v) + ' deployed');
+            assert(String(hard.error).includes('hardCap'), 'got: ' + hard.error);
+        }
+        assert.strictEqual((await bad([OWNER, PAY, SALE, RATE, '100.5', '200.25', '50', '8'])).success, true,
+            'plain fractional caps still deploy');
+    });
 }
 
 function registerDecimalsChecks(ctx, bad) {

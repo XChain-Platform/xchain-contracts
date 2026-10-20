@@ -93,6 +93,8 @@ de-correlate same-block draws.
   deploy, when the contract holds none of them; `initialize` still rejects a
   `unit` that is not a plain fixed-notation decimal, since `"2.5e-1"` would
   pass the grid check unchanged and the ledger would read it as `0.25`.
+  `price` gets the same notation check, because it is stored and echoed by
+  `info()` exactly as written.
   The grid check compares values, not spellings, so a `unit` written with
   trailing zeros (`"1.00000000"` on a zero-decimal card) is on the grid and
   draws normally.

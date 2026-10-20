@@ -147,7 +147,7 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -220,7 +220,9 @@ module.exports = {
             // in the current reserve ratio to avoid donating the surplus.
             var sA = xchain.math.divide(xchain.math.multiply(depA, totalShares), reserveA);
             var sB = xchain.math.divide(xchain.math.multiply(depB, totalShares), reserveB);
-            shares = xchain.math.min(sA, sB);
+            // Pick the scarcer side exactly: a tolerant min returns sA when sB sits
+            // within 1e-12 below it, minting the larger share count.
+            shares = isAtLeastExact(xchain, sB, sA) ? sA : sB;
         }
         // Quantise to the LP grid so state totalShares matches the LP the indexer mints.
         shares = floorToDecimals(shares, LP_DECIMALS);
@@ -255,7 +257,9 @@ module.exports = {
             xchain.state.get('lpInventory')
         );
         xchain.require(xchain.math.gt(shares, '0'), 'must deposit LP shares');
-        xchain.require(xchain.math.lte(shares, totalShares), 'shares exceed total');
+        // Cap the burn at totalShares exactly: a tolerant lte passes shares up to
+        // 1e-12 above it, and the proportional payout would then exceed the reserves.
+        xchain.require(isAtLeastExact(xchain, totalShares, shares), 'shares exceed total');
 
         // Quantise each payout DOWN to its token grid so the state debit matches the
         // amount the indexer actually sends from custody (dust favours the pool).

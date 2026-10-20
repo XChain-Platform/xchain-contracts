@@ -83,7 +83,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.3.1'
+        version:     '1.3.2'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -120,15 +120,16 @@ module.exports = {
 
         xchain.require(maker, 'maker required');
         xchain.require(coinPair, 'coinPair required');
-        xchain.require(strike && xchain.math.gt(strike, '0'), 'strike must be positive');
+        // Gate the strike's notation first, so unparseable text gets the plain-decimal message.
         requirePlainDecimal(xchain, strike, 'strike');
+        xchain.require(strike && xchain.math.gt(strike, '0'), 'strike must be positive');
         xchain.require(side === 'OVER' || side === 'UNDER', 'side must be OVER or UNDER');
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
         // Notation gate, NOT a grid check (the tick's decimals are unreadable at
-        // deploy). The positivity test above is no filter at all, and refundBoth()'s
+        // deploy). The positivity test below is no filter at all, and refundBoth()'s
         // floorToDecimals silently corrupts non-fixed input. See requirePlainDecimal.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
 
         // Shape-check the integers, do NOT parseInt-then-range-check them. A
         // radix-less parseInt blesses spellings that mean something else entirely

@@ -132,6 +132,8 @@ EXECUTE(bridge, "claimedTotal", "<your_address>")               # verify
 - `maxSupply`: hard cap, in `xchainTick` units. **Set this to `cpAsset`'s
   known total supply** so the bridge can never mint more XChain-side than
   exists Counterparty-side no matter how many addresses burn-and-claim.
+  It must be a plain fixed-notation decimal (`"1e8"` or `"0x10"` reverts),
+  because it is written into the `ISSUE` exactly as given.
 - `decimals`: must match how the sends API reports `quantity` for this
   asset (8 for a divisible Counterparty asset, 0 for an indivisible one)
   so claimed amounts land on the tick's real grid.

@@ -51,6 +51,33 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
+// Return true when a > b exactly, by the sign and digits of the exact subtract.
+// xchain.math.gt reads a gap inside the tolerance as equal, so a raise or a winning tally one
+// base unit ahead would not count. A non-finite difference returns false (fails closed).
+function exceedsExactly(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) === '-') return false;
+    for (var i = 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+    }
+    return false;
+}
+
+// Return true when the fixed-notation value `v` is > 0 exactly, by its own sign and digits.
+// xchain.math.gt reads a value within 1e-15 of zero as zero, so a real dust payout would be
+// refused. Any character other than a digit or a point ('Infinity', 'NaN') returns false.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
+}
+
 // Throw unless `value` is a plain fixed-notation decimal: digits, with at most
 // one decimal point that has digits on both sides. The notation gate that
 // `requirePositive` above is not.
