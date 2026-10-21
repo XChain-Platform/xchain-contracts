@@ -104,6 +104,7 @@ function armed(mode, amount, opts) {
             const govSupply = h.ledger.total(GOV);
             const paidPerProposal = {};
             let paidSum = bn('0');
+            const paidAmount = {};
             for (let step = 0; step < 40; step++) {
                 if (R.next() < 0.3) h.deposit(HOLDER, ADDR, PAY, String(R.int(1, 300)));
                 if (R.next() < 0.5) h.mineBlock(R.int(1, 4));
@@ -156,6 +157,7 @@ function armed(mode, amount, opts) {
                         assert.strictEqual(sends[0].params.destination, before.recipient, where);
                         paidPerProposal[id] = (paidPerProposal[id] || 0) + 1;
                         paidSum = paidSum.plus(bn(sends[0].settled));
+                        paidAmount[id] = bn(sends[0].settled);
                     } else {
                         assert.strictEqual(r.actions.length, 0, where + ' emitted from a non-execute method');
                     }
@@ -165,11 +167,26 @@ function armed(mode, amount, opts) {
             }
             for (const k of Object.keys(paidPerProposal)) assert.strictEqual(paidPerProposal[k], 1, 'seed ' + seed + ' proposal ' + k + ' paid twice');
             const count = parseInt(h.state(ADDR, 'proposal_count'), 10);
+            // Settled records roll out of the bounded archive, so the recorded
+            // total covers every proposal still retrievable and must equal
+            // SENT exactly when none of the paid ones has rolled off.
+            let recorded = bn('0');
+            let retrievedPaid = 0;
             for (let i = 1; i <= count; i++) {
                 const p = rec(h, String(i));
-                if (p && paidPerProposal[String(i)])
+                if (!p) continue;
+                if (paidPerProposal[String(i)]) {
                     assert.strictEqual(p.status, 'EXECUTED', 'seed ' + seed + ' paid but not EXECUTED');
+                    assert.ok(bn(p.paid).eq(paidAmount[String(i)]), 'seed ' + seed + ' proposal ' + i + ': rec.paid != SENT');
+                    recorded = recorded.plus(bn(p.paid));
+                    retrievedPaid++;
+                } else if (p.status === 'EXECUTED') {
+                    assert.fail('seed ' + seed + ' proposal ' + i + ' EXECUTED without a SENT');
+                }
             }
+            if (retrievedPaid === Object.keys(paidPerProposal).length)
+                assert.ok(recorded.eq(paidSum), 'seed ' + seed + ': rec.paid total ' + recorded + ' != SENT ' + paidSum);
+            else assert.ok(recorded.lte(paidSum), 'seed ' + seed + ': rec.paid total above SENT');
             assert.ok(bn(h.ledger.getBalance(PAYEE, PAY)).eq(paidSum), 'seed ' + seed + ': payee balance != paid');
         }
         for (const k of Object.keys(hits)) assert.ok(hits[k] >= 20, 'the run rarely reached ' + k + ': ' + JSON.stringify(hits));
