@@ -197,12 +197,6 @@ conventions, then (guardian mode) asks the guardian to bind it:
   raid. Verifying that is the guardian's job, which is why `guardian` is the
   recommended mode. (The *electorate* half of this limitation is now closed:
   the protocol delivers the poll's `TICK`, and `arm()` pins it to `govTick`.)
-- **Proposals are never pruned.** Every `propose()` stores a new
-  `proposal:<id>` state key and no transition deletes one, while the VM
-  refuses a contract's 10,001st key. About 9,990 proposals in, `propose()`
-  reverts for good, and once the live proposals settle the balance cannot
-  leave. One holder of `minProposeBalance` can reach that for fees alone, so
-  set it high and watch the proposal count in `info()`.
 - **One transfer per proposal.** No batching, no streaming; deploy the vesting
   template from a proposal's recipient address if you need scheduled release.
 - **The guardian can censor.** It cannot steal, but it can refuse to bind or
