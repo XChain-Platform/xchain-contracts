@@ -104,6 +104,7 @@ function armed(mode, amount, opts) {
             const govSupply = h.ledger.total(GOV);
             const paidPerProposal = {};
             let paidSum = bn('0');
+            let recorded = bn('0');
             for (let step = 0; step < 40; step++) {
                 if (R.next() < 0.3) h.deposit(HOLDER, ADDR, PAY, String(R.int(1, 300)));
                 if (R.next() < 0.5) h.mineBlock(R.int(1, 4));
@@ -156,6 +157,9 @@ function armed(mode, amount, opts) {
                         assert.strictEqual(sends[0].params.destination, before.recipient, where);
                         paidPerProposal[id] = (paidPerProposal[id] || 0) + 1;
                         paidSum = paidSum.plus(bn(sends[0].settled));
+                        const settled = rec(h, id);
+                        assert.strictEqual(settled.status, 'EXECUTED', where + ': payout not recorded as EXECUTED');
+                        recorded = recorded.plus(bn(settled.paid));
                     } else {
                         assert.strictEqual(r.actions.length, 0, where + ' emitted from a non-execute method');
                     }
@@ -170,6 +174,7 @@ function armed(mode, amount, opts) {
                 if (p && paidPerProposal[String(i)])
                     assert.strictEqual(p.status, 'EXECUTED', 'seed ' + seed + ' paid but not EXECUTED');
             }
+            assert.ok(recorded.eq(paidSum), 'seed ' + seed + ': rec.paid total ' + recorded + ' != SENT ' + paidSum);
             assert.ok(bn(h.ledger.getBalance(PAYEE, PAY)).eq(paidSum), 'seed ' + seed + ': payee balance != paid');
         }
         for (const k of Object.keys(hits)) assert.ok(hits[k] >= 20, 'the run rarely reached ' + k + ': ' + JSON.stringify(hits));

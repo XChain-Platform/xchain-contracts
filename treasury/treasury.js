@@ -119,7 +119,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
