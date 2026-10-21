@@ -33,18 +33,13 @@ if (!lintSource) console.log('Skipping pattern lint tests: xchain-vm linter not 
 const DIR = __dirname;
 const PATTERN_FILES = fs.readdirSync(DIR).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));
 
-// Pastes access-control + pausable + state-machine + validation + safe-transfer
-// helpers and uses them (the documented authoring model). Critically, the
-// methods validate via require* helpers (not a direct xchain.require), which
-// must NOT trip the missing-input-validation warning.
-const COMPOSED = [
-    "function onlyOwner(xchain) { xchain.require(xchain.getSourceAddress() === xchain.state.get('owner'), 'not owner'); }",
-    "function whenNotPaused(xchain) { xchain.require(xchain.state.get('paused') !== 'true', 'paused'); }",
-    "function requireStatus(xchain, e) { xchain.require(xchain.state.get('status') === e, 'bad state'); }",
-    "function setStatus(xchain, n) { xchain.state.set('status', n); }",
-    "function requireAddress(xchain, v, name) { xchain.require(typeof v === 'string' && v.length > 0, name); }",
-    "function requirePositive(xchain, a, name) { xchain.require(a && xchain.math.gt(a, '0'), name); }",
-    "function heldBalance(xchain, tick) { return xchain.getBalance(xchain.getContractAddress(), tick) || '0'; }",
+// Pastes every real pattern source, sorted as patterns.e2e.test.js joins them, above
+// methods that use the helpers (the documented authoring model). The methods validate
+// via require* helpers, not a direct xchain.require, and must NOT trip missing-input-validation.
+const LIBRARY = PATTERN_FILES.slice().sort()
+    .map(f => fs.readFileSync(path.join(DIR, f), 'utf8'))
+    .join('\n');
+const EXPORTS = [
     "module.exports = {",
     "  initialize: function (xchain) {",
     "    var owner = xchain.getInputParam(0);",
@@ -65,6 +60,16 @@ const COMPOSED = [
     "  }",
     "};"
 ].join('\n');
+const COMPOSED = LIBRARY + '\n' + EXPORTS;
+
+// List the bare (non-member) calls in the methods; lint never resolves identifiers,
+// so a renamed library helper would otherwise leave this fixture linting a dead name.
+function undeclaredHelperCalls() {
+    const declared = new Set([...LIBRARY.matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map(m => m[1]));
+    const called   = [...EXPORTS.matchAll(/(?:^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
+    const keywords = new Set(['function', 'if', 'for', 'while', 'switch', 'return', 'typeof', 'catch']);
+    return called.filter(fn => !keywords.has(fn) && !declared.has(fn));
+}
 
 (lintSource ? describe : describe.skip)('contract pattern library', function () {
 
@@ -79,6 +84,11 @@ const COMPOSED = [
     });
 
     describe('a contract composed from the patterns is lint-clean', function () {
+        it('calls only helpers the real pattern sources declare', function () {
+            assert.deepStrictEqual(undeclaredHelperCalls(), [],
+                'the composed methods call helpers no patterns/*.js file declares');
+        });
+
         it('lints with zero errors and zero warnings', function () {
             const r = lintSource(COMPOSED);
             assert.strictEqual(r.errors.length, 0, 'errors: ' + JSON.stringify(r.errors.map(e => e.rule)));
@@ -226,9 +236,9 @@ describe('pattern helpers pasted into templates match the library source', funct
             'template discovery found nothing; the <name>/<name>.js predicate has drifted from ' +
             'bin/xchain-contracts.js listAvailable() and this guard is now inert');
         assert.ok(LIBRARY.size > 0, 'no top-level helper found in any patterns/*.js');
-        // 10 requireIntInRange copies plus 5 requirePlainDecimal copies ship today. A
+        // At least 58 pasted copies ship, 11 of them floorToDecimals and 9 tickDecimals. A
         // template that stops pasting a helper lowers this on purpose, here, in review.
-        assert.ok(PAIRS.length >= 15,
+        assert.ok(PAIRS.length >= 58,
             'only ' + PAIRS.length + ' pasted helper copies discovered; the scan has lost part ' +
             'of the population it pins');
     });

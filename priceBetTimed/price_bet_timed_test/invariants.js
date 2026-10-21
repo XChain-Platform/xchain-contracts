@@ -23,14 +23,14 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { available, Harness, rng, M, bn, fixed, roundHalfUp } = require('../../test/helpers/harness.js');
+const { available, Harness, rng, M, bn, fixed, roundHalfUp, MODEL_START_TIMESTAMP } = require('../../test/helpers/harness.js');
 
 const CODE = fs.readFileSync(path.join(__dirname, '..', 'priceBetTimed.js'), 'utf8');
 const ADDR = 'C:BTC:1';
 const TICK = 'TEST';
 const PAIR = 'BTC/USD';
 const STRIKE = '60000';
-const T0 = 1700000000;   // harness block-time anchor
+const T0 = MODEL_START_TIMESTAMP;   // model clock origin
 const T = T0 + 1500;     // settle time, 2.5 blocks after deploy at 600 s per block
 const FUNDS = '1000000000000000000000000000000000000';
 const ACTORS = ['maker', 'taker', 'stranger'];

@@ -152,7 +152,9 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   not at deploy.** The item tick's decimals are unreadable while the contract
   holds none of it, so the constructor can only check that `itemAmount` is a
   plainly spelled positive decimal; the grid check runs at `fund()`, the first
-  point the ledger can answer and the last before bidding opens. Rejecting is
+  point the ledger can answer and the last before bidding opens. The check
+  compares values, not spellings, so an `itemAmount` written with trailing
+  zeros (`"10.00000000"` on a zero-decimal item) is on the grid. Rejecting is
   deliberate rather than silently flooring: the ledger re-quantises every
   emitted amount at write time, so an off-grid `itemAmount` would deliver less
   than advertised - nothing at all on a 0-decimal tick - while the winner paid

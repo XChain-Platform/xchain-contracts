@@ -10,8 +10,8 @@
 //     var amount   = xchain.getInputParam(1);
 //     var deadline = xchain.getInputParam(2);
 //     requireAddress(xchain, owner, 'owner');
-//     requirePositive(xchain, amount, 'amount');
 //     requirePlainDecimal(xchain, amount, 'amount');
+//     requirePositive(xchain, amount, 'amount');
 //     requireIntInRange(xchain, deadline, 1, 1000000, 'deadlineBlocks');
 //   }
 

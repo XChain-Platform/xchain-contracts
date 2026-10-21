@@ -302,7 +302,7 @@ describe('gate wiring: the preflight cannot be dropped silently', function () {
     it('every discovered template declares a consensus-required meta block', templatesDeclareMeta);
     it('every discovered template declares meta as the first exported key', metaIsFirstKey);
     it('every template suite deploys its template through the real VM', suitesDeployThroughVm);
-    it('every pattern source contributes a helper the VM-deployed vault calls', patternsAreCalledByVault);
+    it('every pattern helper is called by a contract the VM e2e suite deploys', patternsAreCalledByVault);
     it('a helper named only in a comment does not read as called', commentMentionIsNotACall);
 });
 
@@ -383,7 +383,8 @@ function callbacksNamePreambleSlots() {
 }
 
 // The inverse, keyed on behaviour: a method that reads an attestation response is one the
-// injector fires (treasury.arm is a POLL callback with a longer wire, pinned in
+// injector fires (treasury.arm is a POLL callback with a longer wire, reads no attestation
+// response so this scan never sees it, and is pinned in test/poll_callback_wiring.test.js).
 function responseReadersAreRegistered() {
     none(offendersOverLoaded(function (name, mod, out) {
         const registered = new Set(callbackRegistrations(tplSrc(name)).map(s => s.method).filter(Boolean));

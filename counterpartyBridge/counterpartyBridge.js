@@ -116,9 +116,9 @@ function floorToDecimals(value, decimals) {
     var neg = s.charAt(0) === '-';
     if (neg) s = s.substring(1);
     var dot = s.indexOf('.');
-    if (dot < 0) return value;
+    if (dot < 0) return value;                          // already an integer
     var frac = s.substring(dot + 1);
-    if (frac.length <= decimals) return value;
+    if (frac.length <= decimals) return value;          // already on the grid
     var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
     var out = s.substring(0, dot) + kept;
     return neg ? '-' + out : out;
@@ -159,9 +159,11 @@ function extractBurnSends(payload, asset, source) {
         // a number, and onClaim() hands it straight to floorToDecimals, which is
         // string surgery that PRESUPPOSES fixed notation. Every other template
         // feeds that helper a value xchain.math computed (always fixed notation);
-        // here it is raw text an API we do not control chose the spelling of, and
-        // a JSON number serialized in exponential form is a legal spelling of the
-        // same value. Fed '1.23456789e2' the floor does not no-op, it CORRUPTS:
+        // here it is raw text an API we do not control chose the spelling of.
+        // Only a JSON string is taken: JSON.parse has already rounded a JSON number
+        // to a double, so 9007199254740995 arrives as 9007199254740996 and would
+        // re-render as a plain decimal of the wrong value. Fed '1.23456789e2' the
+        // floor does not no-op, it CORRUPTS:
         // it returns '1.23456789' for a value of 123.456789, so the claimer is
         // credited 1% of what they burned, with no user error involved and no
         // revert to notice.
@@ -175,9 +177,9 @@ function extractBurnSends(payload, asset, source) {
         // contract as the malformed-JSON path above.
         if (row && row.asset === asset && row.source === source && row.status === 'valid'
             && typeof row.tx_hash === 'string' && row.tx_hash.length > 0
-            && row.quantity !== undefined && row.quantity !== null
+            && typeof row.quantity === 'string'
             && isPlainDecimal(row.quantity)) {
-            out.push({ txHash: row.tx_hash, quantity: String(row.quantity) });
+            out.push({ txHash: row.tx_hash, quantity: row.quantity });
         }
     }
     return out;
@@ -191,7 +193,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.2.0'
+        version:     '1.3.0'
     },
 
     abi: { version: 1, methods: {

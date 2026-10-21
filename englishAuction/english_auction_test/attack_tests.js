@@ -193,10 +193,23 @@ function registerPreFundedCancelTests(tests) {
         assertSuccess(await depositAndFund());
         assertContractState(env.h.ledger, ADDR, 'status', 'ACTIVE');
     });
+
+    // One base unit of an 18-decimal tick sits under the math comparison tolerance of zero.
+    it('cancel() returns a held item balance below the comparison tolerance', async function () {
+        const DUST = '0.000000000000000001';
+        await deployAuction();
+        env.h.ledger.setTokenDecimals(ITEM, 18);
+        env.h.deposit(SELLER, ADDR, ITEM, DUST);
+        const c = await env.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
+        assertSuccess(c);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST } }]);
+        assertBalance(env.h.ledger, SELLER, ITEM, '10');
+        assertContractState(env.h.ledger, ADDR, 'status', 'CANCELLED');
+    });
 }
 
 function registerItemGridControlTests(tests) {
-    const { assertSuccess, assertReverted, assertBalance, assertContractState,
+    const { assertSuccess, assertReverted, assertBalance, assertContractBalance, assertContractState,
         SELLER, ITEM, ADDR, env, deployAuction, depositAndFund, bid } = tests;
 
     it('an off-grid itemAmount above one unit is rejected too, not rounded up', async function () {
@@ -220,6 +233,27 @@ function registerItemGridControlTests(tests) {
         const r = await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
         assertSuccess(r);
         assertBalance(env.h.ledger, 'alice', ITEM, '10');
+    });
+
+    it('an on-grid itemAmount spelled with trailing zeros funds, settles and delivers it', async function () {
+        assertSuccess(await deployOffGridItem(tests, '10.00000000'));
+        env.h.deposit(SELLER, ADDR, ITEM, '10');
+        assertSuccess(await env.h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }));
+        assertContractState(env.h.ledger, ADDR, 'status', 'ACTIVE');
+        assertSuccess(await bid('alice', '50'));
+        for (let i = 0; i < 5; i++) env.h.mineBlock();
+        assertSuccess(await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }));
+        assertBalance(env.h.ledger, 'alice', ITEM, '10');
+        assertContractBalance(env.h.ledger, ADDR, ITEM, '0');
+    });
+
+    it('an itemAmount one base unit past the grid is still rejected', async function () {
+        assertSuccess(await deployOffGridItem(tests, '1.00000001'));
+        env.h.deposit(SELLER, ADDR, ITEM, '10');
+        assertReverted(
+            await env.h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+            'not representable at itemTick decimals');
+        assertContractState(env.h.ledger, ADDR, 'status', 'INIT');
     });
 }
 
