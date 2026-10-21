@@ -18,6 +18,15 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { available, Harness, rng, bn } = require('../../test/helpers/harness.js');
+const registerGrowthTests = require('./growth');
+
+const VM_DIR = path.join(__dirname, '..', '..', '..', 'xchain-vm');
+let XChainVM, E2EHarness, assertSuccess, assertReverted;
+try {
+    XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
+    ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
+    ({ assertSuccess, assertReverted } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+} catch (e) { XChainVM = null; }
 
 const CODE = fs.readFileSync(path.join(__dirname, '..', 'treasury.js'), 'utf8');
 const ADDR = 'C:BTC:1';
@@ -62,7 +71,12 @@ function armArgs(id, o) {
     return [x.poll || POLL, 'finalized', x.winning || '0', '4000', '12', '1', '1', x.tick || GOV, id];
 }
 
-function rec(h, id) { return JSON.parse(h.state(ADDR, 'proposal:' + id)); }
+function rec(h, id) {
+    const raw = h.state(ADDR, 'proposal:' + id);
+    if (raw !== null) return JSON.parse(raw);
+    const archive = JSON.parse(h.state(ADDR, 'proposal_archive'));
+    return archive.find((item) => item.id === String(id)) || null;
+}
 
 // propose, bind (guardian mode), arm, fund; returns the harness at the arming height.
 function armed(mode, amount, opts) {
@@ -79,7 +93,7 @@ function armed(mode, amount, opts) {
 
     it('conservation, single payout and authorization across seeded random call sequences', function () {
         const ACTORS = [GUARDIAN, HOLDER, HOLDER2, SMALL, ATTACKER, ADDR];
-        const METHODS = ['propose', 'propose', 'approvePoll', 'approvePoll', 'arm', 'arm', 'arm', 'veto', 'cancel',
+        const METHODS = ['propose', 'propose', 'approvePoll', 'approvePoll', 'arm', 'arm', 'arm', 'veto', 'cancel', 'cancel',
             'executeProposal', 'executeProposal', 'executeProposal'];
         const hits = { executeProposal: 0, arm: 0, veto: 0, cancel: 0, refusedExecute: 0 };
         for (let seed = 1; seed <= 120; seed++) {
@@ -90,6 +104,7 @@ function armed(mode, amount, opts) {
             const govSupply = h.ledger.total(GOV);
             const paidPerProposal = {};
             let paidSum = bn('0');
+            let recorded = bn('0');
             for (let step = 0; step < 40; step++) {
                 if (R.next() < 0.3) h.deposit(HOLDER, ADDR, PAY, String(R.int(1, 300)));
                 if (R.next() < 0.5) h.mineBlock(R.int(1, 4));
@@ -109,7 +124,10 @@ function armed(mode, amount, opts) {
                 let id = String(R.int(1, Math.max(1, count + 1)));
                 if (method === 'executeProposal' && R.next() < 0.8) {
                     const armedIds = [];
-                    for (let i = 1; i <= count; i++) if (rec(h, String(i)).status === 'ARMED') armedIds.push(String(i));
+                    for (let i = 1; i <= count; i++) {
+                        const candidate = rec(h, String(i));
+                        if (candidate && candidate.status === 'ARMED') armedIds.push(String(i));
+                    }
                     if (armedIds.length) id = R.pick(armedIds);
                 }
                 let params;
@@ -139,6 +157,9 @@ function armed(mode, amount, opts) {
                         assert.strictEqual(sends[0].params.destination, before.recipient, where);
                         paidPerProposal[id] = (paidPerProposal[id] || 0) + 1;
                         paidSum = paidSum.plus(bn(sends[0].settled));
+                        const settled = rec(h, id);
+                        assert.strictEqual(settled.status, 'EXECUTED', where + ': payout not recorded as EXECUTED');
+                        recorded = recorded.plus(bn(settled.paid));
                     } else {
                         assert.strictEqual(r.actions.length, 0, where + ' emitted from a non-execute method');
                     }
@@ -148,11 +169,10 @@ function armed(mode, amount, opts) {
             }
             for (const k of Object.keys(paidPerProposal)) assert.strictEqual(paidPerProposal[k], 1, 'seed ' + seed + ' proposal ' + k + ' paid twice');
             const count = parseInt(h.state(ADDR, 'proposal_count'), 10);
-            let recorded = bn('0');
             for (let i = 1; i <= count; i++) {
                 const p = rec(h, String(i));
-                if (p.status === 'EXECUTED') recorded = recorded.plus(bn(p.paid));
-                else assert.ok(!paidPerProposal[String(i)], 'seed ' + seed + ' paid but not EXECUTED');
+                if (p && paidPerProposal[String(i)])
+                    assert.strictEqual(p.status, 'EXECUTED', 'seed ' + seed + ' paid but not EXECUTED');
             }
             assert.ok(recorded.eq(paidSum), 'seed ' + seed + ': rec.paid total ' + recorded + ' != SENT ' + paidSum);
             assert.ok(bn(h.ledger.getBalance(PAYEE, PAY)).eq(paidSum), 'seed ' + seed + ': payee balance != paid');
@@ -323,4 +343,10 @@ function armed(mode, amount, opts) {
         for (const p of ['0501', '5.01e2', '+501', '0', ''])
             assert.ok(!call(h, 'approvePoll', ['1', p], GUARDIAN).success, p);
     });
+});
+
+registerGrowthTests({
+    assert, XChainVM, E2EHarness, assertSuccess, assertReverted, CODE,
+    GUARDIAN, HOLDER, ATTACKER, PAYEE, ADDR, GOV, PAY,
+    TIMELOCK, WINDOW, MIN_PROPOSE
 });
