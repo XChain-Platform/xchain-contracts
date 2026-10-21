@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - escrow and escrowDelivery `initialize()` now reject an `amount` that is not a plain decimal string, because an exponent or signed form could never be matched by a deposit.
 
 ### Fixed
+- treasury bounds proposal state to 64 live records and a fixed terminal archive, limits one proposer to 16 live records, and reclaims abandoned proposals after the configured execution window so proposal traffic cannot permanently exhaust the contract key cap.
 - crowdsale reads its sale-token grid through one checked helper, so corrupt persisted decimals cannot silently change buy or claim rounding.
 - vesting's `claim()` and `revoke()` payout guards now test the floored amount exactly instead of through the tolerant `math.gt`, so a real sub-tolerance payout is no longer refused as nothing to pay.
 - vesting's `fund()` is now grantor-only, `info()` reports the same grid-floored `claimable` amount that `claim()` can pay, and `revoke()` preserves every whole tick unit for the grantor or beneficiary instead of stranding rounding dust.

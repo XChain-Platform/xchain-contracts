@@ -63,14 +63,25 @@ withdraw path outside an executed proposal.
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. |
-| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. |
+| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. A proposal must arm within `executeWindowBlocks`. |
 | `approvePoll(proposalId, pollIndex)` | guardian (guardian mode only) | Binds the verified poll to the proposal. |
 | `arm(...)` | the poll finalization callback only | Set as the binding poll's `CALLBACK_METHOD`. Verifies the result and starts the timelock; status `ARMED`. |
 | `veto(proposalId)` | guardian | Kills a `PROPOSED` or `ARMED` proposal; status `VETOED`. |
 | `cancel(proposalId)` | proposer | Withdraws a not-yet-armed proposal; status `CANCELLED`. |
 | `executeProposal(proposalId)` | anyone | After the timelock, inside the execution window: re-verifies the poll via `getPollResult`, then sends exactly (recipient, tick, amount); status `EXECUTED`. |
 | `info()` | anyone (read-only) | Config and proposal count. |
-| `proposalInfo(proposalId)` | anyone (read-only) | One proposal record; reports `EXPIRED` for an armed proposal whose window passed. |
+| `proposalInfo(proposalId)` | anyone (read-only) | A live proposal record or one of the 16 most recent compact terminal summaries; reports `EXPIRED` when a live proposal's applicable window passed. |
+
+Proposal state is bounded. At most 64 proposals can be live at once, and one
+address can hold at most 16 of those slots. A `PROPOSED` record that has not
+armed after `executeWindowBlocks` is expired; an `ARMED` record expires after
+its timelock and execution window. The next `propose()` removes expired
+records before checking either cap. `cancel`, `veto`, and successful execution
+remove the full record immediately and rotate a compact outcome into a
+16-entry archive stored under one state key. The immutable action history is
+the source for older or full terminal proposal details. Compact summaries keep
+the status, proposer, heights, paid amount, and ordinary voted amounts (amount
+strings longer than 256 characters are omitted from the summary).
 
 `propose(...)` requires `amount` to be a **plain fixed-notation decimal**
 (digits, at most one decimal point with digits on both sides). It is a
@@ -166,7 +177,10 @@ conventions, then (guardian mode) asks the guardian to bind it:
   armed state.
 - **Queue spam.** `propose` requires `minProposeBalance` of the governance
   token, and the contract's own callback identity is explicitly barred from
-  proposing.
+  proposing. One holder can occupy no more than 16 of the 64 live slots, and
+  an abandoned unarmed proposal releases its slot after
+  `executeWindowBlocks`, so one holder cannot consume the contract's state-key
+  budget or exclude every other holder indefinitely.
 
 ## Known limitations (by design, for a teaching baseline)
 

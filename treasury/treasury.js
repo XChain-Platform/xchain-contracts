@@ -97,6 +97,16 @@
 // ceiling priceBet.js and patterns/validation.js use for a block window.
 var MAX_WINDOW_BLOCKS = 1000000;
 
+// Proposal records are the only state whose cardinality follows user traffic.
+// Keep that cardinality fixed: a treasury can have this many live proposals in
+// total, one proposer can occupy only this many of those slots, and terminal
+// summaries rotate through one bounded archive value. PROPOSED records that do
+// not arm within exec_window blocks are stale and release their slots the next
+// time propose() compacts the live set.
+var MAX_LIVE_PROPOSALS = 64;
+var MAX_LIVE_PER_PROPOSER = 16;
+var MAX_ARCHIVED_PROPOSALS = 16;
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -105,7 +115,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -165,6 +175,8 @@ module.exports = {
         xchain.state.set('min_propose', minProp);
         xchain.state.set('mode', mode);
         xchain.state.set('proposal_count', '0');
+        xchain.state.set('live_proposals', '[]');
+        xchain.state.set('proposal_archive', '[]');
     },
 
     // propose(recipient, tick, amount, memo): record a spend proposal. Gated on
@@ -194,6 +206,17 @@ module.exports = {
         xchain.require(isAtLeastExact(xchain, held, xchain.state.get('min_propose')),
             'insufficient governance holdings to propose');
 
+        var live = compactLiveProposals(xchain);
+        var callerLive = 0;
+        for (var i = 0; i < live.length; i++) {
+            var open = loadLiveProposal(xchain, live[i]);
+            if (open.proposer === caller) callerLive++;
+        }
+        xchain.require(callerLive < MAX_LIVE_PER_PROPOSER,
+            'proposer has reached the live proposal limit');
+        xchain.require(live.length < MAX_LIVE_PROPOSALS,
+            'treasury has reached the live proposal limit');
+
         var id = String(parseInt(xchain.state.get('proposal_count')) + 1);
         xchain.state.set('proposal_count', id);
         saveProposal(xchain, id, {
@@ -208,6 +231,8 @@ module.exports = {
             poll:      null,
             armed:     null
         });
+        live.push(id);
+        saveLiveProposalIds(xchain, live);
         return id;
     },
 
@@ -227,7 +252,8 @@ module.exports = {
         requireCanonicalIndex(xchain, poll, 'pollIndex');
 
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'proposal is not awaiting a poll');
         rec.expected_poll = String(poll);
         saveProposal(xchain, id, rec);
     },
@@ -273,7 +299,8 @@ module.exports = {
             'poll electorate is not the governance token');
 
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'proposal is not awaiting a poll');
         if (xchain.state.get('mode') === 'guardian')
             xchain.require(rec.expected_poll === String(pollIndex),
                 'poll is not the guardian-approved poll for this proposal');
@@ -294,11 +321,12 @@ module.exports = {
             'only the guardian can veto');
         var id  = xchain.getInputParam(0);
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED' || rec.status === 'ARMED',
+        var status = effectiveProposalStatus(xchain, rec);
+        xchain.require(status === 'PROPOSED' || status === 'ARMED',
             'proposal is not vetoable');
         rec.status = 'VETOED';
         rec.vetoed = xchain.getBlockHeight();
-        saveProposal(xchain, id, rec);
+        settleProposal(xchain, id, rec);
     },
 
     // cancel(proposalId): the proposer withdraws a proposal no poll has armed.
@@ -307,9 +335,11 @@ module.exports = {
         var rec = loadProposal(xchain, id);
         xchain.require(xchain.getSourceAddress() === rec.proposer,
             'only the proposer can cancel');
-        xchain.require(rec.status === 'PROPOSED', 'only an un-armed proposal can be cancelled');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'only an un-armed proposal can be cancelled');
         rec.status = 'CANCELLED';
-        saveProposal(xchain, id, rec);
+        rec.cancelled = xchain.getBlockHeight();
+        settleProposal(xchain, id, rec);
     },
 
     // executeProposal(proposalId): anyone fires an armed proposal once the
@@ -379,7 +409,7 @@ module.exports = {
         rec.status   = 'EXECUTED';
         rec.executed = height;
         rec.paid     = amount;
-        saveProposal(xchain, id, rec);
+        settleProposal(xchain, id, rec);
 
         xchain.emit.send({
             destination: rec.recipient,
@@ -397,7 +427,10 @@ module.exports = {
             timelock:   xchain.state.get('timelock'),
             execWindow: xchain.state.get('exec_window'),
             minPropose: xchain.state.get('min_propose'),
-            proposals:  xchain.state.get('proposal_count')
+            proposals:  xchain.state.get('proposal_count'),
+            liveProposals: JSON.parse(xchain.state.get('live_proposals')).length,
+            maxLiveProposals: MAX_LIVE_PROPOSALS,
+            maxLivePerProposer: MAX_LIVE_PER_PROPOSER
         });
     },
 
@@ -408,11 +441,7 @@ module.exports = {
         var id = xchain.getInputParam(0);
         xchain.require(id, 'proposalId required');
         var rec = loadProposal(xchain, id);
-        if (rec.status === 'ARMED') {
-            var deadline = rec.armed + parseInt(xchain.state.get('timelock')) +
-                           parseInt(xchain.state.get('exec_window'));
-            if (xchain.getBlockHeight() > deadline) rec.status = 'EXPIRED';
-        }
+        rec.status = effectiveProposalStatus(xchain, rec);
         return JSON.stringify(rec);
     }
 };
@@ -561,12 +590,95 @@ function proposalKey(xchain, id) {
     return 'proposal:' + s;
 }
 
-// Read a proposal record by its canonical id.
+// Read a live proposal record by its canonical id.
+function loadLiveProposal(xchain, id) {
+    var raw = xchain.state.get(proposalKey(xchain, id));
+    xchain.require(raw !== null, 'unknown proposal');
+    return JSON.parse(raw);
+}
+
+// Read a live proposal or one of the bounded recent terminal summaries.
 function loadProposal(xchain, id) {
-    return JSON.parse(xchain.state.get(proposalKey(xchain, id)));
+    var key = proposalKey(xchain, id);
+    var raw = xchain.state.get(key);
+    if (raw !== null) return JSON.parse(raw);
+    var archive = JSON.parse(xchain.state.get('proposal_archive'));
+    for (var i = archive.length - 1; i >= 0; i--)
+        if (archive[i].id === String(id)) return archive[i];
+    xchain.require(false, 'unknown proposal');
 }
 
 // Write a proposal record by its canonical id.
 function saveProposal(xchain, id, rec) {
     xchain.state.set(proposalKey(xchain, id), JSON.stringify(rec));
+}
+
+// Derive expiry without growing state. An unarmed proposal gets exec_window
+// blocks to find and finalize its poll. An armed proposal keeps the complete
+// timelock plus execution window promised by the public API.
+function effectiveProposalStatus(xchain, rec) {
+    var height = xchain.getBlockHeight();
+    var window = parseInt(xchain.state.get('exec_window'));
+    if (rec.status === 'PROPOSED' && height > rec.created + window) return 'EXPIRED';
+    if (rec.status === 'ARMED') {
+        var deadline = rec.armed + parseInt(xchain.state.get('timelock')) + window;
+        if (height > deadline) return 'EXPIRED';
+    }
+    return rec.status;
+}
+
+function saveLiveProposalIds(xchain, ids) {
+    xchain.state.set('live_proposals', JSON.stringify(ids));
+}
+
+// Keep only a compact outcome in the bounded archive. Full proposal terms and
+// memos remain in the immutable action history; omitting them here prevents an
+// attacker from multiplying a near-limit memo across the archive value.
+function archiveProposal(xchain, id, rec) {
+    var archive = JSON.parse(xchain.state.get('proposal_archive'));
+    archive.push({
+        id: String(id),
+        proposer: rec.proposer,
+        status: rec.status,
+        created: rec.created,
+        settled: rec.executed || rec.vetoed || rec.cancelled || rec.expired,
+        amount: String(rec.amount).length <= 256 ? rec.amount : null,
+        paid: rec.paid || null
+    });
+    if (archive.length > MAX_ARCHIVED_PROPOSALS) archive.shift();
+    xchain.state.set('proposal_archive', JSON.stringify(archive));
+}
+
+// Remove a terminal proposal's individual key immediately, then retain its
+// compact outcome in the fixed archive value.
+function settleProposal(xchain, id, rec) {
+    var ids = JSON.parse(xchain.state.get('live_proposals'));
+    var kept = [];
+    for (var i = 0; i < ids.length; i++)
+        if (ids[i] !== String(id)) kept.push(ids[i]);
+    xchain.state.delete(proposalKey(xchain, id));
+    saveLiveProposalIds(xchain, kept);
+    archiveProposal(xchain, id, rec);
+}
+
+// Scan a fixed-size live set before admitting another proposal. This is both
+// the state-growth bound and the recovery path for abandoned proposals.
+function compactLiveProposals(xchain) {
+    var ids = JSON.parse(xchain.state.get('live_proposals'));
+    var kept = [];
+    for (var i = 0; i < ids.length; i++) {
+        var raw = xchain.state.get(proposalKey(xchain, ids[i]));
+        if (raw === null) continue;
+        var rec = JSON.parse(raw);
+        if (effectiveProposalStatus(xchain, rec) === 'EXPIRED') {
+            rec.status = 'EXPIRED';
+            rec.expired = xchain.getBlockHeight();
+            xchain.state.delete(proposalKey(xchain, ids[i]));
+            archiveProposal(xchain, ids[i], rec);
+        } else {
+            kept.push(ids[i]);
+        }
+    }
+    saveLiveProposalIds(xchain, kept);
+    return kept;
 }
