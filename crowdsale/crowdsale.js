@@ -88,6 +88,12 @@ function floorToDecimals(value, decimals) {
 // and patterns/validation.js use for a block window.
 var MAX_WINDOW_BLOCKS = 1000000;
 
+// Distinct-buyer ceiling. Each buyer holds one `c:<address>` state key until claim() or
+// refund(), and the VM refuses a contract's 10001st key, so buy() pays a new buyer past
+// this ceiling back in full instead of reverting (a revert leaves the DEPOSIT for the next
+// buyer). 9000 plus initialize()'s keys stays well under the VM's default maxStateKeys.
+var MAX_BUYERS = 9000;
+
 // Throw unless `v` is a canonical base-10 integer string within [min, max]
 // inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
 //
@@ -211,7 +217,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.6.0'
+        version:     '1.7.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -289,6 +295,7 @@ module.exports = {
         xchain.state.set('withdrawn', 'false');
         xchain.state.set('unsoldBurned', 'false');
         xchain.state.set('status', 'OPEN');
+        xchain.state.set('buyers', '0');
         // Persist the sale token's decimal grid so claim() can floor its mint onto
         // it (initialize is the only place the grid is known; getTokenInfo(saleTick)
         // is not reliably readable by a contract that holds no saleTick balance).
@@ -311,7 +318,8 @@ module.exports = {
 
     // buy(): attribute the caller's deposit. BATCH after a DEPOSIT of payTick.
     // No tokens are delivered yet (claim later). Change past whole sale units is
-    // returned at once, and a payment worth less than one unit comes back in full.
+    // returned at once, and a payment worth less than one unit comes back in full, as
+    // does a new buyer's payment once MAX_BUYERS buyers hold a contribution.
     buy: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'sale not open');
         xchain.require(xchain.getBlockHeight() < parseInt(xchain.state.get('deadline')), 'sale closed (deadline passed)');
@@ -325,7 +333,14 @@ module.exports = {
         xchain.require(!isAtLeastExact(xchain, '0', contributed), 'no payment received (DEPOSIT in the same BATCH)');
 
         var caller = xchain.getSourceAddress();
-        var prior  = xchain.state.get('c:' + caller) || '0';
+        var record = xchain.state.get('c:' + caller);
+        var buyers = parseInt(xchain.state.get('buyers') || '0', 10);
+        // Out of buyer slots: return a new buyer's whole payment, leaving accountedPay as it was.
+        if (record === null && buyers >= MAX_BUYERS) {
+            xchain.emit.send({ destination: caller, tick: payTick, quantity: contributed });
+            return;
+        }
+        var prior  = record || '0';
         var total  = xchain.math.add(prior, contributed);
         // Keep only what buys whole sale units and return the rest now, so every stored
         // contribution mints exactly and no payment reaches the owner without tokens.
@@ -345,7 +360,10 @@ module.exports = {
         // sum past the token's exact MAX_SUPPLY and strands the last claimer.
         xchain.require(isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised), 'hard cap exceeded');
 
-        if (!xchain.math.isZero(accepted)) xchain.state.set('c:' + caller, accepted);
+        if (!xchain.math.isZero(accepted)) {
+            if (record === null) xchain.state.set('buyers', String(buyers + 1));
+            xchain.state.set('c:' + caller, accepted);
+        }
         xchain.state.set('allocated', xchain.math.add(xchain.state.get('allocated'), tokenDelta));
         // The change leaves custody through the SEND below, so it is not accounted pay.
         xchain.state.set('accountedPay', xchain.math.subtract(balance, change));
@@ -459,7 +477,9 @@ module.exports = {
             raised: xchain.state.get('raised'),
             softCap: xchain.state.get('softCap'),
             hardCap: xchain.state.get('hardCap'),
-            deadline: xchain.state.get('deadline')
+            deadline: xchain.state.get('deadline'),
+            buyers: xchain.state.get('buyers') || '0',
+            maxBuyers: String(MAX_BUYERS)
         });
     }
 };

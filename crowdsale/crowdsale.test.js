@@ -24,6 +24,7 @@ const registerSaleFlow = require('./crowdsale_test/sale_flow');
 const registerCapTests = require('./crowdsale_test/caps');
 const registerDeployValidation = require('./crowdsale_test/deploy_validation');
 const registerSaleGridTests = require('./crowdsale_test/sale_grid');
+const registerBuyerSlotTests = require('./crowdsale_test/buyer_slots');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
@@ -109,6 +110,7 @@ const assertDeliveredActions = function (result, expected) {
     registerOffGridPaymentTests(deliveredCtx);
     registerDustContributionSuite(deliveredCtx);
     registerSaleGridTests(ctx, kit);
+    registerBuyerSlotTests(ctx);
 });
 
 // Seeded invariant suite on the in-process harness (runs without the VM sibling).

@@ -73,4 +73,45 @@ module.exports = function registerExactCustodyTests(ctx) {
             assertBalance(ctx.h.ledger, ALICE, STABLE, '0.00000001');
         });
     });
+
+    registerDustDeltaTests(ctx);
 };
+
+// One base unit of an 18-decimal tick sits under the 1e-15 tolerance a math.gt zero test applies.
+function registerDustDeltaTests(ctx) {
+    const {
+        ALICE, ADDR, COLL, STABLE, assertSuccess, assertBalance, assertContractBalance,
+        assertContractState, deployVault, setPrice, depositColl, borrow, repay, withdraw
+    } = ctx;
+    const DUST = '0.000000000000000001';
+
+    describe('custody deltas below the tolerant comparison floor', function () {
+        it('deposit credits and withdraw returns a one-base-unit collateral delta', async function () {
+            await deployVault('18');
+            ctx.h.ledger.setTokenDecimals(COLL, 18);
+            assertSuccess(await depositColl(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', DUST);
+            assertContractState(ctx.h.ledger, ADDR, 'trackedColl', DUST);
+            assertSuccess(await withdraw(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '0');
+            assertContractBalance(ctx.h.ledger, ADDR, COLL, '0');
+            assertBalance(ctx.h.ledger, ALICE, COLL, '100');
+        });
+
+        it('borrow mints and repay burns a one-base-unit stable amount', async function () {
+            await deployVault('18');
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', DUST);
+            const result = await repay(ALICE, DUST);
+            assertSuccess(result);
+            ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
+                ['DESTROY', DUST]
+            ]);
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
+            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+        });
+    });
+}

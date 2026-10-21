@@ -105,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -226,7 +226,8 @@ module.exports = {
         var tick = xchain.getInputParam(0);
         xchain.require(tick, 'tick required');
         var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
-        xchain.require(xchain.math.gt(held, '0'), 'nothing to withdraw');
+        // Exact: gt reads any amount <= 1e-15 as zero, so dust on an 18-decimal tick could never be swept.
+        xchain.require(isPositiveExact(held), 'nothing to withdraw');
         xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
         // A sweep of payTick empties it, so draw()'s watermark has to follow custody
         // down to 0 or the next draw measures a negative delta and reverts forever.
@@ -316,6 +317,21 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+// Return true when v > 0 exactly, by the sign and digits of the value itself.
+// xchain.math.gt treats a value within the absolute tolerance of zero as equal to
+// it, so a real dust balance would be refused. Same helper as
+// patterns/validation.js:isPositiveExact.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
 }
 
 // Horner fold of a string into a bounded big integer in [0, MOD).

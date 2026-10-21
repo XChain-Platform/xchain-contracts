@@ -330,6 +330,18 @@ function exactComparisonTests() {
         assertSuccess(r);
         assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: UNIT } }]);
     });
+
+    // One base unit of an 18-decimal tick sits under the math comparison tolerance of zero.
+    it('the owner sweeps a held balance below the comparison tolerance', async function () {
+        const DUST = '0.000000000000000001';
+        await deployDispenser();
+        h.ledger.setTokenDecimals(PAY, 18);
+        h.deposit(BUYER, ADDR, PAY, DUST);
+        const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: OWNER, tick: PAY, quantity: DUST } }]);
+        assertContractBalance(h.ledger, ADDR, PAY, '0');
+    });
 }
 
 function deployValidationTests() {

@@ -5,6 +5,7 @@ module.exports = function registerQuantityParseTests(context) {
         registerExponentialQuantity(context);
         registerMixedPage(context);
         registerSpellingMatrix(context);
+        registerNumericQuantity(context);
     });
     describe('on-grid quantities below the tolerant comparison floor', function () {
         registerSubToleranceQuantity(context);
@@ -112,6 +113,41 @@ function registerMixedPage(context) {
         assert.ok(!('burned:' + badTx in h.ledger.getContractState(ADDR)),
             'the dropped row must not be marked credited');
         assertContractState(h.ledger, ADDR, 'totalClaimed', '10.25');
+    });
+}
+
+// JSON.parse rounds a JSON number to a double before the contract sees it, so
+// 9007199254740995 arrives as 9007199254740996 and still reads as a plain decimal.
+function registerNumericQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, seedSendsResponse,
+        sendsPayload, nextTxHash
+    } = context;
+
+    it('a JSON-number quantity is dropped, and the same burn as a string is credited exactly', async function () {
+        await deployBridge('10000000000000000', '0');
+        const h = getHarness();
+        h.ledger.setTokenDecimals(XC_TICK, 0);
+        const txHash = nextTxHash();
+        const claim = async function (payload) {
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            assertSuccess(req);
+            const requestId = JSON.parse(req.returnValue);
+            seedSendsResponse(requestId, payload);
+            return h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        };
+        const raw = sendsPayload([{ txHash: txHash, quantity: 'QTY' }]).replace('"QTY"', '9007199254740995');
+        const dropped = await claim(raw);
+        assertSuccess(dropped, 'a numeric row must not wedge the address');
+        assertEmittedActions(dropped, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!('burned:' + txHash in h.ledger.getContractState(ADDR)),
+            'a dropped row must not mark its burn as credited');
+
+        const good = await claim(sendsPayload([{ txHash: txHash, quantity: '9007199254740995' }]));
+        assertSuccess(good);
+        assertEmittedActions(good, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '9007199254740995' } }]);
     });
 }
 

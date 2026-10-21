@@ -73,7 +73,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     abi: { version: 1, methods: {
@@ -304,6 +304,21 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
+// Return true when v > 0 exactly, by the sign and digits of the value itself.
+// xchain.math.gt treats a value within the absolute tolerance of zero as equal to
+// it, so a real dust balance would be refused. Same helper as
+// patterns/validation.js:isPositiveExact.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
+}
+
 // payout(xchain, payeeRole, terminalStatus): the shared settlement action -
 // mark terminal, then send the entire held balance to the named role. Used
 // both by the automated onDelivery path (no caller authorization: the
@@ -312,7 +327,9 @@ function isAtLeastExact(xchain, a, b) {
 function payout(xchain, payeeRole, terminalStatus) {
     var tick = xchain.state.get('tick');
     var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
-    xchain.require(xchain.math.gt(held, '0'), 'nothing to settle');
+    // Test the balance exactly: gt reads any amount <= 1e-15 as zero, which would strand a
+    // real dust deposit on an 18-decimal tick, an INIT cancel included.
+    xchain.require(isPositiveExact(held), 'nothing to settle');
 
     // Mark terminal BEFORE emitting: the write and the emission commit
     // together, so a second settlement attempt - manual or automated - sees

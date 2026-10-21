@@ -38,10 +38,11 @@ cannot arm anything in either mode.
 What no protocol surface reports is whether the poll's *gates* were real, and
 that is what is left for a human to check.
 
-`QUORUM` and `MIN_VOTERS` read as met when they were never configured, and
-nothing on-chain says which option index the poll's own text called "approve",
-so a poll over the *governance* token can still be shaped to pass on almost no
-turnout.
+The protocol makes a binding poll set `QUORUM` and `MIN_VOTERS`, but their
+size is the poll creator's choice and `arm()` sees only met/not-met flags.
+Nothing on-chain says which option index the poll's own text called "approve"
+either, so a poll over the *governance* token can still be shaped to pass on
+almost no turnout.
 
 - **`guardian` mode (recommended):** a poll can only arm the proposal it was
   bound to via `approvePoll()`, and only the guardian can bind. The guardian
@@ -131,10 +132,14 @@ conventions, then (guardian mode) asks the guardian to bind it:
   then refuses to pay unless option 0 strictly outweighs every other option.
   Only a strict plurality is enforced: a community that wants more must
   express it through the poll's `QUORUM` and option design.
-- Set `QUORUM` and `MIN_VOTERS`. The protocol reports both gates as met when
-  they were never configured, so the callback's gate check cannot distinguish
-  "met" from "absent"; the guardian checks they are real before binding.
-  Size the quorum so that buying it costs more than the treasury holds.
+- Set `QUORUM` and `MIN_VOTERS`. The protocol requires both on a binding poll
+  (`QUORUM` > 0, `MIN_VOTERS` >= 1, under `VOTE_BINDING_MINIMUMS`) but leaves
+  their size to the poll creator, and the callback carries only met/not-met
+  flags, so `arm()` cannot tell a real gate from a token-sized one (`QUORUM`
+  0.000001, `MIN_VOTERS` 1). A poll created before that requirement activated
+  can carry no gates at all, which also reads as met. The guardian checks the
+  sizes before binding. Size the quorum so that buying it costs more than the
+  treasury holds.
 - `WEIGHT_MODE`: prefer `time_weighted`. It weights by holdings over a window,
   so tokens bought the day of the vote count for little; this directly defeats
   the buy-then-vote pattern.
@@ -185,21 +190,28 @@ conventions, then (guardian mode) asks the guardian to bind it:
 ## Known limitations (by design, for a teaching baseline)
 
 - **The poll's gates are not verifiable on-chain.** Repeated because it is the
-  big one: `QUORUM` and `MIN_VOTERS` report as met when they were never set,
-  and the option labels are not on-chain text this contract can read, so a
+  big one: `QUORUM` and `MIN_VOTERS` must be set on a binding poll, but a
+  token-sized gate reports as met exactly like a real one, and the option
+  labels are not on-chain text this contract can read, so a
   poll can satisfy every check `arm()` can make and still be a low-turnout
   raid. Verifying that is the guardian's job, which is why `guardian` is the
   recommended mode. (The *electorate* half of this limitation is now closed:
   the protocol delivers the poll's `TICK`, and `arm()` pins it to `govTick`.)
+- **Proposals are never pruned.** Every `propose()` stores a new
+  `proposal:<id>` state key and no transition deletes one, while the VM
+  refuses a contract's 10,001st key. About 9,990 proposals in, `propose()`
+  reverts for good, and once the live proposals settle the balance cannot
+  leave. One holder of `minProposeBalance` can reach that for fees alone, so
+  set it high and watch the proposal count in `info()`.
 - **One transfer per proposal.** No batching, no streaming; deploy the vesting
   template from a proposal's recipient address if you need scheduled release.
 - **The guardian can censor.** It cannot steal, but it can refuse to bind or
   veto everything. That is the intended trade for surviving voter apathy;
   communities that reject it should run `open` mode with a large timelock and
   real monitoring.
-- **No quorum introspection.** The contract sees only met/not-met flags, which
-  read "met" when the poll set no gates at all. Poll hygiene is the guardian's
-  job (guardian mode) or the community's (open mode).
+- **No quorum introspection.** The contract sees only met/not-met flags, never
+  the gate sizes, so a token-sized gate reads "met". Poll hygiene is the
+  guardian's job (guardian mode) or the community's (open mode).
 - **A tied poll still arms.** The finalization callback carries only the
   winning option's index, not per-option weights, so `arm()` cannot see a tie;
   `executeProposal()` catches it from the poll snapshot and never pays out.

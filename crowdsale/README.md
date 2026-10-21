@@ -38,13 +38,13 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`, floored onto the `saleDecimals` grid) into contract custody, locks minting, and opens the sale. `rate`, `softCap` and `hardCap` must be plain decimals (digits and one optional point). |
-| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
+| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full, and so does a new buyer's payment once 9,000 buyers hold a contribution); reverts past the deadline or hard cap. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
 | `burnUnsold()` | anyone (after finalization, once) | Permanently burns every sale token not allocated to a buyer after a successful sale, or the entire inventory after a failed sale. Outstanding successful claims remain fully backed. |
 | `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
 | `withdraw()` | owner (SUCCESS, once) | Sends the raised proceeds to the owner. |
-| `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline }`. |
+| `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline, buyers, maxBuyers }`. |
 
 ## Attacks we considered
 
@@ -98,6 +98,14 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
+- **At most 9,000 distinct buyers.** Each buyer holds one state key until it
+  claims or refunds, and the VM refuses a contract's 10,001st key. Past
+  `maxBuyers` a new buyer's payment is returned in the same call; existing
+  buyers can still add to their contribution. Check `buyers` against
+  `maxBuyers` in `info()` before signing. Anyone can fill the slots with
+  one-unit buys from many addresses and get the payments back by `refund()`
+  if the sale fails, so a sale that expects many small buyers should set
+  its price high enough to make that costly.
 - **Burn requires a follow-up call.** Unsold inventory stays in contract custody
   until anyone calls `burnUnsold()` after finalization. The one-shot call removes
   it from supply permanently and cannot reduce the inventory reserved for

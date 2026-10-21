@@ -97,7 +97,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -200,7 +200,8 @@ module.exports = {
     deposit: function (xchain) {
         var addr  = xchain.getSourceAddress();
         var delta = collDelta(xchain);
-        xchain.require(xchain.math.gt(delta, '0'), 'no collateral received');
+        // Exact: a tolerant gt reads a delta at or below 1e-15 as zero and leaves it to the next caller.
+        xchain.require(exceedsExactly(xchain, delta, '0'), 'no collateral received');
 
         setVault(xchain, addr, 'coll', xchain.math.add(getVault(xchain, addr, 'coll'), delta));
         xchain.state.set('trackedColl', xchain.math.add(xchain.state.get('trackedColl'), delta));
@@ -211,13 +212,13 @@ module.exports = {
     borrow: function (xchain) {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
-        // Notation gate, and it must come BEFORE the floor below. `amount` is raw
-        // per-call caller text, so unlike liquidate()'s mathjs-computed seizure it
-        // is not guaranteed fixed-notation, and math.gt() is no filter at all (see
-        // requirePlainDecimal). Fed '1.5e-8' the floor silently NO-OPS and the
-        // off-grid debt reaches the books and the wire anyway.
+        // Notation gate, and it must come BEFORE the magnitude check and the floor
+        // below. `amount` is raw per-call caller text, so unlike liquidate()'s
+        // mathjs-computed seizure it is not guaranteed fixed-notation, and math.gt()
+        // is no filter at all (see requirePlainDecimal). Fed '1.5e-8' the floor
+        // silently NO-OPS and the off-grid debt reaches the books and the wire anyway.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(exceedsExactly(xchain, amount, '0'), 'amount must be positive');
         // Quantise onto the stable tick's grid BEFORE the ratio check, the debt
         // book writes, and the emissions. The indexer ROUNDS emission amounts to
         // the tick's decimals on the wire; an off-grid `amount` would book raw
@@ -228,7 +229,7 @@ module.exports = {
         // stable and borrow() is the only source of it in existence, so
         // getTokenInfo(stableTick) is structurally empty here (see tickDecimals).
         amount = floorToDecimals(amount, stableGridOf(xchain));
-        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
+        xchain.require(exceedsExactly(xchain, amount, '0'), 'amount must be positive after tick rounding');
 
         var price   = freshPrice(xchain);
         var coll    = getVault(xchain, addr, 'coll');
@@ -254,7 +255,7 @@ module.exports = {
     repay: function (xchain) {
         var addr     = xchain.getSourceAddress();
         var received = stableDelta(xchain);
-        xchain.require(xchain.math.gt(received, '0'), 'no stable received');
+        xchain.require(exceedsExactly(xchain, received, '0'), 'no stable received');
 
         var debt   = getVault(xchain, addr, 'debt');
         // Pick the smaller amount exactly: a tolerant min returns `received` within
@@ -283,12 +284,13 @@ module.exports = {
     withdraw: function (xchain) {
         var addr   = xchain.getSourceAddress();
         var amount = xchain.getInputParam(0);
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
-        // Notation gate before the floor, same reason as borrow(): raw caller text
-        // spelled '1.5e-8' walks straight through math.gt AND through the floor
-        // (its fraction is 4 chars, under the grid), so trackedColl would be
-        // debited the raw value while custody moves the HALF-UP rounded one.
+        // Notation gate before the magnitude check and the floor, same reason as
+        // borrow(): raw caller text spelled '1.5e-8' walks straight through math.gt
+        // AND through the floor (its fraction is 4 chars, under the grid), so
+        // trackedColl would be debited the raw value while custody moves the HALF-UP
+        // rounded one.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(exceedsExactly(xchain, amount, '0'), 'amount must be positive');
         // Quantise onto the collateral tick's grid BEFORE the ratio check, the
         // book writes, and the emission. The indexer ROUNDS the emitted quantity
         // to the tick's decimals; an off-grid `amount` would debit trackedColl
@@ -296,7 +298,7 @@ module.exports = {
         // pooled custody-vs-books shortfall (and cascading through collDelta).
         // Same guard liquidate() applies to its seize amount.
         amount = floorToDecimals(amount, tickDecimals(xchain, xchain.state.get('collateralTick')));
-        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive after tick rounding');
+        xchain.require(exceedsExactly(xchain, amount, '0'), 'amount must be positive after tick rounding');
 
         var coll = getVault(xchain, addr, 'coll');
         // Compare exactly: a tolerant gte would let a debt-free vault overdraw the shared pool.
