@@ -112,7 +112,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: ...',
-        version:     '1.0.0'
+        version:     '<semver>'
     },
     abi: { /* ... */ },
     // ...

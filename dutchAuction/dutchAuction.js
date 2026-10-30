@@ -106,7 +106,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.5.0'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -225,8 +225,9 @@ module.exports = {
         // Refuse a price the grid floored to nothing (the constructor gates endPrice's
         // notation, never the grid). Same guard as treasury.js executeProposal()'s
         // below-one-unit check, and without it the payment check below passes on a
-        // zero price and hands the item to a caller who deposited nothing.
-        xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
+        // zero price and hands the item to a caller who deposited nothing. Exact,
+        // because gt reads any price <= 1e-15 as zero, refusing a real unit of a fine tick.
+        xchain.require(!isAtLeastExact(xchain, '0', price), 'price is below one unit of the bid tick');
 
         var caller = xchain.getSourceAddress();
 

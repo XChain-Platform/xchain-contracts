@@ -111,6 +111,53 @@ var MAX_LIVE_PROPOSALS = 64;
 var MAX_LIVE_PER_PROPOSER = 16;
 var MAX_ARCHIVED_PROPOSALS = 16;
 
+function executableHeight(xchain, rec) {
+    var height = xchain.getBlockHeight();
+    var ready = rec.armed + parseInt(xchain.state.get('timelock'));
+    xchain.require(height >= ready, 'timelock has not elapsed');
+    xchain.require(height <= ready + parseInt(xchain.state.get('exec_window')),
+        'execution window has passed');
+    return height;
+}
+
+function requireApprovedPoll(xchain, rec) {
+    var poll = xchain.getPollResult(rec.poll);
+    xchain.require(poll !== null && poll.status === 'finalized' &&
+        String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
+    xchain.require(poll.tick === xchain.state.get('gov_tick'),
+        'poll electorate is not the governance token');
+
+    var options = poll.options || [];
+    var approval = null;
+    for (var i = 0; i < options.length; i++)
+        if (String(options[i].index) === '0') approval = options[i].weight;
+    xchain.require(approval !== null,
+        'approval option did not strictly outweigh every other option');
+    for (var j = 0; j < options.length; j++)
+        if (String(options[j].index) !== '0')
+            xchain.require(exceedsExactly(xchain, approval, options[j].weight),
+                'approval option did not strictly outweigh every other option');
+}
+
+function payProposal(xchain, id, rec, height) {
+    var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
+    xchain.require(exceedsExactly(xchain, amount, '0'),
+        'amount is below one unit of the tick');
+    var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
+    xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
+
+    rec.status = 'EXECUTED';
+    rec.executed = height;
+    rec.paid = amount;
+    settleProposal(xchain, id, rec);
+    xchain.emit.send({
+        destination: rec.recipient,
+        tick: rec.tick,
+        quantity: amount
+    });
+    return amount;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -119,7 +166,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.5.0'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -359,72 +406,9 @@ module.exports = {
         var id  = xchain.getInputParam(0);
         var rec = loadProposal(xchain, id);
         xchain.require(rec.status === 'ARMED', 'proposal is not armed');
-
-        var height = xchain.getBlockHeight();
-        var ready  = rec.armed + parseInt(xchain.state.get('timelock'));
-        xchain.require(height >= ready, 'timelock has not elapsed');
-        xchain.require(height <= ready + parseInt(xchain.state.get('exec_window')),
-            'execution window has passed');
-
-        var poll = xchain.getPollResult(rec.poll);
-        xchain.require(poll !== null && poll.status === 'finalized' &&
-            String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
-        // The electorate is re-checked here for the same reason the winner is:
-        // the poll snapshot, not the armed state, is what the payout answers to.
-        // The snapshot carries `tick` on every block that can reach this line,
-        // because arm() only accepts the callback signature that ships with it.
-        xchain.require(poll.tick === xchain.state.get('gov_tick'),
-            'poll electorate is not the governance token');
-
-        // Require a strict plurality for option 0. The tally breaks an exact
-        // weight tie toward the lowest option index, and arm()'s callback wire
-        // carries no per-option weights, so a tie is only detectable here.
-        var options  = poll.options || [];
-        var approval = null;
-        for (var i = 0; i < options.length; i++)
-            if (String(options[i].index) === '0') approval = options[i].weight;
-        xchain.require(approval !== null,
-            'approval option did not strictly outweigh every other option');
-        for (var j = 0; j < options.length; j++)
-            if (String(options[j].index) !== '0')
-                xchain.require(exceedsExactly(xchain, approval, options[j].weight),
-                    'approval option did not strictly outweigh every other option');
-
-        // Floor the payout onto the tick's decimal grid before both the custody
-        // check and the emission (amm/vesting/crowdsale do the same): the indexer
-        // HALF-UP re-normalises every emitted amount to its tick's decimals at
-        // ledger-write time (its bcmath rounds half-up, NOT half-even: the mode
-        // is stated in xchain-indexer/src/consensus/xchain_price.js and pinned by test,
-        // because a mis-read mode at the .5 boundary is a consensus fork), so an
-        // off-grid rec.amount could round UP past what the
-        // treasury holds, revert every retry, and wedge the poll-approved transfer
-        // in ARMED until the execution window expires. Flooring makes the ledger
-        // write a numeric no-op; the on-grid figure actually paid is recorded on
-        // the proposal (rec.paid) so the audit trail matches the ledger.
-        // rec.amount's fixed-notation precondition is what propose()'s
-        // requirePlainDecimal enforces; do not relax that check without
-        // normalising here instead.
-        var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
-        xchain.require(xchain.math.gt(amount, '0'),
-            'amount is below one unit of the tick');
-
-        var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
-        // Compare exactly: a tolerant gte passes a treasury up to 1e-12 relative short of the payout.
-        xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
-
-        // State guard: EXECUTED is committed in the same atomic scope as the
-        // send, so a second executeProposal can never double-pay.
-        rec.status   = 'EXECUTED';
-        rec.executed = height;
-        rec.paid     = amount;
-        settleProposal(xchain, id, rec);
-
-        xchain.emit.send({
-            destination: rec.recipient,
-            tick:        rec.tick,
-            quantity:    amount
-        });
-        return amount;
+        var height = executableHeight(xchain, rec);
+        requireApprovedPoll(xchain, rec);
+        return payProposal(xchain, id, rec, height);
     },
 
     info: function (xchain) {

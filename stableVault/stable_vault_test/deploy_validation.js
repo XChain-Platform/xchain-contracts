@@ -52,15 +52,19 @@ module.exports = function registerDeployValidationTests(ctx) {
             assert.strictEqual(ok.success, true, 'plain terms, including a zero bonus, still deploy');
         });
 
-        it('rejects a maxSnapshotAge outside its range and stores an accepted one verbatim', async function () {
-            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '0'])).success, false);
-            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '-10'])).success, false);
-            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '31536001'])).success, false);
-            assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '31536000'])).success, true);
-
-            // '10' means 10 seconds in state, not the 1 a parseInt of '1e1' gave.
-            await deployVault();
-            assertContractState(ctx.h.ledger, ADDR, 'maxSnapshotAge', MAXAGE);
-        });
+        registerSnapshotAgeRangeTest(ctx, deployWith);
     });
 };
+
+function registerSnapshotAgeRangeTest(ctx, deployWith) {
+    const { assert, COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, ADDR,
+        assertContractState, deployVault } = ctx;
+    it('rejects a maxSnapshotAge outside its range and stores an accepted one verbatim', async function () {
+        assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '0'])).success, false);
+        assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '-10'])).success, false);
+        assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '31536001'])).success, false);
+        assert.strictEqual((await deployWith([COLL, STABLE, PAIR, RATIO, BONUS, '31536000'])).success, true);
+        await deployVault();
+        assertContractState(ctx.h.ledger, ADDR, 'maxSnapshotAge', MAXAGE);
+    });
+}

@@ -66,7 +66,8 @@ share an LP tick. Convention: `"<TICKA><TICKB>LP"`.
 - **k erosion / free value.** The fee makes k strictly grow; the suite fuzzes a
   long mixed swap sequence and asserts k never decreases.
 - **Slippage / sandwiching.** `swap` reverts if the output is below the caller's
-  `minOut`. Always set it.
+  `minOut`. Always set it, as a plain decimal string (digits and at most one
+  decimal point; an exponent, sign, hex prefix, underscore or space reverts).
 - **Pool drain.** The price formula yields `amountOut < reserveOut` for any finite
   input, and the contract asserts it - the output reserve can never reach zero.
 - **Donation price manipulation.** Reserves are accounted in state, not read from

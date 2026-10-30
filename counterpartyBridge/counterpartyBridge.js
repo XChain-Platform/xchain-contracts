@@ -185,6 +185,41 @@ function extractBurnSends(payload, asset, source) {
     return out;
 }
 
+function collectNewBurns(xchain, sends, decimals) {
+    var total = '0';
+    var hashes = [];
+    for (var i = 0; i < sends.length; i++) {
+        var send = sends[i];
+        if (xchain.state.get('burned:' + send.txHash)) continue;
+        var amount = floorToDecimals(send.quantity, decimals);
+        if (isAtLeastExact(xchain, '0', amount)) continue;
+        total = xchain.math.add(total, amount);
+        hashes.push(send.txHash);
+    }
+    return { total: total, hashes: hashes };
+}
+
+function completeClaim(xchain, address, claim) {
+    var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), claim.total);
+    xchain.require(isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed),
+        'bridge maxSupply exhausted');
+
+    for (var i = 0; i < claim.hashes.length; i++)
+        xchain.state.set('burned:' + claim.hashes[i], true);
+    xchain.state.set('totalClaimed', newTotalClaimed);
+    xchain.state.set('claimedTotal:' + address,
+        xchain.math.add(xchain.state.get('claimedTotal:' + address) || '0', claim.total));
+
+    xchain.emit.send({
+        destination: address,
+        tick: xchain.state.get('xchainTick'),
+        quantity: claim.total,
+        memo: 'counterpartyBridge claim'
+    });
+    xchain.log('claimed', address, claim.total, claim.hashes.length);
+    return claim.total;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -193,7 +228,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.3.0'
+        version:     '1.4.0'
     },
 
     abi: { version: 1, methods: {
@@ -231,6 +266,9 @@ module.exports = {
         var decInt = parseInt(decimals, 10);
         xchain.require(String(decInt) === String(decimals) && decInt >= 0 && decInt <= 18,
             'decimals must be an integer 0-18');
+        // Refuse an off-grid cap exactly (the indexer rounds the pre-mint half-up; '100.50' passes).
+        xchain.require(isAtLeastExact(xchain, floorToDecimals(maxSupply, decInt), maxSupply),
+            'maxSupply must sit on the decimals grid (at most ' + decInt + ' fractional digits)');
 
         xchain.state.set('cpAsset', cpAsset);
         xchain.state.set('xchainTick', xchainTick);
@@ -320,56 +358,16 @@ module.exports = {
         var cpAsset = xchain.state.get('cpAsset');
         var sends = extractBurnSends(resp.payload, cpAsset, address);
         var decimals = parseInt(xchain.state.get('decimals'), 10);
-
-        // Sum every burn tx not already credited, without mutating state yet
-        // (a require() below can still revert this whole callback, and any
-        // state already touched would roll back with it - but computing
-        // first keeps the intent readable).
-        var totalNew = '0';
-        var newTxHashes = [];
-        for (var i = 0; i < sends.length; i++) {
-            var s = sends[i];
-            if (xchain.state.get('burned:' + s.txHash)) continue;
-            var amount = floorToDecimals(s.quantity, decimals);
-            // Skip unless the amount is above zero exactly: a tolerant gt reads any
-            // amount <= 1e-15 as zero, which on an 18-decimal tick drops a real burn.
-            if (isAtLeastExact(xchain, '0', amount)) continue;
-            totalNew = xchain.math.add(totalNew, amount);
-            newTxHashes.push(s.txHash);
-        }
+        var claim = collectNewBurns(xchain, sends, decimals);
 
         xchain.state.delete('pending:' + address);
 
         // Same exact test on the total, so a sub-1e-15 sum is still paid.
-        if (isAtLeastExact(xchain, '0', totalNew)) {
+        if (isAtLeastExact(xchain, '0', claim.total)) {
             xchain.log('no new burns found', requestId);
             return 'no burns to claim';
         }
-
-        var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), totalNew);
-        xchain.require(isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed),
-            'bridge maxSupply exhausted');
-
-        // Mark every burn tx credited BEFORE emitting, so a defense-in-depth
-        // replay of the same settled response (see attacks-considered test)
-        // can never double-credit the same burn.
-        for (var j = 0; j < newTxHashes.length; j++) {
-            xchain.state.set('burned:' + newTxHashes[j], true);
-        }
-        xchain.state.set('totalClaimed', newTotalClaimed);
-        xchain.state.set('claimedTotal:' + address,
-            xchain.math.add(xchain.state.get('claimedTotal:' + address) || '0', totalNew));
-
-        // Pay from custody (MINT is locked). totalClaimed <= maxSupply above also
-        // bounds custody; the memo satisfies a destination's REQUIRE_MEMO preference.
-        xchain.emit.send({
-            destination: address,
-            tick: xchain.state.get('xchainTick'),
-            quantity: totalNew,
-            memo: 'counterpartyBridge claim'
-        });
-        xchain.log('claimed', address, totalNew, newTxHashes.length);
-        return totalNew;
+        return completeClaim(xchain, address, claim);
     },
 
     claimedTotal: function (xchain) {

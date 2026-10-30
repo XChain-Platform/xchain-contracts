@@ -239,6 +239,35 @@ function registerSubGridPriceAttack(context) {
     });
 }
 
+// Pin the on-grid side of the sub-grid guard: a floored price of exactly 1e-15 is one
+// real unit of an 18-decimal bid tick, which a tolerant gt reads as zero.
+function registerFineTickFloorPrice(context) {
+    const {
+        ADDR, BID, CODE, E2EHarness, ITEM, SELLER, XChainVM, assertBalance,
+        assertContractBalance, assertContractState, assertSuccess, buy, depositAndFund
+    } = context;
+
+    it('a floor price of one unit on an 18-decimal bid tick sells', async function () {
+        context.h = new E2EHarness(XChainVM);
+        context.h.seedBalance(SELLER, 'XCHAIN', '1000000');
+        context.h.seedBalance(SELLER, ITEM, '10');
+        context.h.ledger.setTokenDecimals(BID, 18);
+        context.h.ledger.setTokenDecimals(ITEM, 0);
+        await context.h.deploy({
+            code: CODE, deployer: SELLER, contractAddress: ADDR,
+            params: [SELLER, ITEM, '10', BID, '1', '0.0000000000000010001', '10']
+        });
+        await depositAndFund();
+        for (let i = 0; i < 50; i++) context.h.mineBlock(); // past duration: endPrice floors to 1e-15
+
+        assertSuccess(await buy('alice', '0.000000000000001'));
+        assertContractState(context.h.ledger, ADDR, 'status', 'SOLD');
+        assertBalance(context.h.ledger, 'alice', ITEM, '10');
+        assertBalance(context.h.ledger, SELLER, BID, '0.000000000000001');
+        assertContractBalance(context.h.ledger, ADDR, BID, '0');
+    });
+}
+
 // Before buy() refunded a short payment it reverted, the BATCH kept the deposit, and
 // once the falling price reached it any caller could buy() with nothing deposited,
 // taking the item plus the difference while the seller was paid from the stray.
@@ -280,6 +309,7 @@ function registerAttackCases(context) {
         registerCancelRecoveryAttacks(context);
         registerOnGridControls(context);
         registerSubGridPriceAttack(context);
+        registerFineTickFloorPrice(context);
     });
 }
 

@@ -55,27 +55,33 @@ module.exports = function registerExactCustodyTests(ctx) {
             assertBalance(ctx.h.ledger, BOB, COLL, '100');
         });
 
-        it('a repay one base unit over a large debt refunds the excess and zeroes the debt', async function () {
-            await deployVault();
-            ctx.h.seedBalance(ALICE, COLL, '20000');
-            setPrice('100');
-            await depositColl(ALICE, '15000');
-            assertSuccess(await borrow(ALICE, '1000000'));
-            ctx.h.seedBalance(ALICE, STABLE, '1000000.00000001');
-            const result = await repay(ALICE, '1000000.00000001');
-            assertSuccess(result);
-            ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
-                ['DESTROY', '1000000'],
-                ['SEND', '0.00000001']
-            ]);
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
-            assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
-            assertBalance(ctx.h.ledger, ALICE, STABLE, '0.00000001');
-        });
+        registerRepayExcessTest(ctx);
     });
 
     registerDustDeltaTests(ctx);
 };
+
+function registerRepayExcessTest(ctx) {
+    const { ALICE, ADDR, COLL, STABLE, assertSuccess, assertBalance,
+        assertContractState, deployVault, setPrice, depositColl, borrow, repay } = ctx;
+    it('a repay one base unit over a large debt refunds the excess and zeroes the debt', async function () {
+        await deployVault();
+        ctx.h.seedBalance(ALICE, COLL, '20000');
+        setPrice('100');
+        await depositColl(ALICE, '15000');
+        assertSuccess(await borrow(ALICE, '1000000'));
+        ctx.h.seedBalance(ALICE, STABLE, '1000000.00000001');
+        const result = await repay(ALICE, '1000000.00000001');
+        assertSuccess(result);
+        ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
+            ['DESTROY', '1000000'],
+            ['SEND', '0.00000001']
+        ]);
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
+        assertBalance(ctx.h.ledger, ALICE, STABLE, '0.00000001');
+    });
+}
 
 // One base unit of an 18-decimal tick sits under the 1e-15 tolerance a math.gt zero test applies.
 function registerDustDeltaTests(ctx) {

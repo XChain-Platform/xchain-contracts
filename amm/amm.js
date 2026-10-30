@@ -139,6 +139,52 @@ function isAtLeastExact(xchain, a, b) {
     return !(neg && nonzero);
 }
 
+// Return true when a > b exactly; a non-finite difference returns false (fails closed).
+// xchain.math.gt/lt read a gap inside the tolerance as equal. Same helper as patterns/validation.js.
+function exceedsExactly(xchain, a, b) {
+    var diff = String(xchain.math.subtract(a, b));
+    if (diff.charAt(0) === '-') return false;
+    for (var i = 0; i < diff.length; i++) {
+        var c = diff.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+    }
+    return false;
+}
+
+// Return true when the fixed-notation value `v` is > 0 exactly ('Infinity' and 'NaN' fail).
+// xchain.math.gt reads any amount within 1e-15 of zero as zero. Same helper as patterns/validation.js.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
+}
+
+// Same helper and rationale as patterns/validation.js:requirePlainDecimal: refuse any
+// spelling other than digits with one optional interior decimal point.
+function requirePlainDecimal(xchain, value, label) {
+    var s = String(value);
+    xchain.require(s.length > 0, label + ' must be a plain decimal string');
+    var dot = -1;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            xchain.require(dot < 0, label + ' must carry at most one decimal point');
+            xchain.require(i > 0 && i < s.length - 1,
+                label + ' needs digits on both sides of its decimal point');
+            dot = i;
+        } else {
+            xchain.require(c >= '0' && c <= '9',
+                label + ' must be a plain decimal: digits and one optional decimal point, ' +
+                'no exponent / sign / radix prefix (got "' + s + '")');
+        }
+    }
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -147,7 +193,7 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.4.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -205,7 +251,9 @@ module.exports = {
 
         var depA = xchain.math.subtract(xchain.getBalance(self, tokenA) || '0', reserveA);
         var depB = xchain.math.subtract(xchain.getBalance(self, tokenB) || '0', reserveB);
-        xchain.require(xchain.math.gt(depA, '0') && xchain.math.gt(depB, '0'), 'must deposit both tokens');
+        // Test custody amounts exactly: a tolerant gt reads a real 18-decimal dust deposit as
+        // zero, and the reverted call leaves that DEPOSIT for the next caller.
+        xchain.require(isPositiveExact(depA) && isPositiveExact(depB), 'must deposit both tokens');
 
         var shares;
         var locked = '0';
@@ -226,7 +274,7 @@ module.exports = {
         }
         // Quantise to the LP grid so state totalShares matches the LP the indexer mints.
         shares = floorToDecimals(shares, LP_DECIMALS);
-        xchain.require(xchain.math.gt(shares, locked), 'insufficient liquidity minted');
+        xchain.require(exceedsExactly(xchain, shares, locked), 'insufficient liquidity minted');
         var minted = xchain.math.subtract(shares, locked);
         var lpInventory = xchain.state.get('lpInventory');
         var available = xchain.math.subtract(lpInventory, MINIMUM_LIQUIDITY);
@@ -256,7 +304,7 @@ module.exports = {
             xchain.getBalance(self, lpTick) || '0',
             xchain.state.get('lpInventory')
         );
-        xchain.require(xchain.math.gt(shares, '0'), 'must deposit LP shares');
+        xchain.require(isPositiveExact(shares), 'must deposit LP shares');
         // Cap the burn at totalShares exactly: a tolerant lte passes shares up to
         // 1e-12 above it, and the proportional payout would then exceed the reserves.
         xchain.require(isAtLeastExact(xchain, totalShares, shares), 'shares exceed total');
@@ -265,7 +313,7 @@ module.exports = {
         // amount the indexer actually sends from custody (dust favours the pool).
         var outA = floorToDecimals(xchain.math.divide(xchain.math.multiply(reserveA, shares), totalShares), tickDecimals(xchain, tokenA));
         var outB = floorToDecimals(xchain.math.divide(xchain.math.multiply(reserveB, shares), totalShares), tickDecimals(xchain, tokenB));
-        xchain.require(xchain.math.gt(outA, '0') && xchain.math.gt(outB, '0'), 'insufficient liquidity burned');
+        xchain.require(isPositiveExact(outA) && isPositiveExact(outB), 'insufficient liquidity burned');
 
         xchain.state.set('reserveA', xchain.math.subtract(reserveA, outA));
         xchain.state.set('reserveB', xchain.math.subtract(reserveB, outB));
@@ -285,6 +333,7 @@ module.exports = {
     swap: function (xchain) {
         var tokenIn = xchain.getInputParam(0);
         var minOut  = xchain.getInputParam(1) || '0';
+        requirePlainDecimal(xchain, minOut, 'minOut');
 
         var self = xchain.getContractAddress();
         var tokenA = xchain.state.get('tokenA');
@@ -295,10 +344,11 @@ module.exports = {
         var tokenOut = inIsA ? tokenB : tokenA;
         var reserveIn  = inIsA ? xchain.state.get('reserveA') : xchain.state.get('reserveB');
         var reserveOut = inIsA ? xchain.state.get('reserveB') : xchain.state.get('reserveA');
-        xchain.require(xchain.math.gt(reserveIn, '0') && xchain.math.gt(reserveOut, '0'), 'no liquidity');
+        xchain.require(isPositiveExact(reserveIn) && isPositiveExact(reserveOut), 'no liquidity');
 
+        // Test the input exactly: a tolerant gt reads a real 18-decimal dust deposit as zero.
         var amountIn = xchain.math.subtract(xchain.getBalance(self, tokenIn) || '0', reserveIn);
-        xchain.require(xchain.math.gt(amountIn, '0'), 'no input received (DEPOSIT in the same BATCH)');
+        xchain.require(isPositiveExact(amountIn), 'no input received (DEPOSIT in the same BATCH)');
 
         // Uniswap-v2 pricing: the trader is credited for 99.7% of the input
         // (amountInWithFee), but the FULL input is retained in reserves. That
@@ -310,9 +360,10 @@ module.exports = {
             xchain.math.multiply(reserveOut, amountInWithFee),
             xchain.math.add(reserveIn, amountInWithFee)
         ), tickDecimals(xchain, tokenOut));
-        xchain.require(xchain.math.gt(amountOut, '0'), 'insufficient output');
-        xchain.require(xchain.math.lt(amountOut, reserveOut), 'output exceeds reserves');
-        // Enforce minOut to the base unit; isAtLeastExact fails closed on a non-finite minOut.
+        // Strict and exact, so a payout within 1e-12 of the reserve is paid and reserveOut stays > 0.
+        xchain.require(isPositiveExact(amountOut), 'insufficient output');
+        xchain.require(exceedsExactly(xchain, reserveOut, amountOut), 'output exceeds reserves');
+        // Enforce minOut to the base unit; its notation is gated at the top of swap.
         xchain.require(isAtLeastExact(xchain, amountOut, minOut), 'slippage: output below minOut');
 
         var newIn  = xchain.math.add(reserveIn, amountIn);

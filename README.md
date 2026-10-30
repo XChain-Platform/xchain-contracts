@@ -141,15 +141,16 @@ Start with **escrow**: it explains the custody model the others build on.
 
 Each template above exports a `meta` block as the first key of `module.exports`, carrying the
 human name in the **Template** column, a one-sentence honest version of the **What it teaches**
-column, and a `version` string (`1.0.0` for every template in this release):
+column, and a semver `version` string that each template sets for itself (read the current one
+from that template's own `meta.version`):
 
 ```js
-meta: { name: 'Dutch Auction', description: 'Descending-price auction: ...', version: '1.0.0' }
+meta: { name: 'Dutch Auction', description: 'Descending-price auction: ...', version: '<semver>' }
 ```
 
 This is not advisory metadata like `abi`. The indexer reads it off the deployed export and
 **refuses a `DEPLOY` that carries no `name` and `description`**, and it is what a wallet history
-row and an explorer contract page show beside the contract address (`Dutch Auction v1.0.0 ·
+row and an explorer contract page show beside the contract address (`Dutch Auction v<semver> ·
 C:DOGE:2154`). A fork keeps the block and rewrites it for the contract it has become; the address
 stays the identity, since names are not unique. Editing a template means bumping its
 `meta.version`: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).

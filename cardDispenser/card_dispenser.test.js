@@ -16,6 +16,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerDeployValidationTests = require('./card_dispenser_test/deploy_validation');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -344,58 +345,6 @@ function exactComparisonTests() {
     });
 }
 
-function deployValidationTests() {
-    it('rejects a deploy with no card ticks', async function () {
-        const { r } = await bareDeploy('C:BTC:2', [PAY, PRICE, UNIT]);   // no cards
-        assert.strictEqual(r.success, false, 'deploy without cards should revert in initialize');
-    });
-
-    it('rejects a non-positive price', async function () {
-        const { r } = await bareDeploy('C:BTC:3', [PAY, '0', UNIT, A]);
-        assert.strictEqual(r.success, false, 'deploy with price=0 should revert in initialize');
-    });
-}
-
-function unitNotationTests() {
-    // unit is stored verbatim, emitted verbatim as a draw's quantity, and fed to
-    // floorToDecimals by deliverableCopies - string surgery presupposing fixed
-    // notation. On '2.5e-1' the floor is a no-op, so the grid check would bless a
-    // unit the ledger reads as 0.25. The magnitude check is no filter: xchain.math
-    // parses every one of these.
-    it('rejects a unit that is not a plain fixed-notation decimal', async function () {
-        const BAD = ['2.5e-1', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
-                     '1.2.3', '', ' 1', 'abc', '-1'];
-        for (let i = 0; i < BAD.length; i++) {
-            const { r } = await bareDeploy('C:BTC:4', [PAY, PRICE, BAD[i], A]);
-            assert.strictEqual(r.success, false,
-                'deploy with unit ' + JSON.stringify(BAD[i]) + ' should revert');
-        }
-    });
-
-    // Notation-only: the card ticks' grids are unreadable at deploy (the contract
-    // holds none of them), so an off-grid but plainly spelled unit still deploys
-    // and is caught per card at draw() instead.
-    it('accepts an off-grid but plainly spelled unit and stores it verbatim', async function () {
-        const { r, ledger } = await bareDeploy('C:BTC:5', [PAY, PRICE, '0.25', A]);
-        assertSuccess(r);
-        assertContractState(ledger, 'C:BTC:5', 'unit', '0.25');
-    });
-}
-
-function priceNotationTests() {
-    // price is stored verbatim and echoed by info(), and every spelling here passes
-    // the > 0 magnitude check, so only the notation gate can refuse it.
-    it('rejects a price that is not a plain fixed-notation decimal', async function () {
-        const BAD = ['1e3', '0x10', '+1.5', '.5', '5.', '1_000', 'Infinity'];
-        const accepted = [];
-        for (let i = 0; i < BAD.length; i++) {
-            const { r } = await bareDeploy('C:BTC:6', [PAY, BAD[i], UNIT, A]);
-            if (r.success || !String(r.error).includes('price')) accepted.push(BAD[i] + ' -> ' + (r.success ? 'deployed' : r.error));
-        }
-        assert.deepStrictEqual(accepted, [], 'price spellings not refused by the price gate');
-    });
-}
-
 (XChainVM ? describe : describe.skip)('Template: cardDispenser', function () {
     this.timeout(0);
     describe('happy paths', happyPathTests);
@@ -409,9 +358,9 @@ function priceNotationTests() {
     // values within 1e-12 relative as equal.
     describe('payment and pick comparisons are exact (no mathjs tolerance)', exactComparisonTests);
     describe('deploy-time validation', function () {
-        deployValidationTests();
-        unitNotationTests();
-        priceNotationTests();
+        registerDeployValidationTests({
+            PAY, PRICE, UNIT, A, assert, assertSuccess, assertContractState, bareDeploy
+        });
     });
 });
 

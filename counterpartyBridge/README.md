@@ -135,7 +135,11 @@ EXECUTE(bridge, "claimedTotal", "<your_address>")               # verify
   known total supply** so the bridge can never mint more XChain-side than
   exists Counterparty-side no matter how many addresses burn-and-claim.
   It must be a plain fixed-notation decimal (`"1e8"` or `"0x10"` reverts),
-  because it is written into the `ISSUE` exactly as given.
+  because it is written into the `ISSUE` exactly as given. It must also
+  carry no more fractional digits than `decimals` (trailing zeros aside),
+  or the deploy reverts: the indexer would round the pre-minted custody
+  onto the grid and it would disagree with the cap. A cap that fails this
+  usually means `decimals` does not match the Counterparty asset.
 - `decimals`: must match how the sends API reports `quantity` for this
   asset (8 for a divisible Counterparty asset, 0 for an indivisible one)
   so claimed amounts land on the tick's real grid.

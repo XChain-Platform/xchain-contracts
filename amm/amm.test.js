@@ -11,6 +11,9 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerAbiTests = require('./amm_test/abi');
+const registerExactCustodyTests = require('./amm_test/exact_custody');
+const registerMintLockTests = require('./amm_test/mint_lock');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 const INDEXER_DIR = path.join(__dirname, '..', '..', 'xchain-indexer');
@@ -97,54 +100,6 @@ function liquidityFirstDeposit() {
         assert.strictEqual(emitted(added, 'MINT', LP), undefined);
         assert.strictEqual(emitted(added, 'SEND', LP).params.quantity, '999.999');
         assert.strictEqual(h.ledger.getContractState(ADDR).lpInventory, '99999999999999998999.001');
-    });
-}
-function liquidityMintLock() {
-    it('refuses unauthorized public MINT and any later supply-raising ISSUE under the emitted lock flags', async function () {
-        const deployed = await deploy();
-        const issue = deployed.result.emittedActions.find(e => e.action === 'ISSUE').params;
-
-        const validator = {
-            util: {
-                isNull: value => value === null || value === undefined || value === '',
-                isValidAmountFormat: () => true,
-                isCryptoAddress: () => true
-            },
-            indexerDb: { isActionAllowed: async () => true },
-            config: { MAX_MEMO_LENGTH: 1024 }
-        };
-        const tokenInfo = {
-            DECIMALS: Number(issue.decimals),
-            LOCK_MINT: Number(issue.lockMint),
-            LOCK_MINT_SUPPLY: Number(issue.lockMintSupply)
-        };
-
-        for (const caller of [T1, LP2, LP1, ADDR]) {
-            const mintContext = {
-                data: { SOURCE: caller, AMOUNT: '1', MEMO: '' },
-                tokenInfo,
-                error: null
-            };
-            await mintValidation.validateTokenRules.call(validator, mintContext);
-            assert.strictEqual(mintContext.error, 'invalid: LOCK_MINT', 'MINT refused for ' + caller);
-        }
-
-        const issueContext = {
-            data: { SOURCE: LP1, MINT_SUPPLY: '1', TRANSFER: '', TRANSFER_SUPPLY: '' },
-            tokenInfo,
-            error: null
-        };
-        issueSupplyRules.validateTransferFields.call(validator, issueContext);
-        assert.strictEqual(issueContext.error, 'invalid: MINT_SUPPLY (locked)', 'supply-raising re-ISSUE refused');
-
-        // The contract itself never mints, so the lock costs it nothing.
-        let r = await addLiq(LP1, '1000', '1000');
-        assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
-        h.deposit(LP1, ADDR, LP, '10');
-        r = await h.execute({ contractAddress: ADDR, method: 'removeLiquidity', params: [], caller: LP1 });
-        assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
-        r = await swap(T1, A, '10', '0');
-        assert.strictEqual(r.emittedActions.some(e => e.action === 'MINT'), false);
     });
 }
 function liquidityMinimum() {
@@ -276,8 +231,29 @@ function swapPricing() {
     it('a non-finite minOut still reverts', async function () {
         for (const bad of ['NaN', 'Infinity']) {
             await deploy(); await addLiq(LP1, '1000', '1000');
-            assertReverted(await swap(T1, A, '100', bad), 'slippage');
+            assertReverted(await swap(T1, A, '100', bad), 'plain decimal');
         }
+    });
+}
+function minOutNotationTests() {
+    // Every value here sits below the ~90.66 output, so only the notation gate can refuse it.
+    it('refuses a minOut spelled other than a plain decimal before the slippage check', async function () {
+        for (const bad of ['0x10', '1_0', '+5', '-1', '.5', '5.', '1e1', '1.5e-8', ' 5', '1..5']) {
+            await deploy(); await addLiq(LP1, '1000', '1000');
+            const r = await swap(T1, A, '100', bad);
+            assertReverted(r, 'minOut');
+            assert.ok(!String(r.error).includes('slippage'), bad + ' reached the slippage check: ' + r.error);
+        }
+    });
+
+    it('accepts a plain-decimal minOut and an omitted one', async function () {
+        for (const ok of ['0', '90', '90.5']) {
+            await deploy(); await addLiq(LP1, '1000', '1000');
+            assertSuccess(await swap(T1, A, '100', ok));
+        }
+        await deploy(); await addLiq(LP1, '1000', '1000');
+        h.deposit(T1, ADDR, A, '100');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'swap', params: [A], caller: T1 }));
     });
 }
 function swapEdges() {
@@ -391,34 +367,26 @@ function fuzzTests() {
     });
 }
 
-// ABI metadata (spec: xchain-documentation/protocol/contract-abi.md). Static
-// module surface; no VM harness needed, so this suite always runs.
-describe('Template: amm abi', function () {
-    const abi = require('./amm.js').abi;
-
-    it('declares an abi block covering every public method', function () {
-        assert.strictEqual(abi.version, 1);
-        assert.deepStrictEqual(Object.keys(abi.methods).sort(),
-            ['addLiquidity', 'info', 'removeLiquidity', 'swap']);
-    });
-
-    it('declares swap params in wire order with valid types', function () {
-        assert.deepStrictEqual(abi.methods.swap.params,
-            [{ name: 'tokenIn', type: 'tick' }, { name: 'minOut', type: 'amount' }]);
-        assert.deepStrictEqual(abi.methods.addLiquidity.params, []);
-        assert.deepStrictEqual(abi.methods.removeLiquidity.params, []);
-        assert.strictEqual(abi.methods.info.view, true);
-    });
-});
-
+registerAbiTests(assert, require('./amm.js').abi);
 
 (XChainVM ? describe : describe.skip)('Template: amm', function () {
     this.timeout(0);
     describe('liquidity', function () {
-        liquidityFirstDeposit(); liquidityMintLock(); liquidityMinimum(); liquidityRemoval();
+        liquidityFirstDeposit();
+        registerMintLockTests({
+            T1, LP2, LP1, ADDR, A, LP, assert, mintValidation, issueSupplyRules,
+            deploy, addLiq, swap, getHarness: () => h
+        });
+        liquidityMinimum(); liquidityRemoval();
     });
     describe('swap', function () {
-        swapPricing(); swapEdges();
+        swapPricing(); minOutNotationTests(); swapEdges();
+    });
+    describe('exact custody guards (18-decimal dust and near-reserve payouts)', function () {
+        registerExactCustodyTests({
+            A, B, LP, ADDR, LP1, LP2, T1, assert, assertSuccess, assertContractState,
+            bn, deploy, getHarness: () => h, addLiq, swap, emitted, reserves
+        });
     });
     describe('precision reconciliation (finding: reserves/totalShares drift)', precisionTests);
     describe('k-invariant fuzz', fuzzTests);

@@ -148,6 +148,12 @@ function registerBurnEdgeCases(ctx, kit) {
         assertContractBalance(kit.h.ledger, ADDR, SALE, '0');
     });
 
+    registerBurnNoopCases(ctx, kit);
+}
+
+function registerBurnNoopCases(ctx, kit) {
+    const { OWNER, B1, assert, assertSuccess, assertReverted, assertEmittedActions } = ctx;
+    const { deploy, buy, call } = kit;
     it('rejects burning before finalization', async function () {
         assertSuccess(await deploy());
         assertReverted(await call('burnUnsold', OWNER), 'sale not finalized');
@@ -157,7 +163,6 @@ function registerBurnEdgeCases(ctx, kit) {
         assertSuccess(await deploy());
         assertSuccess(await buy(B1, '200'));
         assertSuccess(await call('finalize', B1));
-
         const burned = await call('burnUnsold', OWNER);
         assertSuccess(burned);
         assertEmittedActions(burned, []);
