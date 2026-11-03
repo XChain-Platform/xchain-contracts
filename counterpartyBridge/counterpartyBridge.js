@@ -201,8 +201,14 @@ function collectNewBurns(xchain, sends, decimals) {
 
 function completeClaim(xchain, address, claim) {
     var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), claim.total);
-    xchain.require(isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed),
-        'bridge maxSupply exhausted');
+    // Fail soft, never revert: onClaim has already deleted pending:<addr>, and a
+    // revert would roll that back while the immutable attestation response keeps
+    // replaying the same over-cap page, locking the address out of requestClaim.
+    // Nothing is marked burned, so the burns stay claimable if supply allows later.
+    if (!isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed)) {
+        xchain.log('bridge maxSupply exhausted', address, claim.total);
+        return 'maxSupply exhausted';
+    }
 
     for (var i = 0; i < claim.hashes.length; i++)
         xchain.state.set('burned:' + claim.hashes[i], true);
@@ -228,7 +234,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     abi: { version: 1, methods: {

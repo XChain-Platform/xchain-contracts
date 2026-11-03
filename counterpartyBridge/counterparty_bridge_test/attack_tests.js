@@ -97,15 +97,53 @@ function registerSupplyCapAttack(context) {
         sendsPayload, nextTxHash
     } = context;
 
-    it('claims are capped at maxSupply across all claimants, before any SEND is emitted', async function () {
+    async function overCapRound(h, quantity) {
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+        assertSuccess(req);
+        const requestId = JSON.parse(req.returnValue);
+        const txHash = nextTxHash();
+        seedSendsResponse(requestId, sendsPayload([{ txHash: txHash, quantity: quantity }]));
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        return { cb: cb, txHash: txHash };
+    }
+
+    it('a page that would exceed maxSupply settles as a no-op: no SEND, pending cleared, requestClaim callable again', async function () {
         await deployBridge('50', '8');
         const h = getHarness();
-        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
-        const requestId = JSON.parse(req.returnValue);
-        seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '100' }]));
-        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
-        assertReverted(cb, 'maxSupply exhausted');
+        const r = await overCapRound(h, '100');
+        assertSuccess(r.cb, 'an over-cap page must not revert: that would roll back the pending delete');
+        assertEmittedActions(r.cb, []);
         assert.strictEqual(h.ledger.getContractBalance(ADDR, XC_TICK), '50', 'custody is untouched by a refused claim');
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!h.ledger.contractState[ADDR]['burned:' + r.txHash], 'the refused burn stays unmarked');
+        assert.ok(!h.ledger.contractState[ADDR]['pending:' + HOLDER], 'pending is cleared');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }), 'address is not locked out');
+    });
+
+    it('at 18 decimals, a page of 1.000000000000000001 over a 9.999999999999999999 claim of maxSupply 10 is a no-op, not a wedge', async function () {
+        await deployBridge('10', '18');
+        const h = getHarness();
+        const first = await overCapRound(h, '9.999999999999999999');
+        assertSuccess(first.cb);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '9.999999999999999999');
+        const over = await overCapRound(h, '1.000000000000000001');
+        assertSuccess(over.cb);
+        assertEmittedActions(over.cb, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '9.999999999999999999');
+        assert.ok(!h.ledger.contractState[ADDR]['burned:' + over.txHash]);
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }));
+    });
+
+    it('after the exact supply is claimed, one more base unit is a no-op and requestClaim stays callable', async function () {
+        await deployBridge('10', '18');
+        const h = getHarness();
+        assertSuccess((await overCapRound(h, '10')).cb);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '10');
+        const extra = await overCapRound(h, '0.000000000000000001');
+        assertSuccess(extra.cb);
+        assertEmittedActions(extra.cb, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '10');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }));
     });
 
     // XChain MINT is not issuer-gated, so an unlocked tick could be minted by anyone:
