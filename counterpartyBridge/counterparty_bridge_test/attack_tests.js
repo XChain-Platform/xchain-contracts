@@ -50,7 +50,7 @@ function registerStaleResponseAttacks(context) {
 
 function registerDoubleCreditAttacks(context) {
     const {
-        ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
+        assert, ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
         assertContractState, deployBridge, getHarness, seedSendsResponse,
         sendsPayload, nextTxHash
     } = context;
@@ -87,6 +87,52 @@ function registerDoubleCreditAttacks(context) {
         assertSuccess(replay, 'replaying an already-credited burn should not revert');
         assertEmittedActions(replay, []);
         assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '42.5');
+    });
+
+    async function dupPage(rows) {
+        await deployBridge();
+        const h = getHarness();
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+        const requestId = JSON.parse(req.returnValue);
+        seedSendsResponse(requestId, sendsPayload(rows));
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        assertSuccess(cb);
+        return { h, requestId, cb };
+    }
+
+    function sentQuantities(cb) {
+        return (cb.emittedActions || []).filter(function (e) { return e.action === 'SEND'; })
+            .map(function (e) { return e.params.quantity; });
+    }
+
+    it('a tx_hash repeated inside one attested page is credited once (same quantity)', async function () {
+        const tx = nextTxHash();
+        const r = await dupPage([{ txHash: tx, quantity: '5' }, { txHash: tx, quantity: '5' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['5']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '5');
+        assertContractState(r.h.ledger, ADDR, 'claimedTotal:' + HOLDER, '5');
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + tx], true);
+    });
+
+    it('a tx_hash repeated inside one page with different quantities credits only the first row', async function () {
+        const tx = nextTxHash();
+        const r = await dupPage([{ txHash: tx, quantity: '5' }, { txHash: tx, quantity: '7' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['5']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '5');
+    });
+
+    it('two distinct tx_hashes in one page are both credited and the same page replays as a no-op', async function () {
+        const a = nextTxHash();
+        const b = nextTxHash();
+        const r = await dupPage([{ txHash: a, quantity: '5' }, { txHash: b, quantity: '5' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['10']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '10');
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + a], true);
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + b], true);
+        r.h.ledger.contractState[ADDR]['pending:' + HOLDER] = r.requestId;
+        const replay = await r.h.execute({ contractAddress: ADDR, method: 'onClaim', params: [r.requestId, 'http_get', 'ok', '', HOLDER], caller: 'attacker' });
+        assertSuccess(replay);
+        assert.deepStrictEqual(sentQuantities(replay), []);
     });
 }
 

@@ -188,11 +188,16 @@ function extractBurnSends(payload, asset, source) {
 function collectNewBurns(xchain, sends, decimals) {
     var total = '0';
     var hashes = [];
+    // burned: keys are written only in completeClaim, so a tx_hash repeated within
+    // one page must be filtered here: one burn is credited once, first row wins.
+    var seen = {};
     for (var i = 0; i < sends.length; i++) {
         var send = sends[i];
+        if (Object.prototype.hasOwnProperty.call(seen, send.txHash)) continue;
         if (xchain.state.get('burned:' + send.txHash)) continue;
         var amount = floorToDecimals(send.quantity, decimals);
         if (isAtLeastExact(xchain, '0', amount)) continue;
+        seen[send.txHash] = true;
         total = xchain.math.add(total, amount);
         hashes.push(send.txHash);
     }
@@ -234,7 +239,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.4.1'
+        version:     '1.4.2'
     },
 
     abi: { version: 1, methods: {
