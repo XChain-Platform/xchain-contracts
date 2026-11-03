@@ -163,11 +163,8 @@ function extractBurnSends(payload, asset, source) {
         // Only a JSON string is taken: JSON.parse has already rounded a JSON number
         // to a double, so 9007199254740995 arrives as 9007199254740996 and would
         // re-render as a plain decimal of the wrong value. Fed '1.23456789e2' the
-        // floor does not no-op, it CORRUPTS:
-        // it returns '1.23456789' for a value of 123.456789, so the claimer is
-        // credited 1% of what they burned, with no user error involved and no
-        // revert to notice.
-        //
+        // floor CORRUPTS rather than no-ops: it returns '1.23456789' for 123.456789,
+        // crediting 1% of the burn with no user error and no revert to notice.
         // Non-fixed rows are DROPPED here rather than reverting onClaim(), because
         // a revert would roll back the `pending:` delete too and requestClaim()
         // refuses a second check while one is pending: one badly-spelled row from
@@ -188,16 +185,16 @@ function extractBurnSends(payload, asset, source) {
 function collectNewBurns(xchain, sends, decimals) {
     var total = '0';
     var hashes = [];
-    // burned: keys are written only in completeClaim, so a tx_hash repeated within
-    // one page must be filtered here: one burn is credited once, first row wins.
+    // burned: keys are written only in completeClaim, so a repeat within one page
+    // is filtered here (first row wins); the h: prefix keeps __proto__ a plain key.
     var seen = {};
     for (var i = 0; i < sends.length; i++) {
         var send = sends[i];
-        if (Object.prototype.hasOwnProperty.call(seen, send.txHash)) continue;
+        if (Object.prototype.hasOwnProperty.call(seen, 'h:' + send.txHash)) continue;
         if (xchain.state.get('burned:' + send.txHash)) continue;
         var amount = floorToDecimals(send.quantity, decimals);
         if (isAtLeastExact(xchain, '0', amount)) continue;
-        seen[send.txHash] = true;
+        seen['h:' + send.txHash] = true;
         total = xchain.math.add(total, amount);
         hashes.push(send.txHash);
     }
@@ -206,10 +203,8 @@ function collectNewBurns(xchain, sends, decimals) {
 
 function completeClaim(xchain, address, claim) {
     var newTotalClaimed = xchain.math.add(xchain.state.get('totalClaimed'), claim.total);
-    // Fail soft, never revert: onClaim has already deleted pending:<addr>, and a
-    // revert would roll that back while the immutable attestation response keeps
-    // replaying the same over-cap page, locking the address out of requestClaim.
-    // Nothing is marked burned, so the burns stay claimable if supply allows later.
+    // Fail soft, never revert: a revert restores pending:<addr> while the same
+    // over-cap page keeps replaying, locking the address out of requestClaim.
     if (!isAtLeastExact(xchain, xchain.state.get('maxSupply'), newTotalClaimed)) {
         xchain.log('bridge maxSupply exhausted', address, claim.total);
         return 'maxSupply exhausted';
@@ -336,37 +331,32 @@ module.exports = {
         return requestId;
     },
 
-    // onClaim(request_id, address): the indexer's callback once the burn
-    // list settles. Pinned to the outstanding request for THIS address (like
-    // escrowDelivery's onDelivery, not urlOracle's teaching-example gap) so a
-    // stale settled response for an earlier request can't be replayed. Sums
-    // every not-yet-credited burn found for `address`, sends it once from
-    // custody, and
-    // nullifies each burn's tx_hash individually. Finding zero new burns, or
-    // a failed attestation, is a no-op - pending clears and the address can
-    // requestClaim() again later once they actually burn something.
+    // onClaim(request_id, address): the indexer's callback once the burn list
+    // settles, pinned to the outstanding request for THIS address so a stale
+    // response can't be replayed. Sends every not-yet-credited burn once from
+    // custody and nullifies each tx_hash. Zero new burns or a failed check is
+    // a no-op: pending clears and the address can requestClaim() again.
     onClaim: function (xchain) {
-        // The indexer invokes attestation callbacks with the fixed preamble
-        // [request_id, provider_id, status, response_payload] followed by
-        // whatever custom context array was passed to attestation.request()
-        // (see xchain-indexer's injectCallbackExecute). requestClaim() passed
-        // [caller] as that context, so the address we asked about is param 4,
-        // not param 1 - param 1 is the provider_id ('http_get').
+        // Callback params are [request_id, provider_id, status, response_payload]
+        // then the context passed to attestation.request() (xchain-indexer's
+        // injectCallbackExecute); requestClaim() passed [caller], so it is param 4.
         var requestId = xchain.getInputParam(0);
         var address = xchain.getInputParam(4);
         xchain.require(requestId === xchain.state.get('pending:' + address),
             'not the outstanding claim request for this address');
 
-        // Param 2 is the callback status. Expiry and non-ok outcomes have no
-        // readable response row, so they must settle here, never revert: a
-        // revert undoes the pending delete and wedges requestClaim forever.
-        var status = xchain.getInputParam(2);
+        // An expired request has no readable row and must settle, not revert (a
+        // revert keeps pending and wedges requestClaim). Param 2 is trusted only
+        // on the framework's own callback (SOURCE is this contract): anyone may
+        // relay an attested response, but a forged 'expired' must not cancel.
         var resp = xchain.attestation.getResponse(requestId);
-        xchain.require(status !== 'ok' || resp !== null, 'no response yet');
+        var expired = resp === null && xchain.getInputParam(2) !== 'ok' &&
+            xchain.getSourceAddress() === xchain.getContractAddress();
+        xchain.require(resp !== null || expired, 'no response yet');
 
-        if (status !== 'ok' || resp.status !== 'ok') {
+        if (expired || resp.status !== 'ok') {
             xchain.state.delete('pending:' + address);
-            xchain.log('burn check failed', requestId, status);
+            xchain.log('burn check failed', requestId, expired ? 'expired' : resp.status);
             return 'not confirmed';
         }
 

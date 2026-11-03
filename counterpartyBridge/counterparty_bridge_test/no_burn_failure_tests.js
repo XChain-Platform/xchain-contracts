@@ -1,7 +1,8 @@
 'use strict';
 
 // A non-ok callback (expired, error, failed) has no readable response row;
-// it must clear pending, not revert.
+// it must clear pending, not revert. The framework runs that callback with the
+// contract as SOURCE, so these tests call as ADDR.
 function registerUnwedgeTests(context) {
     const { ADDR, HOLDER, assertSuccess, assertReverted, assertEmittedActions, deployBridge, getHarness } = context;
     describe('non-ok callbacks never wedge requestClaim', function () {
@@ -12,13 +13,24 @@ function registerUnwedgeTests(context) {
                 const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
                 const requestId = JSON.parse(req.returnValue);
                 // No seeded row: the live attestation view hides non-ok outcomes.
-                const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', status, '', HOLDER], caller: HOLDER });
+                const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', status, '', HOLDER], caller: ADDR });
                 assertSuccess(cb, status + ' is a no-op, not a revert');
                 assertEmittedActions(cb, []);
                 const retry = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
                 assertSuccess(retry, 'requestClaim must be callable again');
             });
         }
+
+        it('a forged expired callback from anyone but the framework reverts and keeps the claim pending', async function () {
+            await deployBridge();
+            const h = getHarness();
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId = JSON.parse(req.returnValue);
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'expired', '', HOLDER], caller: 'attacker' }),
+                'no response yet');
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }),
+                'already');
+        });
 
         it('a callback for a mismatched request id still reverts', async function () {
             await deployBridge();
@@ -52,7 +64,7 @@ function makeRequestAndCallback(context) {
         const requestId = JSON.parse(req.returnValue);
 
         seedSendsResponse(requestId, body, cbStatus);
-        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', cbStatus, '', HOLDER], caller: HOLDER });
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', cbStatus, '', HOLDER], caller: ADDR });
         return { h, requestId, cb };
     };
 }

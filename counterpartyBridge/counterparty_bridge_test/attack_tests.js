@@ -4,6 +4,8 @@ module.exports = function registerAttackTests(context) {
     describe('attacks we considered', function () {
         registerStaleResponseAttacks(context);
         registerDoubleCreditAttacks(context);
+        registerDuplicateHashInPageAttacks(context);
+        registerOverCapPageAttacks(context);
         registerSupplyCapAttack(context);
     });
 };
@@ -88,6 +90,13 @@ function registerDoubleCreditAttacks(context) {
         assertEmittedActions(replay, []);
         assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '42.5');
     });
+}
+
+function registerDuplicateHashInPageAttacks(context) {
+    const {
+        assert, ADDR, HOLDER, assertSuccess, assertContractState, deployBridge, getHarness,
+        seedSendsResponse, sendsPayload, nextTxHash
+    } = context;
 
     async function dupPage(rows) {
         await deployBridge();
@@ -121,6 +130,13 @@ function registerDoubleCreditAttacks(context) {
         assertContractState(r.h.ledger, ADDR, 'totalClaimed', '5');
     });
 
+    it('repeated __proto__ and constructor hashes in one page are each credited once', async function () {
+        const r = await dupPage([{ txHash: '__proto__', quantity: '5' }, { txHash: '__proto__', quantity: '5' },
+            { txHash: 'constructor', quantity: '1' }, { txHash: 'constructor', quantity: '1' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['6']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '6');
+    });
+
     it('two distinct tx_hashes in one page are both credited and the same page replays as a no-op', async function () {
         const a = nextTxHash();
         const b = nextTxHash();
@@ -136,9 +152,9 @@ function registerDoubleCreditAttacks(context) {
     });
 }
 
-function registerSupplyCapAttack(context) {
+function registerOverCapPageAttacks(context) {
     const {
-        ADDR, HOLDER, OTHER, XC_TICK, CODE, assert, assertSuccess, assertReverted, assertEmittedActions,
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
         assertContractState, deployBridge, getHarness, seedSendsResponse,
         sendsPayload, nextTxHash
     } = context;
@@ -191,6 +207,10 @@ function registerSupplyCapAttack(context) {
         assertContractState(h.ledger, ADDR, 'totalClaimed', '10');
         assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }));
     });
+}
+
+function registerSupplyCapAttack(context) {
+    const { XC_TICK, CODE, assert, deployBridge } = context;
 
     // XChain MINT is not issuer-gated, so an unlocked tick could be minted by anyone:
     // unbacked supply, and a filled cap that strands every real claimant.
