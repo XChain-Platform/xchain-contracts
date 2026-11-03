@@ -346,12 +346,16 @@ module.exports = {
         xchain.require(requestId === xchain.state.get('pending:' + address),
             'not the outstanding claim request for this address');
 
+        // Param 2 is the callback status. Expiry and non-ok outcomes have no
+        // readable response row, so they must settle here, never revert: a
+        // revert undoes the pending delete and wedges requestClaim forever.
+        var status = xchain.getInputParam(2);
         var resp = xchain.attestation.getResponse(requestId);
-        xchain.require(resp !== null, 'no response yet');
+        xchain.require(status !== 'ok' || resp !== null, 'no response yet');
 
-        if (resp.status !== 'ok') {
+        if (status !== 'ok' || resp.status !== 'ok') {
             xchain.state.delete('pending:' + address);
-            xchain.log('burn check failed', requestId, resp.status);
+            xchain.log('burn check failed', requestId, status);
             return 'not confirmed';
         }
 

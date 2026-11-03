@@ -1,5 +1,44 @@
 'use strict';
 
+// A non-ok callback (expired, error, failed) has no readable response row;
+// it must clear pending, not revert.
+function registerUnwedgeTests(context) {
+    const { ADDR, HOLDER, assertSuccess, assertReverted, assertEmittedActions, deployBridge, getHarness } = context;
+    describe('non-ok callbacks never wedge requestClaim', function () {
+        for (const status of ['expired', 'error', 'failed']) {
+            it('a ' + status + ' callback with no readable response clears pending and unwedges requestClaim', async function () {
+                await deployBridge();
+                const h = getHarness();
+                const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+                const requestId = JSON.parse(req.returnValue);
+                // No seeded row: the live attestation view hides non-ok outcomes.
+                const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', status, '', HOLDER], caller: HOLDER });
+                assertSuccess(cb, status + ' is a no-op, not a revert');
+                assertEmittedActions(cb, []);
+                const retry = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+                assertSuccess(retry, 'requestClaim must be callable again');
+            });
+        }
+
+        it('a callback for a mismatched request id still reverts', async function () {
+            await deployBridge();
+            const h = getHarness();
+            await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'onClaim', params: ['bogus', 'http_get', 'expired', '', HOLDER], caller: HOLDER }),
+                'not the outstanding claim request');
+        });
+
+        it('an ok callback with no readable response still reverts', async function () {
+            await deployBridge();
+            const h = getHarness();
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            const requestId = JSON.parse(req.returnValue);
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER }),
+                'no response yet');
+        });
+    });
+}
+
 module.exports = function registerNoBurnFailureTests(context) {
     const {
         ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
@@ -18,6 +57,8 @@ module.exports = function registerNoBurnFailureTests(context) {
         const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
         return { h, cb };
     }
+
+    registerUnwedgeTests(context);
 
     describe('no burns / failure: no-op, not fatal', function () {
         it('no matching burns is a no-op: pending clears, nothing minted', async function () {
