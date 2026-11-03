@@ -39,26 +39,53 @@ function registerUnwedgeTests(context) {
     });
 }
 
-module.exports = function registerNoBurnFailureTests(context) {
-    const {
-        ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
-        deployBridge, getHarness, seedSendsResponse, sendsPayload
-    } = context;
-
-    // Deploys, opens a claim for HOLDER, seeds the sends response and runs the
-    // onClaim callback. Returns the harness and the callback result.
-    async function requestAndCallback(body, status) {
+// Builds the helper that deploys, opens a claim for HOLDER, seeds the sends
+// response and runs the onClaim callback with the same status the indexer
+// would pass. The helper returns the harness, the request id and the result.
+function makeRequestAndCallback(context) {
+    const { ADDR, HOLDER, deployBridge, getHarness, seedSendsResponse } = context;
+    return async function requestAndCallback(body, status) {
+        const cbStatus = status || 'ok';
         await deployBridge();
         const h = getHarness();
         const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
         const requestId = JSON.parse(req.returnValue);
 
-        seedSendsResponse(requestId, body, status);
-        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
-        return { h, cb };
-    }
+        seedSendsResponse(requestId, body, cbStatus);
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', cbStatus, '', HOLDER], caller: HOLDER });
+        return { h, requestId, cb };
+    };
+}
+
+// The live attestation view never exposes a non-ok row, so these run with no
+// readable response, and the null guard proves the seeding helper served none.
+function registerNonOkAttestationTests(context, requestAndCallback) {
+    const { ADDR, HOLDER, assert, assertSuccess, assertEmittedActions } = context;
+    describe('non-ok attestation outcomes are no-ops with no readable row', function () {
+        for (const status of ['failed', 'expired']) {
+            it('a ' + status + ' attestation is also a no-op with no readable row', async function () {
+                const { h, requestId, cb } = await requestAndCallback('', status);
+                assert.strictEqual(h.ledger.buildAttestationAccessor().getResponse(requestId), null,
+                    'a ' + status + ' response must not be readable, as in the live attestation view');
+                assertSuccess(cb, status + ' is a no-op, not a revert');
+                assertEmittedActions(cb, []);
+
+                const retry = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+                assertSuccess(retry, 'requestClaim should be callable again after a ' + status + ' callback cleared pending');
+            });
+        }
+    });
+}
+
+module.exports = function registerNoBurnFailureTests(context) {
+    const {
+        ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
+        deployBridge, getHarness, sendsPayload
+    } = context;
+    const requestAndCallback = makeRequestAndCallback(context);
 
     registerUnwedgeTests(context);
+    registerNonOkAttestationTests(context, requestAndCallback);
 
     describe('no burns / failure: no-op, not fatal', function () {
         it('no matching burns is a no-op: pending clears, nothing minted', async function () {
@@ -73,12 +100,6 @@ module.exports = function registerNoBurnFailureTests(context) {
         it('a malformed / non-JSON body is treated as no burns found, not a crash', async function () {
             const { cb } = await requestAndCallback('not json at all');
             assertSuccess(cb, 'malformed body should not crash the callback');
-            assertEmittedActions(cb, []);
-        });
-
-        it('a failed attestation is also a no-op', async function () {
-            const { cb } = await requestAndCallback('', 'failed');
-            assertSuccess(cb);
             assertEmittedActions(cb, []);
         });
 

@@ -91,9 +91,15 @@ function buildContext() {
     // Seeds a settled attestation response on the harness's MockLedger, the
     // way the indexer would after off-chain providers agree on the sends
     // API's body. h.execute() reads it via ledger.buildAttestationAccessor().
+    // The live attestation view the indexer hands the VM holds only rows whose
+    // response status is 'ok'; a failed, error or expired outcome has no
+    // readable row. A non-ok status therefore seeds nothing, so no test can
+    // pass by reading a row the live path would hide.
     function seedSendsResponse(requestId, payload, status) {
+        const effective = status || 'ok';
+        if (effective !== 'ok') return;
         h.ledger.seedAttestation(requestId, {
-            status: status || 'ok', payload: payload, providerId: 'http_get', blockIndex: 200, validatorCount: 3
+            status: effective, payload: payload, providerId: 'http_get', blockIndex: 200, validatorCount: 3
         });
     }
 
