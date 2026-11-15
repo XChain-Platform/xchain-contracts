@@ -113,7 +113,7 @@ function registerDustPayoutTests(ctx) {
                 ['DESTROY', '0.000000000000000001'],
                 ['SEND', '0.999999999999999999']
             ]);
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
             assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
         });
 
@@ -173,3 +173,4 @@ function registerDustPayoutTests(ctx) {
 
 // Seeded invariant suite on the in-process harness (runs without the VM sibling).
 require('./stable_vault_test/invariants');
+require('./stable_vault_test/vault_slots');

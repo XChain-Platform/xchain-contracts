@@ -48,7 +48,7 @@ async function deployEscrow(window) {
     h.seedBalance(BUYER, TICK, '200');
     await h.deploy({
         code: CODE, deployer: BUYER, contractAddress: ADDR,
-        params: [BUYER, SELLER, ARBITER, TICK, '200', String(window || 3), MARKER]
+        params: [BUYER, SELLER, ARBITER, TICK, '200', String(window || 3), MARKER, TRACKING_URL]
     });
 }
 
@@ -73,7 +73,7 @@ function registerHappyPath() {
             assertSuccess(await depositAndFund());
 
             const req = await h.execute({
-                contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: STRANGER
+                contractAddress: ADDR, method: 'requestDelivery', params: [], caller: STRANGER
             });
             assertSuccess(req);
             assertEmittedActions(req, [{ action: 'ATTEST', params: {
@@ -94,13 +94,16 @@ function registerHappyPath() {
             assertContractState(h.ledger, ADDR, 'status', 'DELIVERED');
         });
 
-        it('anyone can trigger the check - the attestation itself is the authorization, not the caller', async function () {
+        it('ignores a caller-supplied URL and attests only the deploy-time URL', async function () {
             await deployEscrow();
             await depositAndFund();
             const req = await h.execute({
-                contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: STRANGER
+                contractAddress: ADDR, method: 'requestDelivery', params: ['https://attacker.invalid/delivered'], caller: SELLER
             });
-            assertSuccess(req, 'a stranger can ask the network to check the tracking URL');
+            assertSuccess(req);
+            assertEmittedActions(req, [{ action: 'ATTEST', params: {
+                providerId: 'http_get', requestPayload: TRACKING_URL, callbackMethod: 'onDelivery'
+            } }]);
         });
     });
 }
@@ -110,7 +113,7 @@ function registerNonDelivery() {
         it('a body without the marker is a no-op: funds stay put, pending clears for retry', async function () {
             await deployEscrow();
             await depositAndFund();
-            const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
             const requestId = JSON.parse(req.returnValue);
 
             seedDeliveryResponse(requestId, 'label created, awaiting carrier pickup');
@@ -124,29 +127,29 @@ function registerNonDelivery() {
             assert.ok(!('pending' in h.ledger.getContractState(ADDR)), 'pending cleared so a retry can be requested');
 
             // Retry now succeeds because pending was cleared.
-            const retry = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
+            const retry = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
             assertSuccess(retry, 'requestDelivery should be callable again after a non-match cleared pending');
         });
 
-        it('a failed attestation is also a no-op, not fatal', async function () {
-            await deployEscrow();
-            await depositAndFund();
-            const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
-            const requestId = JSON.parse(req.returnValue);
-
-            seedDeliveryResponse(requestId, '', 'failed');
-            const cb = await h.execute({
-                contractAddress: ADDR, method: 'onDelivery', params: [requestId], caller: BUYER
-            });
-            assertSuccess(cb);
-            assertContractState(h.ledger, ADDR, 'status', 'FUNDED');
+        it('framework callbacks clear pending for non-ok outcomes with no response row', async function () {
+            for (const status of ['expired', 'error', 'failed']) {
+                await deployEscrow();
+                await depositAndFund();
+                const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
+                const requestId = JSON.parse(req.returnValue);
+                const cb = await h.execute({ contractAddress: ADDR, method: 'onDelivery',
+                    params: [requestId, 'http_get', status, ''], caller: ADDR });
+                assertSuccess(cb);
+                assertContractState(h.ledger, ADDR, 'pending', null);
+                assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER }));
+            }
         });
 
         it('requestDelivery rejects a second check while one is already pending', async function () {
             await deployEscrow();
             await depositAndFund();
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER }));
-            assertReverted(await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: SELLER }),
+            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER }));
+            assertReverted(await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: SELLER }),
                 'already pending');
         });
     });
@@ -161,7 +164,7 @@ function registerFundCheck() {
             h.seedBalance(BUYER, 'XCHAIN', '1000000');
             h.seedBalance(BUYER, TICK, '2000000');
             return h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
-                params: [BUYER, SELLER, ARBITER, TICK, amount, '3', MARKER] });
+                params: [BUYER, SELLER, ARBITER, TICK, amount, '3', MARKER, TRACKING_URL] });
         }
 
         it('fund() rejects a deposit one base unit short of a large amount', async function () {
@@ -229,7 +232,7 @@ function attacksReplayAndRace() {
     it('onDelivery rejects a request_id that is not the outstanding one (no stale-response replay)', async function () {
         await deployEscrow();
         await depositAndFund();
-        await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
+        await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
 
         const forged = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
         seedDeliveryResponse(forged, MARKER);
@@ -243,20 +246,25 @@ function attacksReplayAndRace() {
     it('onDelivery reverts if the response has not settled yet', async function () {
         await deployEscrow();
         await depositAndFund();
-        const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
         const requestId = JSON.parse(req.returnValue);
 
         // Not seeded: buildAttestationAccessor().getResponse() naturally returns null.
         const cb = await h.execute({
-            contractAddress: ADDR, method: 'onDelivery', params: [requestId], caller: BUYER
+            contractAddress: ADDR, method: 'onDelivery', params: [requestId, 'http_get', 'ok', ''], caller: ADDR
         });
         assertReverted(cb, 'no response yet');
+
+        const fake = await h.execute({ contractAddress: ADDR, method: 'onDelivery',
+            params: [requestId, 'http_get', 'expired', ''], caller: STRANGER });
+        assertReverted(fake, 'no response yet');
+        assertContractState(h.ledger, ADDR, 'pending', requestId);
     });
 
     it('a late-arriving onDelivery for a request outstanding before a manual release is a harmless no-op', async function () {
         await deployEscrow();
         await depositAndFund();
-        const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [TRACKING_URL], caller: BUYER });
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestDelivery', params: [], caller: BUYER });
         const requestId = JSON.parse(req.returnValue);
 
         // Arbiter resolves a dispute manually while the check is still in flight.
@@ -318,8 +326,13 @@ function registerDeployValidation() {
         }
 
         it('rejects an empty deliveryMarker', async function () {
-            const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '3', '']);
+            const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '3', '', TRACKING_URL]);
             assert.strictEqual(r.success, false, 'deploy with an empty deliveryMarker should revert in initialize');
+        });
+
+        it('rejects an empty trackingUrl', async function () {
+            const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '3', MARKER, '']);
+            assert.strictEqual(r.success, false, 'deploy with an empty trackingUrl should revert in initialize');
         });
 
         // Integer-shape gate on deadlineBlocks, the same one escrow.js carries and
@@ -336,16 +349,16 @@ function registerDeployValidation() {
                          '+7', '', 'abc', '-', 'Infinity', 'NaN'];
             for (const v of BAD) {
                 assert.strictEqual(
-                    (await deployWith([BUYER, SELLER, ARBITER, TICK, '200', v, MARKER])).success, false,
+                    (await deployWith([BUYER, SELLER, ARBITER, TICK, '200', v, MARKER, TRACKING_URL])).success, false,
                     `deadlineBlocks ${JSON.stringify(v)} must not deploy`);
             }
         });
 
         it('rejects a deadlineBlocks outside its range and keeps a canonical one deployable', async function () {
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '0', MARKER])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '-10', MARKER])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000001', MARKER])).success, false);
-            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000000', MARKER])).success, true);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '0', MARKER, TRACKING_URL])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '-10', MARKER, TRACKING_URL])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000001', MARKER, TRACKING_URL])).success, false);
+            assert.strictEqual((await deployWith([BUYER, SELLER, ARBITER, TICK, '200', '1000000', MARKER, TRACKING_URL])).success, true);
 
             // '10' means 10 blocks in state, not the 1 a parseInt of '1e1' gave.
             await deployEscrow(10);

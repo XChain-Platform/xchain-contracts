@@ -1,6 +1,6 @@
 'use strict';
 
-// Register the strict-raise cases: a tolerant gt reads one base unit over 10000 as equal.
+// Register the strict-raise and dust-deposit cases: a tolerant gt reads one base unit over 10000 as equal.
 function registerExactRaiseTests(tests, deployExact) {
     const { assertSuccess, assertReverted, assertBalance, assertContractState,
         BID, ADDR, env, depositAndFund, bid } = tests;
@@ -13,6 +13,16 @@ function registerExactRaiseTests(tests, deployExact) {
         assertContractState(env.h.ledger, ADDR, 'highBid', '10000.00000001');
         assertContractState(env.h.ledger, ADDR, 'highBidder', 'bob');
         assertBalance(env.h.ledger, 'alice', BID, '10000');
+    });
+
+    // A dust deposit is a real bid attempt: it must be refused by the reserve check
+    // ('bid below the minimum'), not misread as no deposit at all.
+    it('bid() reads a dust deposit below the comparison tolerance as a bid, refused by the reserve', async function () {
+        assertSuccess(await deployExact('10', '1'));
+        env.h.ledger.setTokenDecimals(BID, 18);
+        assertSuccess(await depositAndFund('10'));
+        assertReverted(await bid('alice', '0.000000000000000001'), 'bid below the minimum');
+        assertContractState(env.h.ledger, ADDR, 'highBidder', null);
     });
 
     it('bid() still rejects a bid exactly equal to a large high bid', async function () {

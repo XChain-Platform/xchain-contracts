@@ -56,7 +56,7 @@ function registerStaleOracleAttacks(ctx) {
         // De-risking must always work: deposit more, repay in full.
         assertSuccess(await depositColl(ALICE, '1'));
         assertSuccess(await repay(ALICE, '100'));
-        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
     });
 
     it('a stalled vault pair blocks borrow/withdraw/liquidate while the fleet snapshot is fresh', async function () {
@@ -77,7 +77,7 @@ function registerStaleOracleAttacks(ctx) {
 
         assertSuccess(await depositColl(ALICE, '1'));
         assertSuccess(await repay(ALICE, '100'));
-        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
     });
 
     it('the pair round age bound is inclusive at maxSnapshotAge', async function () {

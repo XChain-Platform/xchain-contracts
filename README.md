@@ -130,7 +130,7 @@ The generated header and the printed bind hints repeat this whenever a
 | **Price bet (timed)** | [priceBetTimed.js](./priceBetTimed/priceBetTimed.js) | [README](./priceBetTimed/README.md) | [tests](./priceBetTimed/price_bet_timed.test.js) | The timestamp variant: the first oracle round at/after a settle time decides, with a gas-capped, cursor-persisted round scan. |
 | **Stable vault** | [stableVault.js](./stableVault/stableVault.js) | [README](./stableVault/README.md) | [tests](./stableVault/stableVault.test.js) | A mini-MakerDAO: over-collateralized vaults that mint the contract's own stable token, oracle staleness gating, and permissionless liquidation. |
 | **URL oracle** | [urlOracle.js](./urlOracle/urlOracle.js) | [README](./urlOracle/README.md) | [tests](./urlOracle/url_oracle.test.js) | Reading off-chain HTTP data without breaking determinism: the ATTEST request/callback round-trip. |
-| **Escrow (delivery)** | [escrowDelivery.js](./escrowDelivery/escrowDelivery.js) | [README](./escrowDelivery/README.md) | [tests](./escrowDelivery/escrowDelivery.test.js) | Escrow that settles itself: point it at a carrier tracking URL and a marker string, and a delivery attestation pays the seller with nobody having to call `release()`. The buyer can `cancel()` while still in `INIT` to recover an early deposit, and `amount` must be a plain decimal. |
+| **Escrow (delivery)** | [escrowDelivery.js](./escrowDelivery/escrowDelivery.js) | [README](./escrowDelivery/README.md) | [tests](./escrowDelivery/escrowDelivery.test.js) | Escrow that settles itself: fix a carrier tracking URL and marker string at deploy, and a delivery attestation pays the seller with nobody having to call `release()`. The buyer can `cancel()` while still in `INIT` to recover an early deposit, and `amount` must be a plain decimal. |
 | **English auction** | [englishAuction.js](./englishAuction/englishAuction.js) | [README](./englishAuction/README.md) | [tests](./englishAuction/english_auction.test.js) | An ascending-bid auction: each new bid refunds the one it topped in the same transaction, and after the deadline anyone can settle. Custody applied to a contest rather than a single hand-off. |
 | **Dutch auction** | [dutchAuction.js](./dutchAuction/dutchAuction.js) | [README](./dutchAuction/README.md) | [tests](./dutchAuction/dutch_auction.test.js) | A descending-price auction: the price falls linearly per block to a floor, and the first buyer to pay the price in effect at their block takes the item. One purchase, no losing bids to refund. |
 | **Counterparty bridge** | [counterpartyBridge.js](./counterpartyBridge/counterpartyBridge.js) | [README](./counterpartyBridge/README.md) | [tests](./counterpartyBridge/counterparty_bridge.test.js) | A burn-to-mint bridge for a single Counterparty asset: an off-chain attestation (the same pattern as `urlOracle`) confirms an irreversible burn to a well-known unspendable address before minting, so a holder cannot claim the migrated tokens and still sell the original asset. |
@@ -215,7 +215,8 @@ follows that rule; [escrow's README](./escrow/README.md) explains it in full.
 validation: V8 syntax, the `code-size` cap (65,536 bytes of UTF-8 source, the
 64 KiB deploy ceiling), and every deploy-blocking rule in `CONSENSUS_RULES`
 (`xchain-vm/src/lint-core.js`, the authoritative list): `invalid-type`,
-`nesting-depth` (delimiter nesting above 64), `unsupported-syntax` (the acorn
+`nesting-depth` (delimiter nesting above 64, or syntax depth above 200 across
+nested expressions and statements), `unsupported-syntax` (the acorn
 metering pass), `reserved-identifier`,
 `banned-math` (`Math.*` outside the deterministic subset), `banned-literal`
 (`BigInt`/`RegExp` literals), `banned-async` (`async`/`await`, `Promise`),

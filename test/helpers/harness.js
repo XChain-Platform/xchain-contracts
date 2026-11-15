@@ -28,6 +28,9 @@
 // armed block-time gate, and it has no network, gas metering, sandbox gating or
 // exec re-lint, so a passing invariant suite says nothing about gate-keyed
 // behaviour, which only a run on the real VM (E2EHarness) exercises.
+// The VM also exposes pow/log/log2/log10, meters oversized outputs, and wraps
+// math failures as contract reverts. Those surfaces are intentionally absent
+// here; a model call to a missing method fails instead of claiming parity.
 
 'use strict';
 
@@ -41,6 +44,7 @@ for (const p of [path.join(__dirname, '..', '..', '..', 'xchain-vm', 'node_modul
 
 const available = mathjs !== null;
 const M = available ? mathjs.create(mathjs.all, { number: 'BigNumber', precision: 64 }) : null;
+const MAX_MATH_INPUT_LENGTH = 256;
 
 function bn(v) {
     if (v === null || v === undefined || v === '') throw new Error('math: empty operand');
@@ -52,8 +56,15 @@ function fixed(b) {
     return b.toFixed();
 }
 
+function mathOperand(v) {
+    const s = String(v);
+    if (s.length > MAX_MATH_INPUT_LENGTH)
+        throw new Error('math input exceeds maximum length (' + MAX_MATH_INPUT_LENGTH + ' chars)');
+    return bn(s);
+}
+
 function tolerantCompare(a, b) {
-    const x = bn(a), y = bn(b);
+    const x = mathOperand(a), y = mathOperand(b);
     if (x.isNaN() || y.isNaN()) return NaN;
     if (!x.isFinite() || !y.isFinite()) return x.gt(y) ? 1 : (x.lt(y) ? -1 : 0);
     // Decimal methods compare exactly; mathjs max() would apply its own epsilon.
@@ -67,23 +78,30 @@ function tolerantCompare(a, b) {
 
 function makeMath() {
     return {
-        add: (a, b) => fixed(bn(a).plus(bn(b))),
-        subtract: (a, b) => fixed(bn(a).minus(bn(b))),
-        multiply: (a, b) => fixed(bn(a).times(bn(b))),
-        divide: (a, b) => fixed(bn(a).div(bn(b))),
-        mod: (a, b) => fixed(bn(a).mod(bn(b))),
-        min: (a, b) => fixed(bn(a).lte(bn(b)) ? bn(a) : bn(b)),
-        max: (a, b) => fixed(bn(a).gte(bn(b)) ? bn(a) : bn(b)),
-        sqrt: (a) => fixed(bn(a).sqrt()),
-        floor: (a) => fixed(bn(a).floor()),
-        abs: (a) => fixed(bn(a).abs()),
+        add: (a, b) => fixed(mathOperand(a).plus(mathOperand(b))),
+        subtract: (a, b) => fixed(mathOperand(a).minus(mathOperand(b))),
+        multiply: (a, b) => fixed(mathOperand(a).times(mathOperand(b))),
+        divide: (a, b) => {
+            const divisor = mathOperand(b);
+            if (divisor.isZero()) throw new Error('Division by zero');
+            return fixed(mathOperand(a).div(divisor));
+        },
+        mod: (a, b) => fixed(mathOperand(a).mod(mathOperand(b))),
+        min: (a, b) => fixed(tolerantCompare(a, b) <= 0 ? mathOperand(a) : mathOperand(b)),
+        max: (a, b) => fixed(tolerantCompare(a, b) >= 0 ? mathOperand(a) : mathOperand(b)),
+        sqrt: (a) => {
+            const result = mathOperand(a).sqrt();
+            if (!result.isFinite() || result.isNaN()) throw new Error('result is not a finite number');
+            return fixed(result);
+        },
+        abs: (a) => fixed(mathOperand(a).abs()),
         gt: (a, b) => tolerantCompare(a, b) > 0,
         gte: (a, b) => tolerantCompare(a, b) >= 0,
         lt: (a, b) => tolerantCompare(a, b) < 0,
         lte: (a, b) => tolerantCompare(a, b) <= 0,
         eq: (a, b) => tolerantCompare(a, b) === 0,
         compare: (a, b) => tolerantCompare(a, b),
-        isZero: (a) => bn(a).isZero()
+        isZero: (a) => mathOperand(a).isZero()
     };
 }
 
@@ -341,6 +359,7 @@ function rng(seed) {
 }
 
 module.exports = {
-    available, Harness, loadContract, rng, M, bn, fixed, roundHalfUp, STATE_LIMITS,
+    available, Harness, loadContract, rng, M, bn, fixed, makeMath, roundHalfUp, STATE_LIMITS,
+    MAX_MATH_INPUT_LENGTH,
     MODEL_START_HEIGHT, MODEL_START_TIMESTAMP
 };

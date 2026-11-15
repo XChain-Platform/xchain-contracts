@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.5.0'
+        version:     '1.5.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -214,7 +214,9 @@ module.exports = {
         var highBid  = xchain.state.get('highBid');
         var newBid   = xchain.math.subtract(held, highBid);
 
-        xchain.require(xchain.math.gt(newBid, '0'), 'no bid received (DEPOSIT in the same BATCH)');
+        // Exact, because gt reads any amount <= 1e-15 as zero: a dust deposit on an
+        // 18-decimal tick must reach the reserve check and be refused there by name.
+        xchain.require(exceedsExactly(xchain, newBid, '0'), 'no bid received (DEPOSIT in the same BATCH)');
         // Compare the reserve exactly (minBid is a plain decimal, gated at deploy).
         var minBid = xchain.state.get('minBid');
         xchain.require(isAtLeastExact(xchain, newBid, minBid), 'bid below the minimum');

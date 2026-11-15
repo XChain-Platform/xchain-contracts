@@ -27,6 +27,16 @@ function deployInProcess(context) {
     return h;
 }
 
+function deployRoomy(context) {
+    const h = new Harness({ limits: { maxStateKeys: 100 } });
+    seed(h, context);
+    const result = h.deploy({ code: context.CODE, deployer: context.GUARDIAN,
+        contractAddress: context.ADDR, params: [context.GUARDIAN, context.GOV,
+            String(context.TIMELOCK), String(context.WINDOW), context.MIN_PROPOSE, 'guardian'] });
+    assert.ok(result.success, result.error);
+    return h;
+}
+
 function inProcessCall(h, context, method, params, caller) {
     return h.execute({ contractAddress: context.ADDR, method, params, caller });
 }
@@ -83,12 +93,7 @@ function registerInProcessGrowthTests(context) {
         });
 
         it('caps one holder while leaving a live slot for another holder', function () {
-            const h = new Harness({ limits: { maxStateKeys: 100 } });
-            seed(h, context);
-            assert.ok(h.deploy({ code: context.CODE, deployer: context.GUARDIAN,
-                contractAddress: context.ADDR, params: [context.GUARDIAN, context.GOV,
-                    String(context.TIMELOCK), String(context.WINDOW), context.MIN_PROPOSE,
-                    'guardian'] }).success);
+            const h = deployRoomy(context);
             for (let i = 0; i < 16; i++) assert.ok(inProcessCall(h, context, 'propose',
                 [context.PAYEE, context.PAY, '1', 'holder slot'], context.HOLDER).success);
             const capped = inProcessCall(h, context, 'propose',
@@ -97,6 +102,21 @@ function registerInProcessGrowthTests(context) {
             assert.match(capped.error, /proposer has reached the live proposal limit/);
             assert.ok(inProcessCall(h, context, 'propose',
                 [context.PAYEE, context.PAY, '1', 'honest'], context.ATTACKER).success);
+        });
+
+        it('documents that the live caps are per address: one balance hopping fills every slot', function () {
+            const h = deployRoomy(context);
+            const hops = ['hop1', 'hop2', 'hop3', 'hop4'];
+            hops.forEach((who, n) => {
+                if (n > 0) h.ledger.debit(hops[n - 1], context.GOV, context.MIN_PROPOSE);
+                h.ledger.credit(who, context.GOV, context.MIN_PROPOSE);
+                for (let i = 0; i < 16; i++) assert.ok(inProcessCall(h, context, 'propose',
+                    [context.PAYEE, context.PAY, '1', 'hop ' + n], who).success);
+            });
+            const refused = inProcessCall(h, context, 'propose',
+                [context.PAYEE, context.PAY, '1', 'honest'], context.HOLDER);
+            assert.strictEqual(refused.success, false);
+            assert.match(refused.error, /treasury has reached the live proposal limit/);
         });
     });
 }

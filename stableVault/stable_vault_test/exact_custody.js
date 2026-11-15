@@ -17,7 +17,7 @@ module.exports = function registerExactCustodyTests(ctx) {
             await depositColl(ALICE, '1000000');
             assertReverted(await withdraw(ALICE, '1000000.00000001'), 'insufficient collateral');
             assertSuccess(await withdraw(ALICE, '1000000'));
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', null);
             assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '10');
             assertContractBalance(ctx.h.ledger, ADDR, COLL, '10');
             assertSuccess(await withdraw(BOB, '10'));
@@ -47,7 +47,7 @@ module.exports = function registerExactCustodyTests(ctx) {
             setPrice('1.1');
             ctx.h.seedBalance(LIQ, STABLE, '100000.00000005');
             assertSuccess(await liquidate(LIQ, ALICE, '100000.00000005'));
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', null);
             assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '10');
             assertContractBalance(ctx.h.ledger, ADDR, COLL, '10');
             assertBalance(ctx.h.ledger, LIQ, COLL, '100000');
@@ -77,7 +77,7 @@ function registerRepayExcessTest(ctx) {
             ['DESTROY', '1000000'],
             ['SEND', '0.00000001']
         ]);
-        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
         assertBalance(ctx.h.ledger, ALICE, STABLE, '0.00000001');
     });
@@ -115,7 +115,7 @@ function registerDustDeltaTests(ctx) {
             ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
                 ['DESTROY', DUST]
             ]);
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
             assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
             assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
         });

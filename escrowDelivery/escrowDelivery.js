@@ -23,7 +23,7 @@
 //
 // Same custody model as the sibling `escrow` template (buyer deposits, arbiter
 // can settle disputes, buyer can time out), plus one more path: ANYONE can
-// point the contract at a carrier tracking URL, and if the tracking page's
+// ask the contract to check the tracking URL fixed at deploy, and if the page's
 // body contains the configured delivery marker, the escrow releases itself to
 // the seller with no human settlement call. This is the pattern for
 // "the shipment scanned as delivered -> pay the seller" without a trusted
@@ -35,7 +35,8 @@
 // request/callback round trip in isolation. This template composes that
 // round trip with `escrow`'s custody model:
 //
-//   1. requestDelivery(trackingUrl) -> emits an ATTEST http_get request,
+//   1. requestDelivery() -> emits an ATTEST http_get request for the URL fixed
+//      in the deploy terms,
 //      remembers its request_id.
 //   2. (off-chain) N providers GET the URL, sign the body, the indexer
 //      anchors the agreed response on-chain.
@@ -43,7 +44,7 @@
 //      body contains `deliveryMarker`, the ENTIRE held balance pays the
 //      seller and the escrow goes terminal. Otherwise the check is a no-op:
 //      pending clears and anyone can retry later (the courier hasn't
-//      scanned it yet).
+//      scanned it yet). An expired or failed framework callback also clears it.
 //
 // The manual paths from `escrow` (release/refund/timeout) stay available as
 // a fallback: a false negative (marker text changes, tracking page moves) or
@@ -78,10 +79,10 @@ module.exports = {
 
     abi: { version: 1, methods: {
         fund:            { summary: 'Confirm the escrow is funded (BATCH after a DEPOSIT)', params: [] },
-        requestDelivery: { summary: 'Ask the network to check a tracking URL for the delivery marker', params: [ { name: 'trackingUrl', type: 'string' } ] },
+        requestDelivery: { summary: 'Ask the network to check the tracking URL fixed at deploy', params: [] },
         // onDelivery's params ARE the indexer's fixed attestation preamble (attest/index.js
         // injectCallbackExecute); requestDelivery() registers an empty context array,
-        // so the wire is exactly those four slots even though the body reads only slot 0.
+        // so the wire is exactly those four slots; the body reads slots 0 and 2.
         onDelivery:      { summary: 'Callback: auto-releases to seller if the tracking body matched; the indexer supplies the attestation preamble (not user-callable)', params: [ { name: 'requestId', type: 'string' }, { name: 'providerId', type: 'string' }, { name: 'status', type: 'string' }, { name: 'responsePayload', type: 'string' } ] },
         release:         { summary: 'Pay the seller (buyer or arbiter only)', params: [] },
         refund:          { summary: 'Return funds to the buyer (seller or arbiter only)', params: [] },
@@ -90,12 +91,14 @@ module.exports = {
         status:          { summary: 'Read the escrow status', params: [], view: true }
     } },
 
-    // initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker)
+    // initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker, trackingUrl)
     // Same terms as `escrow`, plus `deliveryMarker`: a substring that must
     // appear in the tracking URL's settled body for onDelivery to treat the
     // shipment as delivered (e.g. '"status":"delivered"' or 'Delivered').
     // Kept as a plain substring match, not JSON parsing, so this works
-    // against any carrier's tracking page without coupling to one schema.
+    // against any carrier's tracking page without coupling to one schema. The
+    // exact tracking URL is fixed in the same deploy terms so a caller cannot
+    // choose a page that contains the public marker.
     initialize: function (xchain) {
         var buyer          = xchain.getInputParam(0);
         var seller         = xchain.getInputParam(1);
@@ -104,6 +107,7 @@ module.exports = {
         var amount         = xchain.getInputParam(4);
         var deadlineBlocks = xchain.getInputParam(5);
         var deliveryMarker = xchain.getInputParam(6);
+        var trackingUrl     = xchain.getInputParam(7);
 
         xchain.require(buyer && seller && arbiter, 'buyer, seller, arbiter required');
         xchain.require(tick, 'tick required');
@@ -111,6 +115,7 @@ module.exports = {
         requirePlainDecimal(xchain, amount, 'amount');
         xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
         xchain.require(typeof deliveryMarker === 'string' && deliveryMarker.length > 0, 'deliveryMarker required');
+        xchain.require(typeof trackingUrl === 'string' && trackingUrl.length > 0, 'trackingUrl required');
 
         // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
         // parseInt blesses spellings that mean something else entirely ('1e9' -> 1,
@@ -131,6 +136,7 @@ module.exports = {
         xchain.state.set('amount', amount);
         xchain.state.set('window', String(window));
         xchain.state.set('deliveryMarker', deliveryMarker);
+        xchain.state.set('trackingUrl', trackingUrl);
         xchain.state.set('status', 'INIT');
     },
 
@@ -151,8 +157,8 @@ module.exports = {
         xchain.state.set('status', 'FUNDED');
     },
 
-    // requestDelivery(trackingUrl): ask the network to fetch the carrier's
-    // tracking page. Permissionless like a liquidation call - anyone can
+    // requestDelivery(): ask the network to fetch the carrier tracking page
+    // fixed at deploy. Permissionless like a liquidation call - anyone can
     // trigger a check (buyer chasing their order, seller proving they
     // shipped, arbiter investigating), and the check itself can't move funds
     // on its own; only a matching onDelivery body can.
@@ -160,8 +166,7 @@ module.exports = {
         xchain.require(xchain.state.get('status') === 'FUNDED', 'escrow not funded');
         xchain.require(!xchain.state.get('pending'), 'a delivery check is already pending');
 
-        var trackingUrl = xchain.getInputParam(0);
-        xchain.require(typeof trackingUrl === 'string' && trackingUrl.length > 0, 'trackingUrl required');
+        var trackingUrl = xchain.state.get('trackingUrl');
 
         var requestId = xchain.attestation.request(
             'http_get',
@@ -193,13 +198,17 @@ module.exports = {
         }
 
         var resp = xchain.attestation.getResponse(requestId);
-        xchain.require(resp !== null, 'no response yet');
+        // Non-ok outcomes have no readable response row. Trust callback status
+        // only when SOURCE is the contract itself, as framework callbacks are.
+        var expired = resp === null && xchain.getInputParam(2) !== 'ok' &&
+            xchain.getSourceAddress() === xchain.getContractAddress();
+        xchain.require(resp !== null || expired, 'no response yet');
 
         // A failed/undelivered check is not fatal: clear pending so anyone
         // can call requestDelivery again once the shipment actually moves.
-        if (resp.status !== 'ok' || resp.payload.indexOf(xchain.state.get('deliveryMarker')) === -1) {
+        if (expired || resp.status !== 'ok' || resp.payload.indexOf(xchain.state.get('deliveryMarker')) === -1) {
             xchain.state.delete('pending');
-            xchain.log('delivery not confirmed', requestId);
+            xchain.log('delivery not confirmed', requestId, expired ? 'expired' : resp.status);
             return 'not delivered yet';
         }
 

@@ -32,7 +32,7 @@ function registerBorrowRepayTests(ctx) {
         ctx.h.seedBalance(ALICE, STABLE, '250'); // 200 borrowed + 50 spare
 
         assertSuccess(await repay(ALICE, '250'));
-        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
         assertBalance(ctx.h.ledger, ALICE, STABLE, '50');      // excess back
         assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0'); // 200 burned
@@ -98,7 +98,7 @@ function registerLiquidationTests(ctx) {
         // Seized: 200 * 110 / (80 * 100) = 2.75 GOLD.
         assertBalance(ctx.h.ledger, LIQ, COLL, '2.75');
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '0.25');
-        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
         assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0'); // debt burned
 

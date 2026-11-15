@@ -1,9 +1,9 @@
 # escrowDelivery: escrow that releases itself on a delivery attestation
 
-A fork of the `escrow` template that adds one more settlement path: point it
-at a carrier tracking URL, and if the settled page's body contains a
-configured marker (e.g. `"status":"delivered"`), the escrow pays the seller
-automatically - no buyer, seller, or arbiter has to call `release()`.
+A fork of the `escrow` template that adds one more settlement path: fix a
+carrier tracking URL in the deploy terms, and if the settled page's body
+contains a configured marker (e.g. `"status":"delivered"`), the escrow pays
+the seller automatically - no buyer, seller, or arbiter has to call `release()`.
 
 Read `escrow` first for the custody model. This README only covers what's
 new.
@@ -16,8 +16,8 @@ computes the same result. The contract instead *asks the network* to read
 the tracking page for it, the same round trip the `urlOracle` template
 demonstrates in isolation:
 
-1. `requestDelivery(trackingUrl)` emits an `ATTEST` `http_get` request and
-   remembers its deterministic `request_id`.
+1. `requestDelivery()` emits an `ATTEST` `http_get` request for the URL fixed
+   at deploy and remembers its deterministic `request_id`.
 2. Off-chain, N attestation providers GET the URL, sign the body, and the
    indexer anchors the agreed response on-chain.
 3. `onDelivery(request_id)` - the indexer's callback - reads the settled
@@ -29,10 +29,10 @@ demonstrates in isolation:
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker)` | deployer | Sets immutable terms; `amount` must be a plain decimal (no exponent, sign, `Infinity`); status → `INIT`. |
+| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks, deliveryMarker, trackingUrl)` | deployer | Sets immutable terms; `amount` must be a plain decimal (no exponent, sign, `Infinity`); status → `INIT`. |
 | `fund()` | buyer (BATCHed after DEPOSIT) | Same as `escrow`: verifies the on-chain balance, arms the reclaim deadline; status → `FUNDED`. |
-| `requestDelivery(trackingUrl)` | anyone | Emits an `http_get` attestation request (`redundancy: 3`, `deadlineBlocks: 20`) against `trackingUrl`; reverts if one is already pending. |
-| `onDelivery(request_id)` | indexer callback | If the settled body contains `deliveryMarker`: pays the seller, status → `DELIVERED`. Otherwise: no-op, `pending` clears for a retry. |
+| `requestDelivery()` | anyone | Emits an `http_get` attestation request (`redundancy: 3`, `deadlineBlocks: 20`) against the stored `trackingUrl`; reverts if one is already pending. |
+| `onDelivery(request_id)` | indexer callback | If the settled body contains `deliveryMarker`: pays the seller, status → `DELIVERED`. A non-match or trusted framework callback with a non-ok status clears `pending` for a retry. |
 | `release()` | buyer or arbiter | Manual fallback, same as `escrow`. |
 | `refund()` | seller or arbiter | Manual fallback, same as `escrow`. |
 | `timeout()` | buyer | After the deadline, if nothing settled. Same as `escrow`. |
@@ -58,8 +58,8 @@ browser execution.
 ## Using it (SDK)
 
 ```js
-// Deploy with terms (same params as escrow, plus deliveryMarker)
-// DEPLOY|0|<deploy>|<gasLimit>|buyer|seller|arbiter|TEST|200|144|"status":"delivered"
+// Deploy with terms (same params as escrow, plus deliveryMarker and trackingUrl)
+// DEPLOY|0|<deploy>|<gasLimit>|buyer|seller|arbiter|TEST|200|144|"status":"delivered"|https://carrier.example.com/track/1Z999
 
 // Fund in one BATCH
 await sdk.batch()
@@ -70,7 +70,7 @@ await sdk.batch()
 // Once shipped, ask the network to check the tracking page.
 await sdk.contracts.execute({
   contractActionIndex: idx, method: 'requestDelivery',
-  params: ['https://carrier.example.com/track/1Z999']
+  params: []
 });
 // ...wait for the attestation to settle (or hit its deadline)...
 // If it matched, onDelivery already paid the seller - check status():
@@ -91,9 +91,10 @@ await sdk.contracts.execute({ contractActionIndex: idx, method: 'release' });
   `xchain.attestation.getResponse(request_id)`, indexer-side consensus data;
   a caller cannot supply the payload. `redundancy: 3` requires 3 providers to
   agree before the response settles.
-- **A malicious caller triggers a fake "delivered" release.** They can't:
-  `requestDelivery` only *asks the network to check*; it cannot supply what
-  the check finds. Only a genuinely-settled matching body pays out. Anyone
+- **A malicious caller triggers a fake "delivered" release.** They can't choose
+  what gets fetched: `trackingUrl` is an immutable deploy term visible before
+  either party funds or ships, and `requestDelivery` takes no URL. Only a
+  genuinely-settled matching body from that page pays out. Anyone
   being allowed to call `requestDelivery`/trigger the callback is safe by
   construction, the same way a permissionless liquidation call is safe -
   the caller is a messenger, not an authority.
@@ -104,8 +105,10 @@ await sdk.contracts.execute({ contractActionIndex: idx, method: 'release' });
   that was outstanding when an arbiter manually resolved the dispute is a
   harmless no-op, not a double payout.
 - **A stuck or never-settling check.** `deadlineBlocks: 20` on the
-  attestation bounds the pending window. A non-matching or failed response
-  clears `pending`, so `requestDelivery` can always be called again -
+  attestation bounds the pending window. An expired or failed callback carries
+  its status in slot 2 and no readable response row; the contract clears
+  `pending` only when that status comes from the framework's contract-address
+  SOURCE. A non-match also clears `pending`, so `requestDelivery` can be retried -
   automation never permanently blocks the manual paths, and `timeout()` is
   always there as a last resort.
 - **Reentrancy.** Same as `escrow`: emissions are deferred and applied by
@@ -115,6 +118,10 @@ await sdk.contracts.execute({ contractActionIndex: idx, method: 'release' });
 
 ## Known limitations (by design, for a teaching baseline)
 
+- **The exact URL must be known at deploy.** The counterparty must verify both
+  `trackingUrl` and `deliveryMarker` in the deploy terms before funding or
+  shipping. Earlier template revisions accepted a caller-selected URL and
+  should not be used for new escrows.
 - **Substring match, not schema validation.** A marker that happens to
   appear in an unrelated context (e.g. a status history table showing
   `"status":"delivered"` for a *previous, returned* shipment on the same

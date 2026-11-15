@@ -88,6 +88,9 @@
 // seconds, so the point is to keep a fat-fingered constructor term inside a
 // sensible range rather than to constrain a real vault. 31536000 is one year.
 var MAX_AGE_SECONDS = 31536000;
+// Each admitted vault may use one collateral key and one debt key. Together
+// with initialize() state, this ceiling stays below the VM's 10,000-key cap.
+var MAX_VAULTS = 4900;
 
 module.exports = {
 
@@ -178,6 +181,7 @@ module.exports = {
         xchain.state.set('trackedColl', '0');
         xchain.state.set('trackedStable', '0');
         xchain.state.set('totalDebt', '0');
+        xchain.state.set('vaults', '0');
 
         // Register the stable token with this contract as its issuer. Every
         // unit in existence is minted here against collateral and burned on
@@ -202,6 +206,19 @@ module.exports = {
         var delta = collDelta(xchain);
         // Exact: a tolerant gt reads a delta at or below 1e-15 as zero and leaves it to the next caller.
         xchain.require(exceedsExactly(xchain, delta, '0'), 'no collateral received');
+
+        // Reserve both per-vault key slots before admitting a new owner. At the
+        // ceiling, return this caller's custody delta instead of leaving it for
+        // the next existing vault owner to collect.
+        if (xchain.state.get('v:' + addr + ':coll') === null &&
+                parseInt(xchain.state.get('vaults'), 10) >= MAX_VAULTS) {
+            xchain.emit.send({
+                destination: addr,
+                tick: xchain.state.get('collateralTick'),
+                quantity: delta
+            });
+            return;
+        }
 
         setVault(xchain, addr, 'coll', xchain.math.add(getVault(xchain, addr, 'coll'), delta));
         xchain.state.set('trackedColl', xchain.math.add(xchain.state.get('trackedColl'), delta));
@@ -411,7 +428,9 @@ module.exports = {
             liqBonusPct:    xchain.state.get('liqBonusPct'),
             maxSnapshotAge: xchain.state.get('maxSnapshotAge'),
             totalDebt:      xchain.state.get('totalDebt'),
-            trackedColl:    xchain.state.get('trackedColl')
+            trackedColl:    xchain.state.get('trackedColl'),
+            vaults:         xchain.state.get('vaults'),
+            maxVaults:      String(MAX_VAULTS)
         });
     }
 };
@@ -423,7 +442,15 @@ function getVault(xchain, addr, field) {
     return xchain.state.get('v:' + addr + ':' + field) || '0';
 }
 function setVault(xchain, addr, field, value) {
-    xchain.state.set('v:' + addr + ':' + field, value);
+    var key = 'v:' + addr + ':' + field;
+    var existed = xchain.state.get(key) !== null;
+    var live = exceedsExactly(xchain, value, '0');
+    if (live) xchain.state.set(key, value);
+    else xchain.state.delete(key);
+    if (field === 'coll' && existed !== live) {
+        var delta = live ? '1' : '-1';
+        xchain.state.set('vaults', xchain.math.add(xchain.state.get('vaults'), delta));
+    }
 }
 
 // Un-attributed collateral / stable sitting in custody: actual balance minus

@@ -101,17 +101,19 @@ function healthyExact(h, who, collDec, stableDec, price) {
 function checkInvariants(h, collDec, stableDec, tag) {
     const L = h.ledger;
     assert.strictEqual(units(L.total(COLL), collDec), units(SEED, collDec) * BigInt(ACTORS.length), tag + ': collateral supply drift');
-    let sumColl = 0n, sumDebt = 0n;
+    let sumColl = 0n, sumDebt = 0n, liveVaults = 0;
     for (const u of ACTORS) {
         const c = units(vault(h, u, 'coll'), collDec), d = units(vault(h, u, 'debt'), stableDec);
         assert.ok(c >= 0n && d >= 0n, tag + ': negative vault field for ' + u);
         assert.ok(d === 0n || c > 0n, tag + ': ' + u + ' carries debt ' + vault(h, u, 'debt') + ' against zero collateral');
+        if (c > 0n) liveVaults += 1;
         sumColl += c; sumDebt += d;
     }
     const tracked = units(h.state(ADDR, 'trackedColl'), collDec);
     assert.strictEqual(sumColl, tracked, tag + ': trackedColl != sum of vault collateral');
     assert.ok(units(L.getBalance(ADDR, COLL), collDec) >= tracked, tag + ': collateral custody below books');
     assert.strictEqual(units(h.state(ADDR, 'totalDebt'), stableDec), sumDebt, tag + ': totalDebt != sum of vault debts');
+    assert.strictEqual(h.state(ADDR, 'vaults'), String(liveVaults), tag + ': vault counter drift');
     assert.strictEqual(units(L.tokens[STABLE].SUPPLY, stableDec), sumDebt, tag + ': stable supply != outstanding debt');
     assert.strictEqual(units(L.total(STABLE), stableDec), sumDebt, tag + ': stable held != outstanding debt');
     assert.strictEqual(h.state(ADDR, 'trackedStable'), '0', tag + ': trackedStable moved');

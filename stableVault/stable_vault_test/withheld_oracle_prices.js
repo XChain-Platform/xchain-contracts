@@ -26,7 +26,7 @@ async function assertDeRiskingOpen(ctx) {
     const { ALICE, ADDR, depositColl, repay, assertSuccess, assertContractState } = ctx;
     assertSuccess(await depositColl(ALICE, '1'));
     assertSuccess(await repay(ALICE, '100'));
-    assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '0');
+    assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
 }
 
 module.exports = function registerWithheldOraclePriceTests(ctx) {

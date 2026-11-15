@@ -84,7 +84,7 @@ function setup(amount, window, buyerFunds) {
     const h = new AttestHarness();
     h.seedBalance('buyer', TICK, buyerFunds || '1000');
     const r = h.deploy({ code: CODE, deployer: 'buyer', contractAddress: ADDR,
-        params: ['buyer', 'seller', 'arbiter', TICK, amount || '200', String(window || 3), MARKER] });
+        params: ['buyer', 'seller', 'arbiter', TICK, amount || '200', String(window || 3), MARKER, URL] });
     assert.ok(r.success, r.error);
     return h;
 }
@@ -115,8 +115,11 @@ function randomStep(h, R, ids) {
     const caller = R.pick(ACTORS);
     const m = R.pick(['fund', 'requestDelivery', 'onDelivery', 'onDelivery', 'release', 'refund', 'timeout', 'cancel']);
     if (m === 'requestDelivery') {
-        const r = call(h, m, caller, [URL]);
-        if (r.success) ids.push(r.result);
+        const r = call(h, m, caller, ['https://attacker.invalid/' + R.int(1, 9)]);
+        if (r.success) {
+            ids.push(r.result);
+            assert.strictEqual(r.actions[0].params.requestPayload, URL);
+        }
         return { m: m, r: r };
     }
     if (m === 'onDelivery') {
@@ -180,11 +183,11 @@ function randomStep(h, R, ids) {
 
     it('onDelivery: only the outstanding request settles; a cleared request cannot be replayed later', function () {
         const h = funded();
-        const first = call(h, 'requestDelivery', 'stranger', [URL]).result;
+        const first = call(h, 'requestDelivery', 'stranger').result;
         h.seedResponse(first, 'in transit', 'ok');
         assert.ok(call(h, 'onDelivery', 'stranger', [first]).success);
         assert.strictEqual(h.state(ADDR, 'pending'), null);
-        const second = call(h, 'requestDelivery', 'stranger', [URL]).result;
+        const second = call(h, 'requestDelivery', 'stranger').result;
         assert.notStrictEqual(first, second);
         // The first response is rewritten to a match; replaying it must not settle.
         h.seedResponse(first, MARKER, 'ok');
@@ -209,7 +212,7 @@ function randomStep(h, R, ids) {
     it('a status other than ok never pays, even when the payload carries the marker', function () {
         for (const st of ['failed', 'timeout', 'OK', '']) {
             const h = funded();
-            const id = call(h, 'requestDelivery', 'buyer', [URL]).result;
+            const id = call(h, 'requestDelivery', 'buyer').result;
             h.seedResponse(id, MARKER, st);
             const r = call(h, 'onDelivery', 'buyer', [id]);
             assert.ok(r.success && r.actions.length === 0, 'status ' + JSON.stringify(st));
@@ -217,15 +220,27 @@ function randomStep(h, R, ids) {
         }
     });
 
+    it('an expired framework callback clears pending but a caller cannot fake one', function () {
+        let h = funded();
+        let id = call(h, 'requestDelivery', 'buyer').result;
+        const expired = call(h, 'onDelivery', ADDR, [id, 'http_get', 'expired', '']);
+        assert.ok(expired.success);
+        assert.strictEqual(h.state(ADDR, 'pending'), null);
+        h = funded();
+        id = call(h, 'requestDelivery', 'buyer').result;
+        const fake = call(h, 'onDelivery', 'stranger', [id, 'http_get', 'expired', '']);
+        assert.ok(!fake.success && /no response yet/.test(fake.error), fake.error);
+        assert.strictEqual(h.state(ADDR, 'pending'), id);
+    });
+
     it('lifecycle: requestDelivery needs FUNDED and no pending check; settlement is single-shot', function () {
         const h = setup();
-        assert.ok(!call(h, 'requestDelivery', 'buyer', [URL]).success, 'before fund');
+        assert.ok(!call(h, 'requestDelivery', 'buyer').success, 'before fund');
         h.deposit('buyer', ADDR, TICK, '200');
         assert.ok(call(h, 'fund', 'buyer').success);
         assert.ok(!call(h, 'fund', 'buyer').success, 'second fund');
-        assert.ok(!call(h, 'requestDelivery', 'buyer', ['']).success, 'empty url');
-        assert.ok(call(h, 'requestDelivery', 'buyer', [URL]).success);
-        assert.ok(!call(h, 'requestDelivery', 'seller', [URL]).success, 'second pending');
+        assert.ok(call(h, 'requestDelivery', 'buyer').success);
+        assert.ok(!call(h, 'requestDelivery', 'seller').success, 'second pending');
         assert.ok(call(h, 'release', 'buyer').success);
         h.deposit('buyer', ADDR, TICK, '7');
         for (const m of ['release', 'refund', 'timeout', 'cancel', 'fund', 'requestDelivery'])
@@ -254,7 +269,7 @@ function randomStep(h, R, ids) {
         h = new AttestHarness();
         h.seedBalance('buyer', TICK, '92233720368.54775807');
         assert.ok(h.deploy({ code: CODE, deployer: 'buyer', contractAddress: ADDR,
-            params: ['buyer', 'seller', 'arbiter', TICK, '92233720368.54775807', '3', MARKER] }).success);
+            params: ['buyer', 'seller', 'arbiter', TICK, '92233720368.54775807', '3', MARKER, URL] }).success);
         h.deposit('buyer', ADDR, TICK, '92233720368.54775806');
         assert.ok(!call(h, 'fund', 'buyer').success, 'one base unit short');
         h.deposit('buyer', ADDR, TICK, '0.00000001');
@@ -270,12 +285,13 @@ function randomStep(h, R, ids) {
     });
 
     it('constructor boundaries revert', function () {
-        const bad = [['0', '3', MARKER], ['-1', '3', MARKER], ['1e2', '3', MARKER], ['200', '0', MARKER],
-            ['200', '1000001', MARKER], ['200', '3', ''], ['Infinity', '3', MARKER]];
+        const bad = [['0', '3', MARKER, URL], ['-1', '3', MARKER, URL], ['1e2', '3', MARKER, URL],
+            ['200', '0', MARKER, URL], ['200', '1000001', MARKER, URL], ['200', '3', '', URL],
+            ['200', '3', MARKER, ''], ['Infinity', '3', MARKER, URL]];
         for (const p of bad) {
             const h = new AttestHarness();
             const r = h.deploy({ code: CODE, deployer: 'buyer', contractAddress: ADDR,
-                params: ['buyer', 'seller', 'arbiter', TICK, p[0], p[1], p[2]] });
+                params: ['buyer', 'seller', 'arbiter', TICK, p[0], p[1], p[2], p[3]] });
             assert.ok(!r.success, p.join(','));
         }
     });
@@ -286,11 +302,11 @@ function randomStep(h, R, ids) {
     // ok response without a string payload is outside this harness.
     it('note: a malformed ok payload blocks automation but not the manual paths', function () {
         const h = funded();
-        const id = call(h, 'requestDelivery', 'buyer', [URL]).result;
+        const id = call(h, 'requestDelivery', 'buyer').result;
         h.seedResponse(id, null, 'ok');
         assert.ok(!call(h, 'onDelivery', 'buyer', [id]).success);
         assert.strictEqual(h.state(ADDR, 'pending'), id);
-        assert.ok(!call(h, 'requestDelivery', 'buyer', [URL]).success);
+        assert.ok(!call(h, 'requestDelivery', 'buyer').success);
         assert.ok(call(h, 'refund', 'arbiter').success);
         assert.strictEqual(h.ledger.getBalance('buyer', TICK), '1000');
     });

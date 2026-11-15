@@ -182,10 +182,17 @@ conventions, then (guardian mode) asks the guardian to bind it:
   armed state.
 - **Queue spam.** `propose` requires `minProposeBalance` of the governance
   token, and the contract's own callback identity is explicitly barred from
-  proposing. One holder can occupy no more than 16 of the 64 live slots, and
+  proposing. One address can occupy no more than 16 of the 64 live slots, and
   an abandoned unarmed proposal releases its slot after
-  `executeWindowBlocks`, so one holder cannot consume the contract's state-key
-  budget or exclude every other holder indefinitely.
+  `executeWindowBlocks`, so the contract's state-key budget stays bounded.
+  The caps are per address, not per stake: `propose` reads the governance
+  balance only at the moment it runs, so one holder can move the same balance
+  between addresses and fill all 64 slots until those unarmed proposals go
+  stale, and every other holder is refused meanwhile; the same holder can
+  retake the slots once they go stale, every `executeWindowBlocks`. Funds are
+  not at risk, since arming and execution are unaffected. The guardian's `veto` frees one
+  slot per call; a fork that needs Sybil resistance should tie each live slot
+  to its own locked or bonded balance.
 
 ## Known limitations (by design, for a teaching baseline)
 

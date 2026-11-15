@@ -82,4 +82,18 @@ describe('README lint rule list', function () {
         assert.ok(section.includes(MAX_CODE_SIZE.toLocaleString('en-US')),
             'README.md "Linting" does not state the ' + MAX_CODE_SIZE + '-byte code-size cap');
     });
+
+    it('states both limits that emit the nesting-depth rule', function () {
+        const { MAX_NESTING_DEPTH, MAX_SYNTAX_DEPTH } = loadLintCore();
+        assert.ok(Number.isInteger(MAX_NESTING_DEPTH) && MAX_NESTING_DEPTH > 0,
+            'xchain-vm lint core exports no MAX_NESTING_DEPTH, so this guard would check nothing');
+        assert.ok(Number.isInteger(MAX_SYNTAX_DEPTH) && MAX_SYNTAX_DEPTH > 0,
+            'xchain-vm lint core exports no MAX_SYNTAX_DEPTH, so this guard would check nothing');
+        const match = lintingSection().match(/`nesting-depth`\s*\(([^)]*)\)/s);
+        assert.ok(match, 'README.md "Linting" has no description for `nesting-depth`');
+        assert.match(match[1], new RegExp('\\b' + MAX_NESTING_DEPTH + '\\b'),
+            'README.md "Linting" omits the delimiter nesting limit');
+        assert.match(match[1], new RegExp('\\b' + MAX_SYNTAX_DEPTH + '\\b'),
+            'README.md "Linting" omits the syntax-depth limit');
+    });
 });

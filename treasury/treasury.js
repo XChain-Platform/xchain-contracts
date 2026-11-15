@@ -103,10 +103,11 @@ var MAX_WINDOW_BLOCKS = 1000000;
 
 // Proposal records are the only state whose cardinality follows user traffic.
 // Keep that cardinality fixed: a treasury can have this many live proposals in
-// total, one proposer can occupy only this many of those slots, and terminal
-// summaries rotate through one bounded archive value. PROPOSED records that do
-// not arm within exec_window blocks are stale and release their slots the next
-// time propose() compacts the live set.
+// total, one proposer ADDRESS can occupy only this many of those slots (the
+// governance balance is read only when propose() runs, so the cap is per address,
+// not per stake), and terminal summaries rotate through one bounded archive
+// value. PROPOSED records that do not arm within exec_window blocks are stale
+// and release their slots the next time propose() compacts the live set.
 var MAX_LIVE_PROPOSALS = 64;
 var MAX_LIVE_PER_PROPOSER = 16;
 var MAX_ARCHIVED_PROPOSALS = 16;

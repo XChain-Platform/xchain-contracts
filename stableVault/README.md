@@ -125,6 +125,15 @@ that one.
   immediately batched method call sits in the delta and is attributed to the
   next caller (same footgun as the crowdsale template). Always
   `BATCH(DEPOSIT, deposit/repay/liquidate)`.
+- **State-key exhaustion.** At most 4,900 vaults can be live. That reserves
+  both the collateral and debt key for every admitted vault under the VM's
+  10,000-key cap. A new depositor at the ceiling receives their full custody
+  delta back instead of leaving it unattributed, while keys are deleted when
+  their values reach zero so honest churn frees slots. An attacker can still
+  fill every slot with dust vaults and lock newcomers out, but the refused
+  newcomers are refunded rather than having their collateral credited to the
+  next caller. Earlier template revisions had no ceiling and should be
+  redeployed before accepting more collateral.
 - **Borrowing or withdrawing on a stale price.** Price-sensitive operations
   (`borrow`, `withdraw` with debt, `liquidate`) require both
   `getSnapshotAge() <= maxSnapshotAge` and the configured pair's own round
