@@ -105,7 +105,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -193,11 +193,11 @@ module.exports = {
 
         // --- Sold out: refund instead of reverting (see header) ---
         if (xchain.math.isZero(total)) {
-            xchain.emit.send({ destination: buyer, tick: payTick, quantity: paid });
             // The refund takes `paid` back OUT of custody, so the watermark lands on
             // the post-refund balance. Advancing it to curPay would over-count by
             // exactly the refund and under-measure every later payment.
             xchain.state.set('acctPay', xchain.math.subtract(curPay, paid));
+            xchain.emit.send({ destination: buyer, tick: payTick, quantity: paid });
             return 'sold_out';
         }
 
@@ -213,9 +213,9 @@ module.exports = {
         xchain.require(chosen !== null, 'selection failed'); // unreachable: r < total
 
         // --- Dispense + advance accounting ---
-        xchain.emit.send({ destination: buyer, tick: chosen, quantity: unit });
         xchain.state.set('acctPay', curPay);  // any overpayment is kept (tip)
         xchain.state.set('nonce', xchain.math.add(xchain.state.get('nonce'), '1'));
+        xchain.emit.send({ destination: buyer, tick: chosen, quantity: unit });
         return chosen;
     },
 
@@ -228,10 +228,10 @@ module.exports = {
         var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
         // Exact: gt reads any amount <= 1e-15 as zero, so dust on an 18-decimal tick could never be swept.
         xchain.require(isPositiveExact(held), 'nothing to withdraw');
-        xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
         // A sweep of payTick empties it, so draw()'s watermark has to follow custody
         // down to 0 or the next draw measures a negative delta and reverts forever.
         if (tick === xchain.state.get('payTick')) xchain.state.set('acctPay', '0');
+        xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
     },
 
     // info(): read-only snapshot of remaining stock per card.

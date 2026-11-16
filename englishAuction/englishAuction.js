@@ -96,7 +96,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.5.1'
+        version:     '1.5.2'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -224,12 +224,14 @@ module.exports = {
         // ever holds a newBid that passed the reserve check above.
         xchain.require(exceedsExactly(xchain, newBid, highBid), 'bid must exceed the current high bid');
 
+        // Commit the new leader first, then refund the displaced one. `highBid` is
+        // the local read above, so the refund still pays the previous amount.
+        xchain.state.set('highBid', newBid);
+        xchain.state.set('highBidder', caller);
+
         if (prevBidder) {
             xchain.emit.send({ destination: prevBidder, tick: bidTick, quantity: highBid });
         }
-
-        xchain.state.set('highBid', newBid);
-        xchain.state.set('highBidder', caller);
     },
 
     // settle(): after the deadline, pay out the item and the winning bid (or
