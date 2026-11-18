@@ -14,7 +14,7 @@ That determinism is why settlement is permissionless.
 ## Lifecycle
 
 ```
-INIT --fund()--> OPEN --accept()--> MATCHED --settle()--> SETTLED | PUSH
+INIT --fund()--> OPEN --accept()--> MATCHED --settle()--> SETTLED | PUSH | VOID
                    |                    |
                 cancel()            reclaim() [deadline + round missing]
                    v                    v
@@ -28,7 +28,7 @@ INIT --fund()--> OPEN --accept()--> MATCHED --settle()--> SETTLED | PUSH
 | `initialize(maker, coinPair, strike, side, tick, amount, settleRound, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
 | `fund()` | maker (BATCH after DEPOSIT) | Verifies stake on deposit; status → `OPEN`. |
 | `accept()` | taker (BATCH after DEPOSIT) | Requires the settle round to be still unpublished; verifies pot ≥ 2× stake; anchors the void deadline; status → `MATCHED`. |
-| `settle()` | anyone | Reads the round price; pays the winner (or push-refunds both). |
+| `settle()` | anyone | Reads the round price; pays the winner, push-refunds a tie, or void-refunds an unusable deciding price. |
 | `cancel()` | maker | Reclaims the stake while unmatched; status → `CANCELLED`. |
 | `reclaim()` | maker or taker | Voids the bet if the round is still unpublished after `deadlineBlocks`; refunds both. |
 | `info()` | anyone | Read-only terms + status + winner. |
@@ -63,6 +63,9 @@ EXECUTE(contract, "settle")                                           # anyone, 
   round in the terms removes all timing discretion.
 - **`reclaim()` cannot dodge a loss.** It requires the round to be *missing*;
   once published, `settle()` is the only path.
+- **Unusable oracle notation.** Settlement accepts only a positive plain
+  decimal no longer than the oracle column. Any other deciding value voids and
+  refunds both stakes instead of defaulting the outcome to UNDER or wedging.
 - **State guard pattern.** Terminal status is written before any `emit.send`;
   the write and the emission commit atomically, so double-settlement is
   structurally impossible.
@@ -110,6 +113,15 @@ EXECUTE(contract, "settle")                                           # anyone, 
   custody, the taker's `SEND` threw and every `settle()`/`reclaim()` retry
   reverted with it. `refundBoth()` floors the maker leg, so both legs are
   already on-grid and the re-round is a no-op.
+- **A recipient's memo requirement blocking the refund.** An address can
+  require a memo on every `SEND` it receives, and a refused emission reverts
+  the whole execution. A memo-less PUSH or VOID refund would therefore let
+  either party make `settle()`/`reclaim()` fail for as long as they kept the
+  requirement set, blocking the counterparty's stake too. Every payout
+  (winner, cancel and both refund legs) carries the fixed memo
+  `priceBet payout`, so the requirement no longer reaches the settlement. A
+  recipient can still be refused by a tick allow or block list or a transfer
+  controller on the tick.
 - **Mis-notated stake or strike.** Flooring alone did not close the above: the
   floor is string surgery that assumes fixed notation, and `math.gt(amount, '0')`
   accepts every spelling mathjs parses. A stake of `1.5e-8` slipped past the floor

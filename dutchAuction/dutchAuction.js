@@ -64,6 +64,7 @@
 // MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
 // ceiling escrow.js, treasury.js and patterns/validation.js use.
 var MAX_WINDOW_BLOCKS = 1000000;
+var SEND_MEMO = 'dutchAuction settlement';
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
 // The indexer normalises every emitted amount to its tick's decimals at ledger-
@@ -236,7 +237,7 @@ module.exports = {
         // exactly, so even one base unit short is refunded rather than accepted.
         if (!isAtLeastExact(xchain, held, price)) {
             if (!isAtLeastExact(xchain, '0', held)) {
-                xchain.emit.send({ destination: caller, tick: bidTick, quantity: held });
+                xchain.emit.send({ destination: caller, tick: bidTick, quantity: held, memo: SEND_MEMO });
             }
             return 'underpaid';
         }
@@ -254,13 +255,13 @@ module.exports = {
         var itemTick = xchain.state.get('itemTick');
         var itemSurplus = xchain.math.subtract(
             xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', xchain.state.get('itemAmount'));
-        xchain.emit.send({ destination: caller, tick: itemTick, quantity: xchain.state.get('itemAmount') });
-        xchain.emit.send({ destination: xchain.state.get('seller'), tick: bidTick, quantity: price });
+        xchain.emit.send({ destination: caller, tick: itemTick, quantity: xchain.state.get('itemAmount'), memo: SEND_MEMO });
+        xchain.emit.send({ destination: xchain.state.get('seller'), tick: bidTick, quantity: price, memo: SEND_MEMO });
         if (!isAtLeastExact(xchain, '0', itemSurplus)) {
-            xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemSurplus });
+            xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemSurplus, memo: SEND_MEMO });
         }
         if (!isAtLeastExact(xchain, '0', excess)) {
-            xchain.emit.send({ destination: caller, tick: bidTick, quantity: excess });
+            xchain.emit.send({ destination: caller, tick: bidTick, quantity: excess, memo: SEND_MEMO });
         }
     },
 
@@ -292,7 +293,7 @@ module.exports = {
         xchain.emit.send({
             destination: xchain.state.get('seller'),
             tick: itemTick,
-            quantity: quantity
+            quantity: quantity, memo: SEND_MEMO
         });
     },
 

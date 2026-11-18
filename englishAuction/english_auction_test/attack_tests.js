@@ -152,7 +152,7 @@ function registerStatusGuardAndOffGridTests(tests) {
         // to nothing.
         const c = await env.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10', memo: 'englishAuction settlement' } }]);
         assertBalance(env.h.ledger, SELLER, ITEM, '10');
         assertContractBalance(env.h.ledger, ADDR, ITEM, '0');
         assertContractState(env.h.ledger, ADDR, 'status', 'CANCELLED');
@@ -169,7 +169,7 @@ function registerPreFundedCancelTests(tests) {
         assertContractState(env.h.ledger, ADDR, 'status', 'INIT');
         const c = await env.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5', memo: 'englishAuction settlement' } }]);
         assertBalance(env.h.ledger, SELLER, ITEM, '10');
         assertContractState(env.h.ledger, ADDR, 'status', 'CANCELLED');
     });
@@ -202,7 +202,7 @@ function registerPreFundedCancelTests(tests) {
         env.h.deposit(SELLER, ADDR, ITEM, DUST);
         const c = await env.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST, memo: 'englishAuction settlement' } }]);
         assertBalance(env.h.ledger, SELLER, ITEM, '10');
         assertContractState(env.h.ledger, ADDR, 'status', 'CANCELLED');
     });

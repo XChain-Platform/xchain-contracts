@@ -51,7 +51,7 @@ function registerSettlementAttacks(context) {
         const r = await buy('alice', '500');
         assertSuccess(r);
         assert.strictEqual(JSON.parse(r.returnValue), 'underpaid');
-        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '500' } }]);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '500', memo: 'dutchAuction settlement' } }]);
         assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
         assertContractBalance(context.h.ledger, ADDR, BID, '0');
     });
@@ -100,7 +100,7 @@ function registerOffGridFundAttack(context) {
         // to nothing.
         const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10', memo: 'dutchAuction settlement' } }]);
         assertBalance(context.h.ledger, SELLER, ITEM, '10');
         assertContractBalance(context.h.ledger, ADDR, ITEM, '0');
         assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
@@ -123,7 +123,7 @@ function registerCancelRecoveryAttacks(context) {
         assertContractState(context.h.ledger, ADDR, 'status', 'INIT');
         const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5', memo: 'dutchAuction settlement' } }]);
         assertBalance(context.h.ledger, SELLER, ITEM, '10');
         assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
     });
@@ -155,7 +155,7 @@ function registerCancelRecoveryAttacks(context) {
         context.h.deposit(SELLER, ADDR, ITEM, DUST);
         const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST, memo: 'dutchAuction settlement' } }]);
         assertBalance(context.h.ledger, SELLER, ITEM, '10');
         assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
     });

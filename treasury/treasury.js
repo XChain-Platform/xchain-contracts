@@ -112,6 +112,38 @@ var MAX_LIVE_PROPOSALS = 64;
 var MAX_LIVE_PER_PROPOSER = 16;
 var MAX_ARCHIVED_PROPOSALS = 16;
 
+// Payout SEND limits, checked at propose() so a poll-approved proposal cannot
+// stall ARMED on a payout the indexer would refuse. MAX_MEMO_LENGTH mirrors
+// the SEND memo cap (UTF-16 units). The recipient bounds are the shortest and
+// longest strings a bech32 or base58 address can take (a 2-byte witness
+// program is 14 characters, bech32 tops out at 90). The recipient walk is a
+// shape check only: a checksum or network mismatch still passes it.
+var MAX_MEMO_LENGTH = 250;
+var MIN_RECIPIENT_LENGTH = 14;
+var MAX_RECIPIENT_LENGTH = 90;
+
+function requireRecipientShape(xchain, value) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length >= MIN_RECIPIENT_LENGTH && s.length <= MAX_RECIPIENT_LENGTH;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, 'recipient must be a plain address: 14-90 letters and digits');
+}
+
+// The memo rides the payout SEND, which refuses a pipe, a semicolon or an
+// over-long memo. A proposal without a memo stays memo-less: a payout is never
+// sent under a memo the voters did not see.
+function requireSendableMemo(xchain, value) {
+    xchain.require(typeof value === 'string', 'memo must be a string');
+    xchain.require(value.length <= MAX_MEMO_LENGTH, 'memo must be at most 250 characters');
+    for (var i = 0; i < value.length; i++) {
+        var c = value.charAt(i);
+        xchain.require(c !== '|' && c !== ';', 'memo cannot contain | or ;');
+    }
+}
+
 function executableHeight(xchain, rec) {
     var height = xchain.getBlockHeight();
     var ready = rec.armed + parseInt(xchain.state.get('timelock'));
@@ -154,7 +186,8 @@ function payProposal(xchain, id, rec, height) {
     xchain.emit.send({
         destination: rec.recipient,
         tick: rec.tick,
-        quantity: amount
+        quantity: amount,
+        memo: rec.memo
     });
     return amount;
 }
@@ -167,7 +200,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.6.0'
+        version:     '1.7.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -246,6 +279,8 @@ module.exports = {
 
         xchain.require(caller !== xchain.getContractAddress(), 'contract cannot propose');
         xchain.require(recipient, 'recipient required');
+        requireRecipientShape(xchain, recipient);
+        requireSendableMemo(xchain, memo);
         xchain.require(tick, 'tick required');
         // Notation gate at the door untrusted text comes through, ahead of the
         // magnitude check so unparseable text gets the plain-decimal message. `amount` is raw

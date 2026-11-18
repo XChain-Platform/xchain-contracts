@@ -28,17 +28,17 @@ the DEPOSIT and `buy()` are in the **same transaction**. **Never DEPOSIT without
 buyer who calls `buy()`. (This per-caller attribution is the pattern the AMM will
 build on.)
 
-A `BATCH` is **not** atomic, which is why that rule bites: its sub-actions settle
-independently, so a `buy()` that reverts (`sale not open`, `sale closed (deadline
-passed)`, `hard cap exceeded`) leaves the `DEPOSIT` ahead of it standing in the
-contract, where the next buyer's delta absorbs it. Size the payment to clear.
+A `BATCH` is **not** atomic, so `buy()` returns the whole payment rather than
+reverting when the sale is closed, its deadline passed, or the hard cap would
+be exceeded. A bare DEPOSIT without `buy()` is still attributed to the next
+caller because the contract can observe only its custody balance.
 
 ## Lifecycle
 
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`, floored onto the `saleDecimals` grid) into contract custody, locks minting, and opens the sale. `rate`, `softCap` and `hardCap` must be plain decimals (digits and one optional point). |
-| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full, and so does a new buyer's payment once 9,000 buyers hold a contribution); reverts past the deadline or hard cap. |
+| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call. It returns the whole payment after close, past the deadline, above the hard cap, or once 9,000 buyers hold a contribution. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
 | `burnUnsold()` | anyone (after finalization, once) | Permanently burns every sale token not allocated to a buyer after a successful sale, or the entire inventory after a failed sale. Outstanding successful claims remain fully backed. |
 | `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
@@ -50,10 +50,10 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 
 - **Deposit misattribution.** Contributions are credited to the `buy()` caller via
   the balance delta - safe under a single `BATCH(DEPOSIT, buy)`. The footgun
-  (orphan deposits, whether un-batched or left behind by a reverted `buy()`) is
-  documented above; it is a usage rule, not a contract bug.
-- **Buying after close.** `buy()` reverts past the deadline and rejects any
-  contribution that would push `raised` over the hard cap.
+  from a bare, un-batched deposit) is documented above. Rejected purchases
+  return the measured balance delta in full so they cannot poison later buys.
+- **Buying after close.** `buy()` returns the whole measured payment past the
+  deadline, after finalization, or when it would push `raised` over the hard cap.
 - **Premature finalize.** `finalize()` requires either the deadline or the hard
   cap; it can't be called early to lock a favorable/unfavorable outcome.
 - **Double claim / double refund.** Each deletes the caller's contribution record
@@ -87,8 +87,8 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
   in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
 - **Whole-payment caps.** A contribution whose accepted part would exceed the
-  hard cap is rejected outright (only grid change is returned, never a partial
-  fill of the cap). Buyers size their own deposits. Both
+  hard cap is returned in full, never partly filled. Buyers can retry with a
+  smaller amount. Both
   caps compare exactly, not within a tolerance, so `raised` can never pass the
   hard cap by even one base unit and outrun the sale token's `maxSupply`.
 - **Sub-base-unit overpay.** When `rate` times one pay-tick base unit does not

@@ -108,7 +108,8 @@ function runSeed(seed) {
         assert.strictEqual(h.ledger.total(PAY), fixed(bn(SEED_PAY).times(ACTORS.length)), tag + ' ' + where + ': PAY supply drift');
         assert.strictEqual(h.ledger.total(SALE), h.ledger.tokens[SALE].SUPPLY, tag + ' ' + where + ': SALE total != SUPPLY');
         const raised = h.state(ADDR, 'raised');
-        assert.ok(eqExact(h.state(ADDR, 'accountedPay'), raised), tag + ' ' + where + ': accountedPay != raised');
+        assert.ok(eqExact(h.state(ADDR, 'accountedPay'), sub(raised, m.paidOut)),
+            tag + ' ' + where + ': accountedPay != unpaid raised');
         let sumC = '0', sumTok = '0', outC = '0', outTok = '0';
         for (const b of BUYERS) {
             const c = m.everRec[b] || '0';
@@ -146,7 +147,7 @@ function runSeed(seed) {
             else assert.ok(bn(prior).isZero(), tag + ': a prior record was dropped');
         } else {
             m.orphan = add(m.orphan, amt);
-            assert.ok(/sale not open|sale closed|hard cap exceeded|no payment received/.test(r.error), tag + ': unexpected buy error ' + r.error);
+            assert.ok(/no payment received/.test(r.error), tag + ': unexpected buy error ' + r.error);
         }
         return r;
     };
@@ -228,6 +229,12 @@ function runSeed(seed) {
         assert.ok(call(h, 'burnUnsold', 'stranger').success, tag + ': final burn');
         m.burned = add(m.burned, sub(before, bal(h, ADDR, SALE)));
     }
+    if (!bn(m.orphan).isZero()) {
+        const swept = call(h, 'buy', 'stranger');
+        assert.ok(swept.success, tag + ': final orphan refund');
+        assert.ok(eqExact(sentTo(swept, 'stranger', PAY), m.orphan), tag + ': orphan refund amount');
+        m.orphan = '0';
+    }
     check('final');
     assert.ok(bn(bal(h, ADDR, SALE)).isZero(), tag + ': sale inventory left after claims and burn: ' + bal(h, ADDR, SALE));
     assert.ok(eqExact(bal(h, ADDR, PAY), m.orphan), tag + ': PAY left beyond orphans');
@@ -272,7 +279,7 @@ function runSeed(seed) {
         assert.ok(!call(h, 'burnUnsold', 'stranger').success);
         assert.strictEqual(bal(h, 'b1', SALE), '1200');
         assert.strictEqual(bal(h, ADDR, SALE), '0');
-        assert.ok(!buy(h, 'b2', '1').success, 'buy after finalize');
+    assert.ok(buy(h, 'b2', '1').success, 'buy after finalize');
     });
 
     it('authorization: only the owner withdraws; claim and refund are status gated', function () {
@@ -281,7 +288,7 @@ function runSeed(seed) {
         assert.ok(!call(h, 'finalize', 'b1').success, 'finalize before deadline and below cap');
         assert.ok(!call(h, 'burnUnsold', 'b1').success, 'burn while open');
         h.mineBlock(DURATION);
-        assert.ok(!buy(h, 'b2', '1').success, 'buy at deadline');
+        assert.ok(buy(h, 'b2', '1').success, 'buy at deadline');
         assert.ok(call(h, 'finalize', 'b2').success);
         for (const c of ['b1', 'b2', 'stranger']) assert.ok(!call(h, 'withdraw', c).success, 'withdraw by ' + c);
         assert.ok(!call(h, 'refund', 'b1').success, 'refund on success');
@@ -292,7 +299,7 @@ function runSeed(seed) {
         const h = setup(STD);
         assert.ok(buy(h, 'b1', '199.99999999').success);
         const r = buy(h, 'b2', '0.00000002');
-        assert.ok(!r.success && /hard cap/.test(r.error), r.error);
+        assert.ok(r.success && sentTo(r, 'b2', PAY) === '0.00000002', r.error);
         const k = setup(STD);
         assert.ok(buy(k, 'b1', '199.99999999').success);
         assert.ok(!call(k, 'finalize', 'stranger').success, 'early close one base unit below the hard cap');

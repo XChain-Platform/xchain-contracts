@@ -12,6 +12,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const registerDeployValidationSuite = require('./priceBet_test/deploy_validation');
+const registerPayoutMemoTests = require('./priceBet_test/payout_memo');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -134,6 +135,14 @@ function registerNearStrikeSuite(ctx) {
             await settleAt('OVER', '60000.000');
             state('status', 'PUSH'); bal(MAKER, TICK, '100'); bal(TAKER, TICK, '100');
         });
+        for (const price of ['Infinity', 'NaN', '', 'abc', '1e5', '-1', '0', '0.00', '1'.repeat(41)]) {
+            it(`voids and refunds both sides for unusable price ${JSON.stringify(price)}`, async function () {
+                await settleAt('OVER', price);
+                state('status', 'VOID');
+                bal(MAKER, TICK, '100');
+                bal(TAKER, TICK, '100');
+            });
+        }
     });
 }
 
@@ -319,6 +328,7 @@ function makeFixtures(ctx) {
     });
 
     registerNearStrikeSuite(ctx);
+    registerPayoutMemoTests({ ...ctx, assert, assertSuccess, MAKER, TAKER, STRIKE });
     describe('attacks we considered', function () {
         registerSettleTimingAttacks(ctx);
         registerWindowReclaimAttacks(ctx);

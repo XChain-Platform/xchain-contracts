@@ -88,7 +88,7 @@ readable.
 
 | Return | Meaning |
 |---|---|
-| `SETTLED` / `PUSH` | Terminal: pot paid to the winner / stakes returned (tie). |
+| `SETTLED` / `PUSH` / `VOID` | Terminal: pot paid to the winner, stakes returned for a tie, or stakes returned for an unusable deciding price. |
 | `PENDING` | No round at/after `settleTime` exists yet. Valid no-op; try later. |
 | `SCANNING` | Qualifying round exists but the 200-read cap was hit paging the backlog; cursor saved; call again. |
 
@@ -135,7 +135,8 @@ All of the sibling [priceBet](../priceBet/README.md) protections apply
 (balance-verified stakes, no self-match, terminal-status-before-emit guard,
 `reclaim()` unusable once a deciding round exists, over-deposit drains on
 refund, grid-floored refund legs, fixed-notation-only `amount` and `strike`
-enforced at deploy, deferred-emission reentrancy model). The timestamp
+enforced at deploy, memo-carrying payouts so a recipient's memo requirement
+cannot block a refund, deferred-emission reentrancy model). The timestamp
 translation adds its own surface:
 
 - **Spot-price timing discretion.** Settling on `getPrice()` would let the

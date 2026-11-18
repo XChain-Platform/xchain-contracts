@@ -198,13 +198,28 @@ function registerAttackTests(ctx, kit) {
         it('buying past the deadline reverts', async function () {
             await deploy();
             close();
-            assertReverted(await buy(B1, '50'), 'sale closed');
+            const r = await buy(B1, '50');
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '50' } }]);
         });
 
         it('a contribution beyond the hard cap is rejected', async function () {
             await deploy();
             assertSuccess(await buy(B1, '200')); // exactly the hard cap
-            assertReverted(await buy(B2, '1'), 'hard cap exceeded');
+            const r = await buy(B2, '1');
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: { destination: B2, tick: PAY, quantity: '1' } }]);
+        });
+
+        it('an over-cap payment cannot poison a later exact-cap buy', async function () {
+            await deploy();
+            assertSuccess(await buy(B1, '150'));
+            const over = await buy(B2, '60');
+            assertSuccess(over);
+            assertEmittedActions(over, [{ action: 'SEND', params: { destination: B2, tick: PAY, quantity: '60' } }]);
+            assertSuccess(await buy(B2, '50'));
+            assertSuccess(await call('finalize', B1));
+            assertContractBalance(kit.h.ledger, ADDR, PAY, '200');
         });
 
         it('finalize before the deadline (below cap) reverts', async function () {

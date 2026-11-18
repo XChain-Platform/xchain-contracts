@@ -52,9 +52,8 @@
 // it, which would strand the buyer's payment in the contract.
 // ---------------------------------------------------------------------------
 
-// Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
-// whether `unit` is already on a card's grid (floor equals value numerically), never to rewrite
-// it. Same helper and rationale as amm.js/dutchAuction.js:floorToDecimals.
+// Quantise an amount DOWN without mathjs's tolerance-aware floor. Used for
+// copy counts and to ask whether `unit` is already on a card's decimal grid.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -88,7 +87,7 @@ function floorToDecimals(value, decimals) {
 // DEPOSIT - the very outcome the sold-out path refunds instead of reverting.
 function deliverableCopies(xchain, self, tick, unit) {
     var q      = xchain.math.divide(xchain.getBalance(self, tick) || '0', unit);
-    var copies = xchain.math.subtract(q, xchain.math.mod(q, '1')); // floor (>=0)
+    var copies = floorToDecimals(q, 0);
     if (xchain.math.isZero(copies)) return copies;
     var info = xchain.getTokenInfo(tick);
     if (!info || info.DECIMALS === null || info.DECIMALS === undefined) return '0';

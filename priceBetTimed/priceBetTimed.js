@@ -103,6 +103,12 @@
 // blocks), the same ceiling patterns/validation.js uses in its example.
 var MAX_SETTLE_TIME = 253402300799;
 var MAX_WINDOW_BLOCKS = 1000000;
+var MAX_PRICE_CHARS = 40;
+
+// Every payout carries this memo. A recipient can require a memo on incoming
+// SENDs, and a refused emission reverts the whole execution, so a memo-less
+// refund would let either party block both stakes from coming back.
+var PAYOUT_MEMO = 'priceBetTimed payout';
 
 // Rounds a single call may read while walking cursor -> tip. Shared by settle()
 // and reclaim() so the two agree on how much history one execution pays for;
@@ -117,7 +123,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.5.1'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -125,7 +131,7 @@ module.exports = {
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },
-        settle:  { summary: 'Pay the winner from the first oracle round at/after settleTime (anyone)', params: [] },
+        settle:  { summary: 'Pay the winner, or refund both sides for a tie or unusable deciding price (anyone)', params: [] },
         cancel:  { summary: 'Maker reclaims their stake while the bet is unmatched', params: [] },
         reclaim: { summary: 'Void the bet and refund both sides if no qualifying round ever arrives', params: [] },
         info:    { summary: 'Read the bet terms and status', params: [], view: true }
@@ -324,8 +330,16 @@ module.exports = {
 
         // Compare exactly: math.eq/gt treat values within 1e-12 relative as equal,
         // so a price one base unit off a large strike would otherwise settle as a push.
-        var atOrAbove = isAtLeastExact(xchain, found.price, strike);
-        var atOrBelow = isAtLeastExact(xchain, strike, found.price);
+        var usable = isUsablePrice(found.price);
+        var atOrAbove = usable && isAtLeastExact(xchain, found.price, strike);
+        var atOrBelow = usable && isAtLeastExact(xchain, strike, found.price);
+
+        // An unusable deciding value proves neither side and must not default to UNDER.
+        if (!atOrAbove && !atOrBelow) {
+            xchain.state.set('status', 'VOID');
+            refundBoth(xchain);
+            return 'VOID';
+        }
 
         // Exactly at the strike: a push. Both stakes go back.
         if (atOrAbove && atOrBelow) {
@@ -349,7 +363,8 @@ module.exports = {
         xchain.emit.send({
             destination: winner,
             tick: xchain.state.get('tick'),
-            quantity: pot
+            quantity: pot,
+            memo: PAYOUT_MEMO
         });
         return 'SETTLED';
     },
@@ -365,7 +380,8 @@ module.exports = {
         xchain.emit.send({
             destination: xchain.state.get('maker'),
             tick: xchain.state.get('tick'),
-            quantity: held
+            quantity: held,
+            memo: PAYOUT_MEMO
         });
     },
 
@@ -524,10 +540,29 @@ function refundBoth(xchain) {
     var held   = heldBalance(xchain);
     var rest   = xchain.math.subtract(held, amount);
 
-    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount });
+    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount, memo: PAYOUT_MEMO });
     if (!isAtLeastExact(xchain, '0', rest)) {
-        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
+        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest, memo: PAYOUT_MEMO });
     }
+}
+
+// Accept only the positive plain-decimal notation produced by the oracle rail.
+// This returns false rather than throwing so settlement always has a fund exit.
+function isUsablePrice(price) {
+    if (price === null || price === undefined) return false;
+    var s = String(price);
+    if (s.length === 0 || s.length > MAX_PRICE_CHARS) return false;
+    var dot = -1;
+    var nonzero = false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            if (dot >= 0 || i === 0 || i === s.length - 1) return false;
+            dot = i;
+        } else if (c < '0' || c > '9') return false;
+        else if (c !== '0') nonzero = true;
+    }
+    return nonzero;
 }
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation

@@ -53,7 +53,11 @@ function registerExactCapTests(ctx, kit) {
     describe('exact cap comparisons (no mathjs tolerance)', function () {
         it('rejects a buy that overshoots the hard cap by less than one tolerance band', async function () {
             await deployBig('1', '100000');
-            assertReverted(await buy(B1, '100000.00000005'), 'hard cap exceeded');
+            const r = await buy(B1, '100000.00000005');
+            assertSuccess(r);
+            assertEmittedActions(r, [{ action: 'SEND', params: {
+                destination: B1, tick: PAY, quantity: '100000.00000005'
+            } }]);
         });
 
         it('still accepts a buy that lands exactly on the hard cap, and finalizes early', async function () {

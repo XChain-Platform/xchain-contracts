@@ -89,6 +89,16 @@ async function deployOffGridUnit(unit, cardDecimals) {
     h.ledger.creditContractBalance(ADDR, A, '1');
 }
 
+async function deployShortStock(unit, cardDecimals, balance) {
+    newHarness();
+    for (const tick of CARDS) h.ledger.setTokenDecimals(tick, cardDecimals);
+    await h.deploy({
+        code: CODE, deployer: OWNER, contractAddress: ADDR,
+        params: [PAY, PRICE, unit, A, B, C]
+    });
+    h.ledger.creditContractBalance(ADDR, A, balance);
+}
+
 async function deploySingle(price, copies) {
     h = new E2EHarness(XChainVM);
     h.seedBalance(OWNER, 'XCHAIN', '1000000');
@@ -311,6 +321,25 @@ function offGridUnitTests() {
 }
 
 function exactComparisonTests() {
+    it('a balance just below one unit is sold out, not a phantom copy', async function () {
+        await deployShortStock('100000', 8, '99999.99999999');
+        const info = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: BUYER });
+        assert.strictEqual(JSON.parse(JSON.parse(info.returnValue)).stock[A], '0');
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertContractBalance(h.ledger, ADDR, A, '99999.99999999');
+        assertContractState(h.ledger, ADDR, 'nonce', '0');
+    });
+
+    it('an 18-decimal balance just below one unit is sold out too', async function () {
+        await deployShortStock('1', 18, '0.999999999999999999');
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertContractBalance(h.ledger, ADDR, A, '0.999999999999999999');
+    });
+
     it('draw() rejects a payment one base unit short of a large price', async function () {
         await deploySingle('100000', '5');
         assertReverted(await payAndDraw('99999.99999999'), 'underpaid');

@@ -74,6 +74,12 @@
 // ceiling patterns/validation.js uses for a block window in its example.
 var MAX_ROUND = 1000000000;
 var MAX_WINDOW_BLOCKS = 1000000;
+var MAX_PRICE_CHARS = 40;
+
+// Every payout carries this memo. A recipient can require a memo on incoming
+// SENDs, and a refused emission reverts the whole execution, so a memo-less
+// refund would let either party block both stakes from coming back.
+var PAYOUT_MEMO = 'priceBet payout';
 
 module.exports = {
 
@@ -83,7 +89,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.3.2'
+        version:     '1.4.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -91,7 +97,7 @@ module.exports = {
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },
-        settle:  { summary: 'Pay the winner from the oracle round price (anyone, once the round exists)', params: [] },
+        settle:  { summary: 'Pay the winner, or refund both sides for a tie or unusable oracle price (anyone)', params: [] },
         cancel:  { summary: 'Maker reclaims their stake while the bet is unmatched', params: [] },
         reclaim: { summary: 'Void the bet and refund both sides if the oracle round never arrives', params: [] },
         info:    { summary: 'Read the bet terms and status', params: [], view: true }
@@ -227,8 +233,16 @@ module.exports = {
 
         // Compare exactly: math.eq/gt treat values within 1e-12 relative as equal,
         // so a price one base unit off a large strike would otherwise settle as a push.
-        var atOrAbove = isAtLeastExact(xchain, price, strike);
-        var atOrBelow = isAtLeastExact(xchain, strike, price);
+        var usable = isUsablePrice(price);
+        var atOrAbove = usable && isAtLeastExact(xchain, price, strike);
+        var atOrBelow = usable && isAtLeastExact(xchain, strike, price);
+
+        // An unusable deciding value proves neither side and must not default to UNDER.
+        if (!atOrAbove && !atOrBelow) {
+            xchain.state.set('status', 'VOID');
+            refundBoth(xchain);
+            return;
+        }
 
         // Exactly at the strike: a push. Both stakes go back.
         if (atOrAbove && atOrBelow) {
@@ -253,7 +267,8 @@ module.exports = {
         xchain.emit.send({
             destination: winner,
             tick: xchain.state.get('tick'),
-            quantity: pot
+            quantity: pot,
+            memo: PAYOUT_MEMO
         });
     },
 
@@ -268,7 +283,8 @@ module.exports = {
         xchain.emit.send({
             destination: xchain.state.get('maker'),
             tick: xchain.state.get('tick'),
-            quantity: held
+            quantity: held,
+            memo: PAYOUT_MEMO
         });
     },
 
@@ -395,10 +411,29 @@ function refundBoth(xchain) {
     var held   = heldBalance(xchain);
     var rest   = xchain.math.subtract(held, amount);
 
-    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount });
+    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount, memo: PAYOUT_MEMO });
     if (!isAtLeastExact(xchain, '0', rest)) {
-        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
+        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest, memo: PAYOUT_MEMO });
     }
+}
+
+// Accept only the positive plain-decimal notation produced by the oracle rail.
+// This returns false rather than throwing so settlement always has a fund exit.
+function isUsablePrice(price) {
+    if (price === null || price === undefined) return false;
+    var s = String(price);
+    if (s.length === 0 || s.length > MAX_PRICE_CHARS) return false;
+    var dot = -1;
+    var nonzero = false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            if (dot >= 0 || i === 0 || i === s.length - 1) return false;
+            dot = i;
+        } else if (c < '0' || c > '9') return false;
+        else if (c !== '0') nonzero = true;
+    }
+    return nonzero;
 }
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation

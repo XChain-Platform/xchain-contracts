@@ -21,8 +21,8 @@ function registerBiddingTests(tests) {
         const r = await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
         assertSuccess(r);
         assertEmittedActions(r, [
-            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10' } },
-            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '50' } }
+            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10', memo: 'englishAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '50', memo: 'englishAuction settlement' } }
         ]);
         assertBalance(env.h.ledger, 'alice', ITEM, '10');
         assertBalance(env.h.ledger, SELLER, BID, '50');
@@ -37,7 +37,7 @@ function registerBiddingTests(tests) {
         assertSuccess(await bid('alice', '50'));
         const r = await bid('bob', '80');
         assertSuccess(r);
-        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '50' } }]);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '50', memo: 'englishAuction settlement' } }]);
         assertBalance(env.h.ledger, 'alice', BID, '50'); // fully refunded
         assertContractBalance(env.h.ledger, ADDR, BID, '80'); // only bob's stake held
         assertContractState(env.h.ledger, ADDR, 'highBidder', 'bob');
@@ -58,6 +58,22 @@ function registerBiddingTests(tests) {
         assertBalance(env.h.ledger, 'alice', BID, '50'); // refunded when outbid by bob
         assertBalance(env.h.ledger, 'bob', BID, '80'); // refunded when outbid by carol
     });
+
+    it('returns item surplus with a settlement memo', async function () {
+        await deployAuction(3);
+        await depositAndFund();
+        env.h.seedBalance(SELLER, ITEM, '2');
+        env.h.deposit(SELLER, ADDR, ITEM, '2');
+        await bid('alice', '50');
+        env.h.mineBlock(); env.h.mineBlock(); env.h.mineBlock();
+        const r = await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
+        assertSuccess(r);
+        assertEmittedActions(r, [
+            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10', memo: 'englishAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '50', memo: 'englishAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '2', memo: 'englishAuction settlement' } }
+        ]);
+    });
 }
 
 // Auctions with no sale: the item goes back to the seller.
@@ -73,7 +89,7 @@ function registerItemReturnTests(tests) {
         env.h.mineBlock(); env.h.mineBlock(); env.h.mineBlock();
         const r = await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' });
         assertSuccess(r);
-        assertEmittedActions(r, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10', memo: 'englishAuction settlement' } }]);
         assertBalance(env.h.ledger, SELLER, ITEM, '10');
         assertContractState(env.h.ledger, ADDR, 'status', 'UNSOLD');
     });

@@ -108,7 +108,7 @@ trigger a check on someone else's behalf that then pays a third party.
 | Method | Who | Effect |
 |---|---|---|
 | `requestClaim()` | anyone (self-serve) | Emits an `http_get` attestation request listing every Send on `BURN_ADDRESS` (`redundancy: 3`, `deadlineBlocks: 20`); reverts if the caller already has a check pending. Callable again later, once new burns exist. |
-| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and sends the total from custody. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. |
+| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and sends the total from custody. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. A claim that would push `totalClaimed` past `maxSupply` is also a no-op: it returns `'maxSupply exhausted'`, sends nothing and leaves the burns uncredited - not a revert. |
 | `claimedTotal(address)` | anyone | Read-only: how much `address` has been credited in total so far (`'0'` if none). |
 | `burned(tx_hash)` | anyone | Read-only: whether a specific Counterparty burn transaction has already been credited. |
 | `info()` | anyone | `{ cpAsset, xchainTick, decimals, maxSupply, totalClaimed, burnAddress }`. |
@@ -190,8 +190,20 @@ bridge multiple assets, deploy one instance per asset.
 - **Claiming past the Counterparty-side supply.** `maxSupply` (set at
   deploy from `cpAsset`'s real total supply) is both the token's cap and
   the pre-minted custody, and `onClaim` checks `totalClaimed + amount <=
-  maxSupply` itself with a clear revert message before sending, so custody
-  can never be overdrawn by claims.
+  maxSupply` itself before sending, so custody can never be overdrawn by
+  claims. A claim that would cross the cap does **not** revert: the
+  `EXECUTE` succeeds, sends nothing, leaves `totalClaimed` and
+  `claimedTotal` unchanged, leaves the response's burns unmarked, clears
+  `pending:<address>`, logs `bridge maxSupply exhausted` and returns
+  `'maxSupply exhausted'`. The refusal covers the whole response, so no
+  part of an over-cap claim is paid. It fails soft because a revert would
+  also roll back the `pending:` delete while the same over-cap response
+  kept replaying, locking the address out of `requestClaim()`. A
+  successful `onClaim` therefore does not prove tokens were sent: check
+  the return value or log, or compare `claimedTotal(address)` before and
+  after. The Counterparty-side burn is already irreversible and stays
+  uncredited, and a later `requestClaim()` returns the same burns, which
+  are refused again while the cap stays exhausted.
 - **Rounding a claim above the cap.** Claimed amounts are floored onto
   `xchainTick`'s decimal grid before minting (same footgun and fix as
   `crowdsale.claim()`): the indexer re-normalises every emitted quantity to

@@ -21,6 +21,7 @@ const registerOracleWindowAndTimingAttackTests = require('./price_bet_timed_test
 const registerCustodyTests = require('./price_bet_timed_test/custody_tests');
 const registerNumericSeamTests = require('./price_bet_timed_test/numeric_seam_tests');
 const registerDeployValidationTests = require('./price_bet_timed_test/deploy_validation_tests');
+const registerPayoutMemoTests = require('./price_bet_timed_test/payout_memo_tests');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
@@ -182,6 +183,7 @@ function registerExactPayoutGuardTests(context) {
     registerNumericSeamTests(context);
     registerDeployValidationTests(context);
     registerExactPayoutGuardTests(context);
+    registerPayoutMemoTests(context);
 });
 
 // Seeded invariant suite on the in-process harness (runs without the VM sibling).

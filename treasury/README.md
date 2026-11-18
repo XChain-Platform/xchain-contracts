@@ -64,7 +64,7 @@ withdraw path outside an executed proposal.
 | Method | Who | Effect |
 |---|---|---|
 | `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. |
-| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. A proposal must arm within `executeWindowBlocks`. |
+| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. A proposal must arm within `executeWindowBlocks`. Reverts unless `recipient` is 14 to 90 letters and digits and `memo` is a string of at most 250 characters with no `\|` or `;`; the memo is sent with the payout. |
 | `approvePoll(proposalId, pollIndex)` | guardian (guardian mode only) | Binds the verified poll to the proposal. |
 | `arm(...)` | the poll finalization callback only | Set as the binding poll's `CALLBACK_METHOD`. Verifies the result and starts the timelock; status `ARMED`. |
 | `veto(proposalId)` | guardian | Kills a `PROPOSED` or `ARMED` proposal; status `VETOED`. |
@@ -204,6 +204,14 @@ conventions, then (guardian mode) asks the guardian to bind it:
   raid. Verifying that is the guardian's job, which is why `guardian` is the
   recommended mode. (The *electorate* half of this limitation is now closed:
   the protocol delivers the poll's `TICK`, and `arm()` pins it to `govTick`.)
+- **The recipient check is shape-only.** `propose()` cannot verify a checksum
+  or network, so a well-formed but invalid address still arms and then fails
+  at execution until the proposal expires or is vetoed. A recipient can also
+  refuse a payout that carries no memo (an address that requires one), or by
+  a tick allow or block list or a transfer controller. A memo-less proposal is
+  sent memo-less, never under an invented memo, so a payout to an exchange or
+  custodian must carry the memo that recipient needs. Guardians should check
+  the recipient and memo before calling `approvePoll`.
 - **One transfer per proposal.** No batching, no streaming; deploy the vesting
   template from a proposal's recipient address if you need scheduled release.
 - **The guardian can censor.** It cannot steal, but it can refuse to bind or

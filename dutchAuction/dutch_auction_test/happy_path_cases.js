@@ -13,8 +13,8 @@ function registerPurchaseCases(context) {
         const r = await buy('alice', '1000');
         assertSuccess(r);
         assertEmittedActions(r, [
-            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10' } },
-            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '1000' } }
+            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10', memo: 'dutchAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '1000', memo: 'dutchAuction settlement' } }
         ]);
         assertBalance(context.h.ledger, 'alice', ITEM, '10');
         assertBalance(context.h.ledger, SELLER, BID, '1000');
@@ -46,11 +46,25 @@ function registerPurchaseCases(context) {
         const r2 = await buy('bob', '1500'); // overpay by 500
         assertSuccess(r2);
         assertEmittedActions(r2, [
-            { action: 'SEND', params: { destination: 'bob', tick: ITEM, quantity: '10' } },
-            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '1000' } },
-            { action: 'SEND', params: { destination: 'bob', tick: BID, quantity: '500' } }
+            { action: 'SEND', params: { destination: 'bob', tick: ITEM, quantity: '10', memo: 'dutchAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '1000', memo: 'dutchAuction settlement' } },
+            { action: 'SEND', params: { destination: 'bob', tick: BID, quantity: '500', memo: 'dutchAuction settlement' } }
         ]);
         assertBalance(context.h.ledger, 'bob', BID, '500'); // 1500 sent - 1000 charged = 500 back
+    });
+
+    it('returns item surplus with a settlement memo', async function () {
+        await deployAuction(10);
+        await depositAndFund();
+        context.h.seedBalance(SELLER, ITEM, '2');
+        context.h.deposit(SELLER, ADDR, ITEM, '2');
+        const r = await buy('alice', '1000');
+        assertSuccess(r);
+        assertEmittedActions(r, [
+            { action: 'SEND', params: { destination: 'alice', tick: ITEM, quantity: '10', memo: 'dutchAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: BID, quantity: '1000', memo: 'dutchAuction settlement' } },
+            { action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '2', memo: 'dutchAuction settlement' } }
+        ]);
     });
 }
 

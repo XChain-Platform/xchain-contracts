@@ -321,9 +321,6 @@ module.exports = {
     // returned at once, and a payment worth less than one unit comes back in full, as
     // does a new buyer's payment once MAX_BUYERS buyers hold a contribution.
     buy: function (xchain) {
-        xchain.require(xchain.state.get('status') === 'OPEN', 'sale not open');
-        xchain.require(xchain.getBlockHeight() < parseInt(xchain.state.get('deadline')), 'sale closed (deadline passed)');
-
         var payTick      = xchain.state.get('payTick');
         var balance      = xchain.getBalance(xchain.getContractAddress(), payTick) || '0';
         var accountedPay = xchain.state.get('accountedPay');
@@ -333,12 +330,17 @@ module.exports = {
         xchain.require(!isAtLeastExact(xchain, '0', contributed), 'no payment received (DEPOSIT in the same BATCH)');
 
         var caller = xchain.getSourceAddress();
+        if (xchain.state.get('status') !== 'OPEN' ||
+            xchain.getBlockHeight() >= parseInt(xchain.state.get('deadline'))) {
+            xchain.emit.send({ destination: caller, tick: payTick, quantity: contributed });
+            return 'refunded: sale closed';
+        }
         var record = xchain.state.get('c:' + caller);
         var buyers = parseInt(xchain.state.get('buyers') || '0', 10);
         // Out of buyer slots: return a new buyer's whole payment, leaving accountedPay as it was.
         if (record === null && buyers >= MAX_BUYERS) {
             xchain.emit.send({ destination: caller, tick: payTick, quantity: contributed });
-            return;
+            return 'refunded: buyer limit';
         }
         var prior  = record || '0';
         var total  = xchain.math.add(prior, contributed);
@@ -358,7 +360,10 @@ module.exports = {
         var newRaised = xchain.math.add(raised, delta);
         // Refuse a raise past hardCap, compared exactly: a tolerant gate lets the claims
         // sum past the token's exact MAX_SUPPLY and strands the last claimer.
-        xchain.require(isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised), 'hard cap exceeded');
+        if (!isAtLeastExact(xchain, xchain.state.get('hardCap'), newRaised)) {
+            xchain.emit.send({ destination: caller, tick: payTick, quantity: contributed });
+            return 'refunded: hard cap';
+        }
 
         if (!xchain.math.isZero(accepted)) {
             if (record === null) xchain.state.set('buyers', String(buyers + 1));
@@ -447,6 +452,7 @@ module.exports = {
         xchain.require(!xchain.math.isZero(paid), 'nothing to refund');
 
         xchain.state.delete('c:' + caller); // zero out first (no double refund)
+        xchain.state.set('accountedPay', xchain.math.subtract(xchain.state.get('accountedPay'), paid));
 
         xchain.emit.send({
             destination: caller,
@@ -463,6 +469,8 @@ module.exports = {
         xchain.require(xchain.state.get('withdrawn') !== 'true', 'already withdrawn');
 
         xchain.state.set('withdrawn', 'true');
+        xchain.state.set('accountedPay', xchain.math.subtract(
+            xchain.state.get('accountedPay'), xchain.state.get('raised')));
         xchain.emit.send({
             destination: xchain.state.get('owner'),
             tick: xchain.state.get('payTick'),
