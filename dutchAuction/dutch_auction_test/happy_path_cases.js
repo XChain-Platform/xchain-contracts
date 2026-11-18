@@ -52,6 +52,14 @@ function registerPurchaseCases(context) {
         ]);
         assertBalance(context.h.ledger, 'bob', BID, '500'); // 1500 sent - 1000 charged = 500 back
     });
+}
+
+// Register the surplus-return case of a completed purchase.
+function registerSurplusReturnCase(context) {
+    const {
+        ADDR, BID, ITEM, SELLER, assertEmittedActions, assertSuccess, buy,
+        deployAuction, depositAndFund
+    } = context;
 
     it('returns item surplus with a settlement memo', async function () {
         await deployAuction(10);
@@ -100,6 +108,7 @@ function registerPriceFloorAndCancelCases(context) {
 function registerHappyPathCases(context) {
     describe('happy paths', function () {
         registerPurchaseCases(context);
+        registerSurplusReturnCase(context);
         registerPriceFloorAndCancelCases(context);
     });
 }

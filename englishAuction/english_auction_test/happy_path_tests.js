@@ -58,6 +58,14 @@ function registerBiddingTests(tests) {
         assertBalance(env.h.ledger, 'alice', BID, '50'); // refunded when outbid by bob
         assertBalance(env.h.ledger, 'bob', BID, '80'); // refunded when outbid by carol
     });
+}
+
+// Register the surplus-return case of a settled auction.
+function registerSurplusReturnTest(tests) {
+    const {
+        assertSuccess, assertEmittedActions, SELLER, ITEM, BID, ADDR, env,
+        deployAuction, depositAndFund, bid
+    } = tests;
 
     it('returns item surplus with a settlement memo', async function () {
         await deployAuction(3);
@@ -107,6 +115,7 @@ function registerItemReturnTests(tests) {
 module.exports = function registerHappyPathTests(tests) {
     describe('happy paths', function () {
         registerBiddingTests(tests);
+        registerSurplusReturnTest(tests);
         registerItemReturnTests(tests);
     });
 };

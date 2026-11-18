@@ -42,12 +42,38 @@ function makeDeployBig(ctx, kit) {
     };
 }
 
+// Register deploy-time rejections of malformed cap parameters.
+function registerInitRejectionTests(ctx) {
+    const { OWNER, PAY, SALE, CODE, XChainVM, E2EHarness, assert } = ctx;
+
+    it('initialize rejects a hardCap one base unit below softCap', async function () {
+        const b = new E2EHarness(XChainVM);
+        b.seedBalance(OWNER, 'XCHAIN', '1000000');
+        const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+            params: [OWNER, PAY, SALE, '1', '100000', '99999.99999999', '50', '8'] });
+        assert.strictEqual(res.success, false);
+        assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
+    });
+
+    // A softCap of 'Infinity' would otherwise finalize SUCCESS for any raise and strand every refund.
+    it('initialize rejects a non-finite softCap or hardCap', async function () {
+        for (const [soft, hard] of [['Infinity', '100'], ['100', 'Infinity'], ['100', 'NaN']]) {
+            const b = new E2EHarness(XChainVM);
+            b.seedBalance(OWNER, 'XCHAIN', '1000000');
+            const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
+                params: [OWNER, PAY, SALE, '1', soft, hard, '50', '8'] });
+            assert.strictEqual(res.success, false, 'softCap ' + soft + ' / hardCap ' + hard + ' deployed');
+            // The notation gate refuses it before any magnitude check runs.
+            assert(String(res.error).includes('must be a plain decimal'), 'got: ' + res.error);
+        }
+    });
+}
+
 // Pin exact caps: a tolerant lte (relTol 1e-12) lets a buy pass a 100000 cap by up
 // to 10 base units, so the claims exceed the exact MAX_SUPPLY and the last is stranded.
 function registerExactCapTests(ctx, kit) {
-    const { OWNER, B1, B2, ADDR, PAY, SALE, CODE, XChainVM, E2EHarness, assert,
-            assertSuccess, assertReverted, assertEmittedActions } = ctx;
-    const { deploy, buy, call, close } = kit;
+    const { B1, PAY, assertSuccess, assertReverted, assertEmittedActions } = ctx;
+    const { buy, call, close } = kit;
     const deployBig = makeDeployBig(ctx, kit);
 
     describe('exact cap comparisons (no mathjs tolerance)', function () {
@@ -83,27 +109,7 @@ function registerExactCapTests(ctx, kit) {
             assertEmittedActions(r, [{ action: 'SEND', params: { destination: B1, tick: PAY, quantity: '99999.99999999' } }]);
         });
 
-        it('initialize rejects a hardCap one base unit below softCap', async function () {
-            const b = new E2EHarness(XChainVM);
-            b.seedBalance(OWNER, 'XCHAIN', '1000000');
-            const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
-                params: [OWNER, PAY, SALE, '1', '100000', '99999.99999999', '50', '8'] });
-            assert.strictEqual(res.success, false);
-            assert(String(res.error).includes('hardCap must be >= softCap'), 'got: ' + res.error);
-        });
-
-        // A softCap of 'Infinity' would otherwise finalize SUCCESS for any raise and strand every refund.
-        it('initialize rejects a non-finite softCap or hardCap', async function () {
-            for (const [soft, hard] of [['Infinity', '100'], ['100', 'Infinity'], ['100', 'NaN']]) {
-                const b = new E2EHarness(XChainVM);
-                b.seedBalance(OWNER, 'XCHAIN', '1000000');
-                const res = await b.deploy({ code: CODE, deployer: OWNER, contractAddress: 'C:BTC:9',
-                    params: [OWNER, PAY, SALE, '1', soft, hard, '50', '8'] });
-                assert.strictEqual(res.success, false, 'softCap ' + soft + ' / hardCap ' + hard + ' deployed');
-                // The notation gate refuses it before any magnitude check runs.
-                assert(String(res.error).includes('must be a plain decimal'), 'got: ' + res.error);
-            }
-        });
+        registerInitRejectionTests(ctx);
     });
 }
 
