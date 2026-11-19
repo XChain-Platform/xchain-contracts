@@ -176,7 +176,7 @@ function payProposal(xchain, id, rec, height) {
     var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
     xchain.require(exceedsExactly(xchain, amount, '0'),
         'amount is below one unit of the tick');
-    var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0', '0');
     xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
 
     rec.status = 'EXECUTED';
@@ -200,7 +200,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.7.0'
+        version:     '1.7.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -293,7 +293,7 @@ module.exports = {
         requirePlainDecimal(xchain, amount, 'amount');
         xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
 
-        var held = xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0';
+        var held = xchain.math.add(xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0', '0');
         xchain.require(isAtLeastExact(xchain, held, xchain.state.get('min_propose')),
             'insufficient governance holdings to propose');
 

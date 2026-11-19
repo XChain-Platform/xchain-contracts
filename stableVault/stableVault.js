@@ -100,7 +100,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.5.0'
+        version:     '1.5.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -457,13 +457,13 @@ function setVault(xchain, addr, field, value) {
 // what the ledger has already accounted for. This is what a batched DEPOSIT
 // just delivered.
 function collDelta(xchain) {
-    var held = xchain.getBalance(xchain.getContractAddress(), xchain.state.get('collateralTick')) || '0';
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('collateralTick')) || '0', '0');
     return xchain.math.subtract(held, xchain.state.get('trackedColl'));
 }
 function stableDelta(xchain) {
     // trackedStable is structurally '0' (mint+send net out in the same run),
     // but subtracting it keeps the invariant explicit and future-proof.
-    var held = xchain.getBalance(xchain.getContractAddress(), xchain.state.get('stableTick')) || '0';
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('stableTick')) || '0', '0');
     return xchain.math.subtract(held, xchain.state.get('trackedStable'));
 }
 

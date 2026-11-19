@@ -107,7 +107,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.6.0'
+        version:     '1.6.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -186,7 +186,7 @@ module.exports = {
 
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
-        var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var held       = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Require the full itemAmount exactly: buy() and cancel() emit it verbatim, so a
         // dust-short custody arms an auction whose every buy() reverts on the item SEND.
         xchain.require(isAtLeastExact(xchain, held, itemAmount), 'insufficient item deposit');
@@ -221,7 +221,7 @@ module.exports = {
 
         var bidTick = xchain.state.get('bidTick');
         var price   = floorToDecimals(currentPrice(xchain), tickDecimals(xchain, bidTick));
-        var held    = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
+        var held    = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), bidTick) || '0', '0');
 
         // Refuse a price the grid floored to nothing (the constructor gates endPrice's
         // notation, never the grid). Same guard as treasury.js executeProposal()'s
@@ -282,7 +282,7 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('seller'), 'only the seller can cancel');
 
         var itemTick = xchain.state.get('itemTick');
-        var quantity = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var quantity = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
         // seller can no longer fund the auction they deployed. Exact, because gt reads

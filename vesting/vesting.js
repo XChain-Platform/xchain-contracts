@@ -101,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.5.0'
+        version:     '1.5.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -170,7 +170,9 @@ module.exports = {
 
         var tick  = xchain.state.get('tick');
         var total = xchain.state.get('total');
-        var held  = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var held  = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Require custody of the full total, compared exactly: a grant armed short
         // of `total` makes the final claim's SEND exceed custody and revert.
         xchain.require(isAtLeastExact(xchain, held, total), 'insufficient deposit');
@@ -196,7 +198,7 @@ module.exports = {
             'only the grantor can cancel');
 
         var tick = xchain.state.get('tick');
-        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Refuse an empty cancel so it cannot burn the INIT state for nothing.
         xchain.require(isPositiveExact(held), 'nothing to reclaim');
 

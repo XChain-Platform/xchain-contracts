@@ -123,7 +123,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.6.0'
+        version:     '1.6.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -500,9 +500,10 @@ function latestRound(xchain) {
 }
 
 // Contract's own balance of the bet tick. The single source of truth for
-// custody; caller-supplied amounts are never trusted.
+// custody; caller-supplied amounts are never trusted. math.add(x, '0') renders the
+// snapshot's exponent text ("5e-7") as the plain decimal an emitted amount must be.
 function heldBalance(xchain) {
-    return xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0';
+    return xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0', '0');
 }
 
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).

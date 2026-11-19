@@ -74,7 +74,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     abi: { version: 1, methods: {
@@ -148,7 +148,9 @@ module.exports = {
 
         var tick   = xchain.state.get('tick');
         var amount = xchain.state.get('amount');
-        var held   = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var held   = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
 
         // Require the full amount exactly; isAtLeastExact fails closed on a non-finite amount.
         xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient deposit');
@@ -335,7 +337,7 @@ function isPositiveExact(v) {
 // caller authorization first for the manual paths).
 function payout(xchain, payeeRole, terminalStatus) {
     var tick = xchain.state.get('tick');
-    var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
     // Test the balance exactly: gt reads any amount <= 1e-15 as zero, which would strand a
     // real dust deposit on an 18-decimal tick, an INIT cancel included.
     xchain.require(isPositiveExact(held), 'nothing to settle');

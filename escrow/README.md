@@ -28,7 +28,10 @@ undo the `DEPOSIT` before it, and the deposit stays in the contract's custody.
 The contract **never
 trusts a caller-supplied amount**; it reads its own balance with
 `xchain.getBalance(xchain.getContractAddress(), tick)`. That single habit is what
-makes custody contracts safe on XChain.
+makes custody contracts safe on XChain. The read can come back in exponent
+notation (`"5e-7"` below 0.000001, `"1e+21"` at 1e21), and an emitted amount must
+be a plain decimal, so the template passes it through `xchain.math.add(held, '0')`
+before sending it; a raw read forwarded as a quantity would strand dust custody.
 
 ## Lifecycle
 

@@ -89,7 +89,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -371,9 +371,10 @@ function readRound(xchain, coinPair, round) {
 }
 
 // Contract's own balance of the bet tick. The single source of truth for
-// custody; caller-supplied amounts are never trusted.
+// custody; caller-supplied amounts are never trusted. math.add(x, '0') renders the
+// snapshot's exponent text ("5e-7") as the plain decimal an emitted amount must be.
 function heldBalance(xchain) {
-    return xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0';
+    return xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0', '0');
 }
 
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).

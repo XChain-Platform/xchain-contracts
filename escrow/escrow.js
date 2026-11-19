@@ -64,7 +64,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: a buyer deposits tokens for a seller, and the funds are released, refunded, or reclaimed after a deadline only on an authorized instruction from the buyer, the seller, or the arbiter.',
-        version:     '1.4.0'
+        version:     '1.4.1'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -136,7 +136,9 @@ module.exports = {
 
         var tick   = xchain.state.get('tick');
         var amount = xchain.state.get('amount');
-        var held   = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var held   = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
 
         // Require custody of the full amount, compared exactly, so the payee is never
         // settled a dust margin short of the agreed terms.
@@ -169,7 +171,7 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('buyer'), 'caller not authorized for this action');
 
         var tick = xchain.state.get('tick');
-        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Test the balance exactly: gt reads any amount <= 1e-15 as zero, which would strand a
         // real dust deposit on an 18-decimal tick with no other way out of INIT.
         xchain.require(isPositiveExact(held), 'nothing to cancel');
@@ -212,7 +214,7 @@ function settle(xchain, allowedRoles, payeeRole, terminalStatus, requireDeadline
     }
 
     var tick = xchain.state.get('tick');
-    var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
     xchain.require(isPositiveExact(held), 'nothing to settle');
 
     // Mark terminal BEFORE emitting (defense in depth: the emission and this

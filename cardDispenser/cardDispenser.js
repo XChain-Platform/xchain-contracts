@@ -104,7 +104,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.4.1'
+        version:     '1.4.2'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -172,7 +172,9 @@ module.exports = {
         var unit    = xchain.state.get('unit');
 
         // --- Payment: delta of the contract's payTick balance since last draw ---
-        var curPay = xchain.getBalance(self, payTick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var curPay = xchain.math.add(xchain.getBalance(self, payTick) || '0', '0');
         var paid   = xchain.math.subtract(curPay, xchain.state.get('acctPay'));
         // Compare the payment exactly (price is a plain decimal, gated at deploy).
         xchain.require(isAtLeastExact(xchain, paid, price), 'underpaid');
@@ -224,7 +226,7 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('owner'), 'owner only');
         var tick = xchain.getInputParam(0);
         xchain.require(tick, 'tick required');
-        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Exact: gt reads any amount <= 1e-15 as zero, so dust on an 18-decimal tick could never be swept.
         xchain.require(isPositiveExact(held), 'nothing to withdraw');
         // A sweep of payTick empties it, so draw()'s watermark has to follow custody

@@ -11,9 +11,13 @@
 // comments and READMEs document it:
 //   - xchain.math: 64 significant digit BigNumber, every result a fixed
 //     notation string; gt/gte/lt/lte/eq tolerant by max(1e-12 x larger, 1e-15).
+//   - getBalance hands the contract the indexer's snapshot text, String() of a
+//     decimal.js value: exponent form below 1e-6 ("5e-7") and from 1e21 ("1e+21").
 //   - emissions are deferred: applied in order after the method returns, each
 //     emitted quantity normalised half-up to the tick's decimals at write time;
-//     a send or destroy beyond custody reverts the whole call.
+//     a send or destroy beyond custody reverts the whole call. An emitted amount
+//     that is not a plain decimal numeral reverts the call, as the indexer's
+//     emission amount-format rule does once armed.
 //   - any throw reverts state, balances and emissions together.
 //   - the sandbox replaces Date and Math.random with throwing stubs, so a
 //     template that reads wall-clock time or randomness fails its suite.
@@ -103,6 +107,27 @@ function makeMath() {
         compare: (a, b) => tolerantCompare(a, b),
         isZero: (a) => mathOperand(a).isZero()
     };
+}
+
+// The indexer builds the VM balance snapshot with String() on a decimal.js value,
+// whose default toExpNeg -7 / toExpPos 21 switch to exponent notation.
+function snapshotText(v) {
+    return String(M.bignumber(String(v)));
+}
+
+// The indexer's emission amount-format rule: an unsigned plain decimal numeral with
+// at most 42 significant integer digits, no exponent, sign, radix or empty half.
+const PLAIN_AMOUNT = /^[0-9]+(\.[0-9]+)?$/;
+const AMOUNT_MAX_INTEGER_DIGITS = 42;
+const EMISSION_AMOUNT_FIELDS = {
+    SEND: ['quantity'], MINT: ['quantity'], DESTROY: ['quantity'],
+    ISSUE: ['maxSupply', 'maxMint', 'mintSupply']
+};
+function requirePlainAmount(action, field, v) {
+    if (v === null || v === undefined || String(v) === '') return;
+    const s = String(v);
+    if (!PLAIN_AMOUNT.test(s) || s.split('.')[0].replace(/^0+/, '').length > AMOUNT_MAX_INTEGER_DIGITS)
+        throw new Error(action + ': invalid: ' + field + ' (format)');
 }
 
 // Half-up normalisation of an emitted amount onto a tick's decimal grid.
@@ -273,6 +298,7 @@ class Harness {
         const L = this.ledger;
         for (const a of actions) {
             const p = a.params;
+            for (const f of EMISSION_AMOUNT_FIELDS[a.action] || []) requirePlainAmount(a.action, f, p[f]);
             if (a.action === 'SEND') {
                 const q = roundHalfUp(p.quantity, L.decimals(p.tick));
                 if (!bn(q).gt(0)) throw new Error('SEND quantity must be positive: ' + p.quantity);
@@ -320,7 +346,7 @@ class Harness {
             getBlockHeight: () => L.blockHeight,
             getBlockTimestamp: () => L.blockTimestamp,
             getBlockHash: () => L.blockHash,
-            getBalance: (a, tick) => L.getBalance(a, tick),
+            getBalance: (a, tick) => snapshotText(L.getBalance(a, tick)),
             getTokenInfo: (tick) => (L.tokens[tick] && L.hasEntry(addr, tick)) ? clone(L.tokens[tick]) : null,
             getPollResult: (id) => (L.polls[id] === undefined ? null : clone(L.polls[id])),
             log: (m) => { self.log.push(m); },
@@ -360,6 +386,7 @@ function rng(seed) {
 
 module.exports = {
     available, Harness, loadContract, rng, M, bn, fixed, makeMath, roundHalfUp, STATE_LIMITS,
+    snapshotText, requirePlainAmount,
     MAX_MATH_INPUT_LENGTH,
     MODEL_START_HEIGHT, MODEL_START_TIMESTAMP
 };

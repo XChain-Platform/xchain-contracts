@@ -97,7 +97,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.5.2'
+        version:     '1.5.3'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -167,7 +167,9 @@ module.exports = {
 
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
-        var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var held       = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Require the full itemAmount exactly: settle() emits it verbatim, so a dust-short
         // custody arms an auction whose every settle() reverts with the winning bid held.
         xchain.require(isAtLeastExact(xchain, held, itemAmount), 'insufficient item deposit');
@@ -211,7 +213,7 @@ module.exports = {
         xchain.require(caller !== prevBidder, 'you are already the high bidder');
 
         var bidTick  = xchain.state.get('bidTick');
-        var held     = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
+        var held     = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), bidTick) || '0', '0');
         var highBid  = xchain.state.get('highBid');
         var newBid   = xchain.math.subtract(held, highBid);
 
@@ -246,7 +248,7 @@ module.exports = {
         var highBidder = xchain.state.get('highBidder');
         // fund() accepts custody at or above itemAmount; the seller receives every item
         // unit the winner does not, since no method can reach it after settlement.
-        var itemHeld   = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var itemHeld   = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         var itemSurplus = xchain.math.subtract(itemHeld, itemAmount);
 
         if (highBidder) {
@@ -280,7 +282,7 @@ module.exports = {
         xchain.require(!xchain.state.get('highBidder'), 'cannot cancel: a bid has already been placed');
 
         var itemTick = xchain.state.get('itemTick');
-        var quantity = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var quantity = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
         // seller can no longer fund the auction they deployed. Exact, because gt reads

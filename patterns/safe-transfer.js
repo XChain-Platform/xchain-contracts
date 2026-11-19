@@ -19,9 +19,13 @@
 //     }
 //   };
 
-// The contract's own balance of `tick`, defaulting to '0' for an untracked tick.
+// The contract's own balance of `tick`, defaulting to '0' for an untracked tick, in
+// fixed notation. getBalance hands back the indexer's snapshot text, which is exponent
+// form below 1e-6 ("5e-7") and from 1e21 ("1e+21"); an emitted amount must be a plain
+// decimal, so a raw read forwarded as a quantity reverts the EXECUTE and strands dust.
+// math.add(x, '0') is exact here and always returns fixed notation.
 function heldBalance(xchain, tick) {
-    return xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+    return xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
 }
 
 // Throw unless the contract holds at least `amount` of `tick`, compared exactly.
