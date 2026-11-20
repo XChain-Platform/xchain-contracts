@@ -87,6 +87,9 @@ EXECUTE(contract, "settle")                                           # anyone, 
 - **Maker takes their own bet.** `accept()` rejects
   `taker === maker` (a self-match would let the maker void or settle at will
   with no counterparty at risk).
+- **Unpayable party.** Deploy rejects a contract-derived maker and `accept()`
+  rejects a contract caller as taker. SEND cannot pay those addresses, so
+  storing one would permanently block winner and refund paths.
 - **Sniping an open bet after the outcome is known.** Settlement is a pure
   function of consensus history, so the instant the settle round publishes the
   winner is public. `accept()` therefore requires that round to be still

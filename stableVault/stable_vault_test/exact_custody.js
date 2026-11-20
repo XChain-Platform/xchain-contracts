@@ -74,7 +74,6 @@ function registerRepayExcessTest(ctx) {
         const result = await repay(ALICE, '1000000.00000001');
         assertSuccess(result);
         ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
-            ['DESTROY', '1000000'],
             ['SEND', '0.00000001']
         ]);
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
@@ -112,12 +111,10 @@ function registerDustDeltaTests(ctx) {
             assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', DUST);
             const result = await repay(ALICE, DUST);
             assertSuccess(result);
-            ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
-                ['DESTROY', DUST]
-            ]);
+            ctx.assert.deepStrictEqual(result.emittedActions, []);
             assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
             assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
-            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '1000000000');
         });
     });
 }

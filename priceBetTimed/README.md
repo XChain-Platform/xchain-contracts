@@ -139,6 +139,9 @@ enforced at deploy, memo-carrying payouts so a recipient's memo requirement
 cannot block a refund, deferred-emission reentrancy model). The timestamp
 translation adds its own surface:
 
+- **Unpayable party.** Deploy rejects a contract-derived maker and `accept()`
+  rejects a contract caller as taker because SEND cannot pay either address.
+
 - **Spot-price timing discretion.** Settling on `getPrice()` would let the
   first caller pick the moment. The deciding round is *the first finalized
   round with timestamp >= settleTime*, a pure function of consensus history:

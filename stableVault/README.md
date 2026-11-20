@@ -1,17 +1,17 @@
 # stableVault: a mini-MakerDAO (over-collateralized stablecoin vaults)
 
 A single-collateral stablecoin engine. Anyone deposits a collateral token
-into a personal vault; against it the **contract mints its own stable token**
-(`emit.issue` at deploy, `emit.mint` + `emit.send` on borrow) as debt, as long
+into a personal vault; against it the contract lends its stable token from a
+pre-minted, mint-locked inventory as debt, as long
 as the vault stays over-collateralized against the PRICE oracle:
 
 ```
 collateral * price * 100  >=  debt * minRatioPct
 ```
 
-Repaying burns the stable (`emit.destroy`). If the price falls and a vault
+Repaying returns stable to inventory. If the price falls and a vault
 drops below the minimum ratio, **anyone** can liquidate it: the liquidator's
-stable covers the full debt (burned) and they seize collateral worth
+stable covers the full debt and returns to inventory while they seize collateral worth
 `debt * (100 + liqBonusPct)%` at the oracle price, capped at the vault's
 collateral. Leftover collateral still belongs to the vault owner.
 
@@ -23,7 +23,7 @@ fails does not undo the `DEPOSIT` before it: the tokens stay in custody untracke
 and the next caller's delta credits them. A DEPOSIT carries no sender, so the
 contract attributes
 by **custody delta**: it tracks the totals it has accounted for
-(`trackedColl`/`trackedStable`) and credits the caller of the batched EXECUTE
+(`trackedColl`/`stableInventory`) and credits the caller of the batched EXECUTE
 with `actual custody − tracked total`. The on-chain balance is the only source
 of truth; caller-supplied funding amounts are never trusted.
 
@@ -58,12 +58,12 @@ of truth; caller-supplied funding amounts are never trusted.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(collateralTick, stableTick, coinPair, minRatioPct, liqBonusPct, maxSnapshotAge, stableDecimals)` | deployer | Immutable terms; `emit.issue`s the stable with the contract as issuer, on the declared decimal grid. |
+| `initialize(collateralTick, stableTick, coinPair, minRatioPct, liqBonusPct, maxSnapshotAge, stableDecimals)` | deployer | Immutable terms; pre-mints the full stable supply into custody and locks both mint paths. |
 | `deposit()` | anyone (BATCH after collateral DEPOSIT) | Credits the caller's vault with the custody delta. |
-| `borrow(amount)` | vault owner | Ratio check at the fresh price, then `emit.mint` + `emit.send`. |
-| `repay()` | vault owner (BATCH after stable DEPOSIT) | Burns up to the debt, refunds any excess. |
+| `borrow(amount)` | vault owner | Ratio check at the fresh price, then sends from stable inventory. |
+| `repay()` | vault owner (BATCH after stable DEPOSIT) | Returns up to the debt to inventory and refunds any excess. |
 | `withdraw(amount)` | vault owner | Blocked below the minimum ratio; oracle-free when debt is 0. |
-| `liquidate(vaultOwner)` | anyone (BATCH after stable DEPOSIT ≥ debt) | Under-water vaults only; burns the debt, pays collateral + bonus. |
+| `liquidate(vaultOwner)` | anyone (BATCH after stable DEPOSIT ≥ debt) | Under-water vaults only; returns debt to inventory and pays collateral plus bonus. |
 | `vault(addr)` / `info()` | anyone | JSON views of a vault / the system. |
 
 `borrow(amount)` and `withdraw(amount)` require `amount` to be a **plain
@@ -86,12 +86,8 @@ once per second.
 
 `stableDecimals` (optional, default `8`) is the decimal grid of the stable this
 contract issues, and gets the same integer-shape check in `[0, 18]`. It is a
-deploy-time parameter rather than a ledger read on purpose. `getTokenInfo` is a
-lookup into a snapshot the indexer builds only from the pre-action balances of
-the caller and the contract, and the vault never custodies its own stable
-(`initialize` issues it with no `MINT_SUPPLY`, and `borrow` is the only source
-of it in existence), so the stable's metadata is structurally absent there and a
-ledger-derived grid would revert every borrow. `initialize` therefore declares
+deploy-time parameter rather than a ledger read on purpose. It remains a
+constructor term and not a mutable ledger dependency. `initialize` declares
 the grid on the `emit.issue` (ISSUE defaults decimals to `0` and locks them once
 supply exists) and stores the same value for `borrow` to floor against. The
 collateral tick keeps its ledger-derived decimals: the contract really does hold
@@ -99,8 +95,22 @@ that one.
 
 ## On-chain caveats (learned from the e2e run)
 
-- **Declare `maxSupply`** in the emitted ISSUE: an unset cap reads as 0 and
-  the indexer rejects every subsequent MINT.
+- **Lock public minting.** XChain MINT is not issuer-gated. The ISSUE therefore
+  pre-mints the full cap into contract custody and sets `lockMint` and
+  `lockMintSupply`; borrow distributes only that inventory. The ledger SUPPLY
+  of the stable therefore stays at the cap: read outstanding stable from
+  `info().totalDebt`, not from SUPPLY. Vaults deployed from a revision before
+  2.0.0 left MINT public and should be redeployed.
+- **The deployer can still WITHDRAW custody where owner WITHDRAW is
+  allowed.** A raw `WITHDRAW` moves a contract's custody to its deployer
+  without running contract code. From the `OWNER_WITHDRAW_OPT_IN` activation a
+  contract that does not declare `meta.ownerWithdraw` (this one does not)
+  refuses it, but on a network where that rule was not active at the deploy
+  block the deployer can take borrowers' collateral and the pre-minted stable
+  inventory. That stable is unbacked, and while custody holds less stable than
+  `stableInventory` the gap absorbs the next deposits, so `repay()` and
+  `liquidate()` credit less than was sent or revert. Users of such a vault are
+  trusting the deployer.
 - **Emitted amounts are normalized to the tick's decimals** at the ledger. A
   fractional amount (e.g. `2.75` of a 0-decimals collateral) gets rounded in
   the actual transfer, so a contract that booked the exact figure would drift
@@ -109,16 +119,12 @@ that one.
   any ratio check, book write, or emission, so the indexer's normalization is a
   numeric no-op and custody == books holds exactly. Any new amount-bearing
   method must do the same.
-- MINT on XChain is fair-mint flavored (caps and windows, not issuer-gated):
-  on a real network, others could also MINT the stable tick within
-  `maxSupply`. A production deployment would gate minting (allowList) or
-  pre-mint into contract custody at ISSUE time.
 
 ## Attacks we considered
 
 - **Caller lies about funding.** `deposit()`, `repay()`, and `liquidate()`
   never trust a caller-supplied amount: the credited amount is the custody
-  delta (`actual balance - trackedColl/trackedStable`). You cannot be
+  delta (`actual balance - trackedColl/stableInventory`). You cannot be
   credited collateral, repay debt, or cover a liquidation with tokens the
   contract does not actually hold.
 - **Un-BATCHed DEPOSIT claimed by a stranger.** A DEPOSIT without an
@@ -173,10 +179,9 @@ that one.
   custody more than the books, a pooled shortfall the last full-balance
   withdrawal would eat. Flooring makes the indexer's normalization a numeric
   no-op, so custody == books holds exactly on all three paths.
-- **Uncapped stable supply.** The emitted ISSUE declares `maxSupply`
-  (an unset cap reads as 0 and the indexer rejects every MINT). Note the
-  fair-mint caveat below: on a real network others could MINT the stable
-  tick within the cap; a production deployment gates minting.
+- **Outside MINT and cap exhaustion.** The full capped supply is pre-minted to
+  custody with both mint paths locked. An outside address cannot create
+  uncollateralized stable or fill the remaining cap ahead of borrowers.
 - **Double payout / reentrancy.** Books (vault debt/collateral, totals,
   tracked custody) are written before the emissions, and emissions are
   deferred and applied atomically with the state writes after the method

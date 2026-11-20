@@ -23,11 +23,10 @@
 //
 // A seller locks a quantity of `itemTick` in this contract. Bidders compete in
 // `bidTick`; every new bid must strictly exceed the current high bid, and the
-// PREVIOUS high bidder is refunded immediately (in the same EXECUTE that placed
-// the new bid) - nobody's funds sit idle mid-auction except the current leader's.
-// After `deadlineBlocks` from funding, anyone can settle(): the item goes to the
-// high bidder and the winning bid goes to the seller, or (no bids at all) the
-// item returns to the seller.
+// PREVIOUS high bidder is refunded in the same EXECUTE, so only the leader's
+// funds sit idle. After `deadlineBlocks` from funding, anyone can settle(): the
+// item goes to the high bidder and the bid to the seller, or the item returns
+// to the seller when nobody bid.
 //
 // CUSTODY MODEL (read this before forking)
 //
@@ -40,30 +39,25 @@
 //
 //     BATCH( DEPOSIT(auction, BID_TICK, amount), EXECUTE(auction, "bid") )
 //
-// A BATCH is NOT atomic: its sub-actions settle independently, so a rejected bid's
-// DEPOSIT is not rolled back (see the README, "A rejected bid's DEPOSIT is not
-// rolled back", and the test that pins it).
+// A BATCH is NOT atomic, so a rejected bid's DEPOSIT is not rolled back (README,
+// "A rejected bid's DEPOSIT is not rolled back", and the test that pins it).
 //
-// bid() never trusts a caller-supplied amount. Because every out-bid deposit is
-// refunded in the SAME execution that supersedes it, the contract's bidTick
-// balance is always exactly the current high bid; a new bid's size is read as
-// the growth in that balance since the last bid (balance - highBid), the same
-// delta-accounting idiom the crowdsale template uses for buy().
+// bid() never trusts a caller-supplied amount. Every out-bid deposit is refunded
+// in the execution that supersedes it, so the bidTick balance always equals the
+// high bid and a new bid's size is the growth past it (balance - highBid), the
+// delta-accounting idiom crowdsale uses for buy().
 // ---------------------------------------------------------------------------
 
-// Upper bound for the deadline constructor param. A sanity ceiling, not a
-// protocol limit: fund() adds this window to a plain JS block height, so the
-// point is to keep a fat-fingered constructor term inside the exactly-
-// representable integer range rather than to constrain a real auction.
-// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
-// ceiling escrow.js, treasury.js and patterns/validation.js use.
+// Sanity ceiling for the deadline constructor term, not a protocol limit:
+// fund() adds it to a plain JS block height, so it keeps a fat-fingered term in
+// the exactly-representable integer range. 1e6 blocks (~19 years at 10-minute
+// blocks), the same ceiling escrow.js, treasury.js and patterns/validation.js use.
 var MAX_WINDOW_BLOCKS = 1000000;
 var SEND_MEMO = 'englishAuction settlement';
 
-// Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
-// whether an amount is already on the grid (floor numerically equals value), never to rewrite
-// the seller's terms. Same helper and rationale as
-// dutchAuction.js/vesting.js/crowdsale.js/amm.js:floorToDecimals.
+// Quantise an amount DOWN onto a tick's decimal grid. Used only to ASK whether an
+// amount is on the grid, never to rewrite the seller's terms. Same helper and
+// rationale as dutchAuction.js/vesting.js/crowdsale.js/amm.js:floorToDecimals.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -78,10 +72,9 @@ function floorToDecimals(value, decimals) {
 }
 
 // Decimals of a tick, read from the ledger snapshot. Mirrors
-// dutchAuction.js/vesting.js/amm.js:tickDecimals; requires the token info to be
-// readable (same VM_BALANCE_TOKENINFO gate getBalance rides on, and the indexer
-// builds both from ONE snapshot over SOURCE + the contract address, so a tick
-// this contract holds a balance of always carries its info).
+// dutchAuction.js/vesting.js/amm.js:tickDecimals. The indexer builds balances and
+// token info from ONE snapshot over SOURCE and the contract address, so a tick
+// this contract holds always carries its info.
 function tickDecimals(xchain, tick) {
     var info = xchain.getTokenInfo(tick);
     xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
@@ -97,7 +90,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.5.3'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -124,6 +117,7 @@ module.exports = {
         var deadline    = xchain.getInputParam(5);
 
         xchain.require(seller, 'seller required');
+        requirePayableAddress(xchain, seller, 'seller');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
         // Gate the NOTATION of itemAmount before any magnitude check reads it, and
@@ -203,6 +197,7 @@ module.exports = {
         xchain.require(xchain.getBlockHeight() < parseInt(xchain.state.get('deadline')), 'bidding closed (deadline passed); call settle()');
 
         var caller = xchain.getSourceAddress();
+        requirePayableAddress(xchain, caller, 'bidder');
         var prevBidder = xchain.state.get('highBidder');
         // Deliberately simple: an existing leader cannot raise their own bid,
         // because doing so would refund-then-replace their own stake with just
@@ -307,6 +302,18 @@ module.exports = {
         });
     }
 };
+
+// Stored payees must be SEND destinations. Contract callers contain ':' while base58
+// and bech32 addresses are alphanumeric, so a RegExp-free character walk catches them.
+function requirePayableAddress(xchain, value, label) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length > 0;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, label + ' must be a plain address that can receive SEND');
+}
 
 // Require a plain fixed-notation decimal: digits and at most one interior decimal
 // point, no exponent, sign or radix prefix. The magnitude checks in initialize()

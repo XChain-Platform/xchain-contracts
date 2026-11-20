@@ -23,16 +23,21 @@ const registerDeployValidationTests = require('./stable_vault_test/deploy_valida
 const registerEmptyTokenInfoTests = require('./stable_vault_test/empty_token_info');
 const registerExactCustodyTests = require('./stable_vault_test/exact_custody');
 const registerWithheldOraclePriceTests = require('./stable_vault_test/withheld_oracle_prices');
+const registerMintLockTests = require('./stable_vault_test/mint_lock');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
+const INDEXER_DIR = path.join(__dirname, '..', '..', 'xchain-indexer');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
     assertContractBalance, assertContractState;
+let mintValidation, issueSupplyRules;
 try {
     XChainVM = require(path.join(VM_DIR, 'src', 'index.js'));
     ({ E2EHarness } = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'harness.js')));
     ({ assertSuccess, assertReverted, assertBalance, assertContractBalance,
        assertContractState }
        = require(path.join(VM_DIR, 'test', 'e2e', 'helpers', 'assertions.js')));
+    mintValidation = require(path.join(INDEXER_DIR, 'src', 'actions', 'mint', 'validate.js'));
+    issueSupplyRules = require(path.join(INDEXER_DIR, 'src', 'actions', 'issue', 'supply_rules.js'));
 } catch (e) { XChainVM = null; console.log('Skipping stableVault tests (xchain-vm harness not available, need adjacent xchain-vm install on Node 22)'); }
 
 const CODE = fs.readFileSync(path.join(__dirname, 'stableVault.js'), 'utf8');
@@ -47,6 +52,7 @@ const PAIR   = 'GOLD/USD';
 const RATIO  = '150';       // 150% minimum collateralization
 const BONUS  = '10';        // 10% liquidation bonus
 const MAXAGE = '10';        // oracle freshness window, seconds
+const STABLE_MAX_SUPPLY = '1000000000';
 
 function makeHelpers(getH) {
     function setPrice(price, age) {
@@ -87,10 +93,12 @@ function makeDeployVault(setH) {
         // indexer does and getTokenInfo (used by liquidate's grid-flooring) works.
         h.ledger.setTokenDecimals(COLL, 8);
         h.ledger.setTokenDecimals(STABLE, Number(stableDecimals));
-        await h.deploy({
+        const deployed = await h.deploy({
             code: CODE, deployer: ALICE, contractAddress: ADDR,
             params: [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE, stableDecimals]
         });
+        h.ledger.creditContractBalance(ADDR, STABLE, STABLE_MAX_SUPPLY);
+        return deployed;
     };
 }
 
@@ -110,11 +118,10 @@ function registerDustPayoutTests(ctx) {
             const result = await repay(ALICE, '1');
             assertSuccess(result);
             assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
-                ['DESTROY', '0.000000000000000001'],
                 ['SEND', '0.999999999999999999']
             ]);
             assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
-            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+            assertContractBalance(ctx.h.ledger, ADDR, STABLE, STABLE_MAX_SUPPLY);
         });
 
         it('routes both excess payouts through the exact comparison', function () {
@@ -134,10 +141,10 @@ function registerDustPayoutTests(ctx) {
 
             const result = await liquidate(LIQ, ALICE, '1.000000000000000001');
             assertSuccess(result);
-            assert.strictEqual(result.emittedActions[2].action, 'SEND');
-            assert.strictEqual(result.emittedActions[2].params.quantity, '0.000000000000000001');
+            assert.strictEqual(result.emittedActions[1].action, 'SEND');
+            assert.strictEqual(result.emittedActions[1].params.quantity, '0.000000000000000001');
             assertBalance(ctx.h.ledger, LIQ, STABLE, '0.000000000000000001');
-            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+            assertContractBalance(ctx.h.ledger, ADDR, STABLE, STABLE_MAX_SUPPLY);
         });
     }
 
@@ -155,6 +162,7 @@ function registerDustPayoutTests(ctx) {
         get h() { return h; },
         set h(v) { h = v; },
         assert, XChainVM, E2EHarness, CODE, ALICE, BOB, LIQ, ADDR, COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE,
+        STABLE_MAX_SUPPLY, mintValidation, issueSupplyRules,
         assertSuccess, assertReverted, assertBalance, assertContractBalance, assertContractState,
         deployVault: makeDeployVault(v => { h = v; }),
         ...makeHelpers(() => h)
@@ -167,6 +175,7 @@ function registerDustPayoutTests(ctx) {
     registerEmptyTokenInfoTests(ctx);
     registerExactCustodyTests(ctx);
     registerWithheldOraclePriceTests(ctx);
+    registerMintLockTests(ctx);
 
     registerDustPayoutTests(ctx);
 });

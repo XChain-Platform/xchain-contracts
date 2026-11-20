@@ -133,8 +133,9 @@ function registerDuplicateHashInPageAttacks(context) {
     it('repeated __proto__ and constructor hashes in one page are each credited once', async function () {
         const r = await dupPage([{ txHash: '__proto__', quantity: '5' }, { txHash: '__proto__', quantity: '5' },
             { txHash: 'constructor', quantity: '1' }, { txHash: 'constructor', quantity: '1' }]);
-        assert.deepStrictEqual(sentQuantities(r.cb), ['6']);
-        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '6');
+        // Not 64-hex tx_hashes: every row is dropped, so none is credited more than once.
+        assert.deepStrictEqual(sentQuantities(r.cb), []);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '0');
     });
 
     it('two distinct tx_hashes in one page are both credited and the same page replays as a no-op', async function () {

@@ -75,6 +75,9 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
 
 - **Caller lies about the deposit.** `fund()` and `bid()` both read the
   contract's own balance via `getBalance`, never a caller-supplied amount.
+- **Unpayable bidder or seller.** Deploy rejects a contract-derived seller and
+  `bid()` rejects a contract caller. Such addresses contain `:` and cannot be a
+  SEND destination, so storing one would make refunds or settlement revert.
 - **Bid that doesn't actually beat the leader.** `bid()` requires the deposit
   delta to be at least `minBid` and strictly greater than the current
   `highBid`.

@@ -54,6 +54,7 @@ const RAW_SCALE = 40;
 
 // Reference eligibility for a quantity: plain fixed notation only (RegExp is fine in a test).
 const PLAIN_DECIMAL = /^[0-9]+(\.[0-9]+)?$/;
+const HEX_TX_HASH = /^[0-9a-fA-F]{64}$/;
 
 const BAD_SPELLINGS = ['1.5e-8', '1E3', '1e+21', '+1.5', '-5', '.5', '5.', ' 5', '5 ', '0x10', '0b101',
     '0o17', '1_000', '', 'NaN', 'Infinity', '-Infinity', '1.2.3', '1,5', '\t7', '٣'];
@@ -90,7 +91,7 @@ function toUnits(text, decimals) {
 function referenceEligible(row) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
     if (row.asset !== CP_ASSET || row.source !== HOLDER || row.status !== 'valid') return false;
-    if (typeof row.tx_hash !== 'string' || row.tx_hash.length === 0) return false;
+    if (typeof row.tx_hash !== 'string' || !HEX_TX_HASH.test(row.tx_hash)) return false;
     // A JSON number was already rounded to a double by JSON.parse, so only a string is creditable.
     if (typeof row.quantity !== 'string') return false;
     return PLAIN_DECIMAL.test(row.quantity);
@@ -130,7 +131,7 @@ function pickTxHash(rng, run, usedOnPage) {
         if (candidates.length > 0) return rng.pick(candidates);
     }
     run.txCounter += 1;
-    return 'fz' + SEED.toString(16) + 'x' + String(run.txCounter).padStart(56, '0');
+    return SEED.toString(16).padStart(8, '0') + run.txCounter.toString(16).padStart(56, '0');
 }
 
 // Build one feed row, then apply at most one kind of structural noise to it.
@@ -232,6 +233,12 @@ function checkState(state, page, expected, run, where) {
     const perHolder = state['claimedTotal:' + HOLDER] || '0';
     assert.strictEqual(toUnits(perHolder, RAW_SCALE), run.totalScaled, where + ': claimedTotal disagrees with totalClaimed');
     assert.ok(toUnits(state.totalClaimed, 0) <= BigInt(MAX_SUPPLY), where + ': totalClaimed passed maxSupply');
+    // The key ceilings are only as good as the counters behind them.
+    const keys = Object.keys(state);
+    const live = prefix => String(keys.filter(k => k.indexOf(prefix) === 0).length);
+    assert.strictEqual(state.creditKeys, String(Number(live('burned:')) + Number(live('claimedTotal:'))),
+        where + ': creditKeys drifted from the live burned and claimant keys');
+    assert.strictEqual(state.pendingCount, live('pending:'), where + ': pendingCount drifted from the live pending keys');
 }
 
 // Run one requestClaim -> onClaim round and check every property against the reference.

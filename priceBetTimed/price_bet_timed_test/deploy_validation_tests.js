@@ -96,6 +96,12 @@ module.exports = function registerDeployValidationTests(context) {
             assert.strictEqual(side.success, false, 'side=HIGHER should revert in initialize');
         });
 
+        it('rejects a contract address as maker', async function () {
+            const r = await deployWith(['C:BTC:7', PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), '5']);
+            assert.strictEqual(r.success, false);
+            assert.ok(String(r.error).includes('plain address'));
+        });
+
         registerNotationTests(context, deployWith);
 
         registerIntegerParamTests(context, deployWith);

@@ -23,15 +23,15 @@
 //
 // A single-collateral stablecoin engine, MakerDAO-style. Anyone opens a vault
 // by depositing the collateral token; against that collateral the CONTRACT
-// mints its own stable token (emit.mint into custody, emit.send to the
-// borrower) as debt, as long as the vault stays over-collateralized against
+// lends its stable token from a pre-minted, mint-locked inventory as debt, as
+// long as the vault stays over-collateralized against
 // the PRICE oracle:
 //
 //     collateral * price * 100  >=  debt * minRatioPct
 //
-// Repaying burns the stable (emit.destroy). If the oracle price falls and a
+// Repaying returns stable to the inventory. If the oracle price falls and a
 // vault drops below the minimum ratio, ANYONE can liquidate it: the
-// liquidator deposits stable covering the full debt (burned) and seizes
+// liquidator deposits stable covering the full debt and seizes
 // collateral worth debt * (100 + liqBonusPct)% at the oracle price. Whatever
 // collateral is left after the seizure still belongs to the vault owner.
 //
@@ -48,7 +48,7 @@
 //
 // A DEPOSIT carries no sender attribution, so the contract attributes by
 // DELTA: it tracks the total collateral and stable it has accounted for
-// (trackedColl / trackedStable) and credits the caller of the batched EXECUTE
+// (trackedColl / stableInventory) and credits the caller of the batched EXECUTE
 // with (actual custody - tracked total). The on-chain balance is the source
 // of truth; caller-supplied amounts are never trusted for funding.
 //
@@ -77,6 +77,22 @@
 // deployed from a revision that measured maxSnapshotAge in blocks must be
 // redeployed once the activation is armed.
 //
+// SUPPLY MODEL. XChain MINT is not issuer-gated, so initialize() pre-mints the
+// whole stable cap into this contract's custody with both mint paths locked,
+// borrow() pays out of that inventory by SEND, and repay() and liquidate()
+// return covered stable to it. The ledger SUPPLY of the stable stays at the
+// cap; outstanding stable is info().totalDebt, not SUPPLY. A vault deployed
+// from a revision before 2.0.0 left MINT public and must be redeployed.
+//
+// DEPLOYER WITHDRAW. A raw WITHDRAW moves custody to the deployer without
+// running this code. This template does not declare meta.ownerWithdraw, so
+// from the OWNER_WITHDRAW_OPT_IN activation the deployer is refused; on a
+// network where that rule was not active at the deploy block, the deployer can
+// take borrowers' collateral and stable inventory alike. Stable taken that way
+// is unbacked, and while custody holds less stable than stableInventory the
+// gap absorbs the next deposits, so repay() and liquidate() credit less than
+// was sent or revert. Users of such a vault are trusting the deployer.
+//
 // NOT PRODUCTION-GRADE ON PURPOSE. A real system adds stability fees, partial
 // liquidations, auctions, debt ceilings, and multiple collateral types. This
 // template shows the mechanism in its smallest deterministic form.
@@ -91,6 +107,7 @@ var MAX_AGE_SECONDS = 31536000;
 // Each admitted vault may use one collateral key and one debt key. Together
 // with initialize() state, this ceiling stays below the VM's 10,000-key cap.
 var MAX_VAULTS = 4900;
+var STABLE_MAX_SUPPLY = '1000000000';
 
 module.exports = {
 
@@ -99,8 +116,8 @@ module.exports = {
     // meta.version must be bumped on any edit to this source (see CONTRIBUTING.md).
     meta: {
         name:        'Stable Vault',
-        description: 'Over-collateralized single-collateral stablecoin engine: vault owners mint the contract stable token against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '1.5.1'
+        description: 'Over-collateralized single-collateral stablecoin engine: vault owners borrow from a pre-minted, mint-locked stable inventory against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
+        version:     '2.0.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -108,10 +125,10 @@ module.exports = {
     // read by the VM or indexer, and not verified against the code.
     abi: { version: 1, methods: {
         deposit:   { summary: 'Credit the caller\'s vault with the collateral custody delta (BATCH after a collateral DEPOSIT)', params: [] },
-        borrow:    { summary: 'Mint and send stable against the vault, refused below the minimum ratio at the fresh oracle price', params: [ { name: 'amount', type: 'amount' } ] },
-        repay:     { summary: 'Burn up to the vault\'s debt and refund any excess (BATCH after a stable DEPOSIT)', params: [] },
+        borrow:    { summary: 'Send stable from locked inventory against the vault, refused below the minimum ratio at the fresh oracle price', params: [ { name: 'amount', type: 'amount' } ] },
+        repay:     { summary: 'Return up to the vault\'s debt to inventory and refund any excess (BATCH after a stable DEPOSIT)', params: [] },
         withdraw:  { summary: 'Return collateral to the vault owner, refused below the minimum ratio; oracle-free when the debt is 0', params: [ { name: 'amount', type: 'amount' } ] },
-        liquidate: { summary: 'Burn an under-water vault\'s debt and take its collateral plus the bonus (BATCH after a stable DEPOSIT covering the debt)', params: [ { name: 'vaultOwner', type: 'address' } ] },
+        liquidate: { summary: 'Return an under-water vault\'s debt to inventory and take its collateral plus the bonus (BATCH after a stable DEPOSIT covering the debt)', params: [ { name: 'vaultOwner', type: 'address' } ] },
         vault:     { summary: 'Read one address\'s collateral and debt', params: [ { name: 'addr', type: 'address' } ], view: true },
         info:      { summary: 'Read the vault system configuration and totals', params: [], view: true }
     } },
@@ -179,22 +196,21 @@ module.exports = {
         // see the note above tickDecimals().
         xchain.state.set('stableDecimals', stableGrid);
         xchain.state.set('trackedColl', '0');
-        xchain.state.set('trackedStable', '0');
+        xchain.state.set('stableInventory', STABLE_MAX_SUPPLY);
         xchain.state.set('totalDebt', '0');
         xchain.state.set('vaults', '0');
 
-        // Register the stable token with this contract as its issuer. Every
-        // unit in existence is minted here against collateral and burned on
-        // repay/liquidation -- the contract IS the monetary policy. maxSupply
-        // must be declared: the indexer rejects any MINT on a token whose cap
-        // is unset (it reads as 0), and decimals must be declared here too: ISSUE
-        // defaults them to 0 and locks them once supply exists, so an undeclared
-        // grid would make every borrow() mint a whole-unit token while the debt
-        // books carry fractions.
+        // Pre-mint the full supply into custody and lock both mint paths.
+        // Outstanding stable is max supply minus stableInventory while custody
+        // still holds the inventory (see DEPLOYER WITHDRAW above); ledger SUPPLY
+        // stays fixed at the cap.
         xchain.emit.issue({
             tick: stableTick,
-            maxSupply: '1000000000',
-            decimals: stableGrid
+            maxSupply: STABLE_MAX_SUPPLY,
+            decimals: stableGrid,
+            mintSupply: STABLE_MAX_SUPPLY,
+            lockMint: '1',
+            lockMintSupply: '1'
         });
     },
 
@@ -224,7 +240,7 @@ module.exports = {
         xchain.state.set('trackedColl', xchain.math.add(xchain.state.get('trackedColl'), delta));
     },
 
-    // borrow(amount): mint `amount` of the stable against the caller's vault.
+    // borrow(amount): send `amount` of stable inventory against the caller's vault.
     // The vault must remain at/above the minimum ratio AFTER the new debt.
     borrow: function (xchain) {
         var addr   = xchain.getSourceAddress();
@@ -252,13 +268,13 @@ module.exports = {
         var coll    = getVault(xchain, addr, 'coll');
         var newDebt = xchain.math.add(getVault(xchain, addr, 'debt'), amount);
         xchain.require(ratioOk(xchain, coll, newDebt, price), 'vault would be under-collateralized');
+        var inventory = xchain.state.get('stableInventory');
+        xchain.require(isAtLeastExact(xchain, inventory, amount), 'stable supply exhausted');
 
         setVault(xchain, addr, 'debt', newDebt);
         xchain.state.set('totalDebt', xchain.math.add(xchain.state.get('totalDebt'), amount));
+        xchain.state.set('stableInventory', xchain.math.subtract(inventory, amount));
 
-        // Mint into custody, then pay out. Net custody change of the stable
-        // is zero, so trackedStable is untouched.
-        xchain.emit.mint({ tick: xchain.state.get('stableTick'), quantity: amount });
         xchain.emit.send({
             destination: addr,
             tick: xchain.state.get('stableTick'),
@@ -266,7 +282,7 @@ module.exports = {
         });
     },
 
-    // repay(): burn the stable that arrived in this batch against the
+    // repay(): return the stable that arrived in this batch to inventory against the
     // caller's debt; anything beyond the debt is returned. BATCHed after a
     // DEPOSIT of the stable. Always allowed (no oracle involved).
     repay: function (xchain) {
@@ -282,10 +298,8 @@ module.exports = {
 
         setVault(xchain, addr, 'debt', xchain.math.subtract(debt, burned));
         xchain.state.set('totalDebt', xchain.math.subtract(xchain.state.get('totalDebt'), burned));
-
-        if (exceedsExactly(xchain, burned, '0')) {
-            xchain.emit.destroy({ tick: xchain.state.get('stableTick'), quantity: burned });
-        }
+        xchain.state.set('stableInventory',
+            xchain.math.add(xchain.state.get('stableInventory'), burned));
         if (exceedsExactly(xchain, excess, '0')) {
             xchain.emit.send({
                 destination: addr,
@@ -341,7 +355,7 @@ module.exports = {
 
     // liquidate(vaultOwner): permissionless. If the vault is BELOW the
     // minimum ratio at the fresh oracle price, the caller's batched stable
-    // deposit covers the full debt (burned) and the caller seizes collateral
+    // deposit covers the full debt and the caller seizes collateral
     // worth debt * (100 + liqBonusPct)% at that price, capped at the vault's
     // collateral. Leftover collateral stays credited to the vault owner; any
     // stable sent beyond the debt is returned to the liquidator.
@@ -392,8 +406,9 @@ module.exports = {
         setVault(xchain, owner, 'coll', xchain.math.subtract(coll, seize));
         xchain.state.set('totalDebt', xchain.math.subtract(xchain.state.get('totalDebt'), debt));
         xchain.state.set('trackedColl', xchain.math.subtract(xchain.state.get('trackedColl'), seize));
+        xchain.state.set('stableInventory',
+            xchain.math.add(xchain.state.get('stableInventory'), debt));
 
-        xchain.emit.destroy({ tick: xchain.state.get('stableTick'), quantity: debt });
         xchain.emit.send({
             destination: liquidator,
             tick: xchain.state.get('collateralTick'),
@@ -429,6 +444,8 @@ module.exports = {
             maxSnapshotAge: xchain.state.get('maxSnapshotAge'),
             totalDebt:      xchain.state.get('totalDebt'),
             trackedColl:    xchain.state.get('trackedColl'),
+            stableInventory:xchain.state.get('stableInventory'),
+            maxSupply:      STABLE_MAX_SUPPLY,
             vaults:         xchain.state.get('vaults'),
             maxVaults:      String(MAX_VAULTS)
         });
@@ -453,7 +470,7 @@ function setVault(xchain, addr, field, value) {
     }
 }
 
-// Un-attributed collateral / stable sitting in custody: actual balance minus
+// Un-attributed collateral or stable sitting in custody: actual balance minus
 // what the ledger has already accounted for. This is what a batched DEPOSIT
 // just delivered.
 function collDelta(xchain) {
@@ -461,10 +478,8 @@ function collDelta(xchain) {
     return xchain.math.subtract(held, xchain.state.get('trackedColl'));
 }
 function stableDelta(xchain) {
-    // trackedStable is structurally '0' (mint+send net out in the same run),
-    // but subtracting it keeps the invariant explicit and future-proof.
     var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('stableTick')) || '0', '0');
-    return xchain.math.subtract(held, xchain.state.get('trackedStable'));
+    return xchain.math.subtract(held, xchain.state.get('stableInventory'));
 }
 
 // Latest price for the configured pair as a string (object or bare-string shape).
@@ -583,12 +598,8 @@ function floorToDecimals(value, decimals) {
 // helper fails closed. The contract always holds the collateral it seizes, so
 // withdraw() and liquidate() are safe callers.
 //
-// The STABLE tick is not: initialize() issues it with no MINT_SUPPLY and
-// borrow() is the only source of it in existence, so at the first borrow neither
-// the contract nor the borrower holds a row and the snapshot cannot contain it.
-// Its grid is declared at deploy time and read from state instead
-// (stableGridOf), the same way crowdsale.js carries saleDecimals. Do not route
-// borrow() back through here.
+// The stable grid is still read from state so borrow accounting depends only on
+// the constructor term locked into the ISSUE action.
 function tickDecimals(xchain, tick) {
     var info = xchain.getTokenInfo(tick);
     xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,

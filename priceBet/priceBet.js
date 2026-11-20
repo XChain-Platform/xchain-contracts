@@ -89,7 +89,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.4.1'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -125,6 +125,7 @@ module.exports = {
         var deadlineBlocks = xchain.getInputParam(7);
 
         xchain.require(maker, 'maker required');
+        requirePayableAddress(xchain, maker, 'maker');
         xchain.require(coinPair, 'coinPair required');
         // Gate the strike's notation first, so unparseable text gets the plain-decimal message.
         requirePlainDecimal(xchain, strike, 'strike');
@@ -201,6 +202,7 @@ module.exports = {
         xchain.require(xchain.state.get('status') === 'OPEN', 'bet not open');
 
         var taker = xchain.getSourceAddress();
+        requirePayableAddress(xchain, taker, 'taker');
         xchain.require(taker !== xchain.state.get('maker'), 'maker cannot take their own bet');
         xchain.require(roundPrice(xchain) === null, 'settle round already published');
         // "No price" is not the same as "not decided yet". A round that has fallen
@@ -333,6 +335,17 @@ module.exports = {
         };
     }
 };
+
+function requirePayableAddress(xchain, value, label) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length > 0;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, label + ' must be a plain address that can receive SEND');
+}
 
 // Price of the agreed settle round, normalized to a bignumber string, or null
 // if the round is not yet published. The production accessor returns a

@@ -76,7 +76,7 @@ function registerFixedNotationAcceptanceTest(ctx) {
         // 1 + 0.5 + 100 + floor(0.000000015) = 101.50000001, all on the grid.
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '101.50000001');
         assertBalance(ctx.h.ledger, ALICE, STABLE, '101.50000001');
-        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '999999898.49999999');
     });
 }
 

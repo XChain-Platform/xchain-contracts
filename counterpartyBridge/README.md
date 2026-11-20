@@ -170,6 +170,14 @@ bridge multiple assets, deploy one instance per asset.
   BEFORE the `SEND` is emitted. A burn reported again in a later
   `requestClaim()` round, or replayed via a stale settled response, is
   silently skipped rather than minted again.
+- **Unstorable burn keys.** Only 64-character hexadecimal transaction hashes
+  are accepted, and they are lowercased before nullifier lookup. Malformed,
+  oversized, NUL-containing, and astral text is dropped without reverting the
+  callback or leaving the claimant pending.
+- **State-key exhaustion.** Permanent burn and claimant keys are counted and
+  capped, as are in-flight pending keys. At the credit ceiling a callback
+  succeeds without payment, clears pending, and leaves the burn unmarked so a
+  state write cannot wedge the claimant at the VM key cap.
 - **Forged burn.** `onClaim` reads the burn list from
   `xchain.attestation.getResponse(request_id)`, indexer-side consensus
   state; a caller cannot supply the payload directly.
@@ -216,6 +224,14 @@ bridge multiple assets, deploy one instance per asset.
   gas or corrupt state.
 
 ## Known limitations (this is a teaching example)
+
+- **Each instance has finite claim capacity.** `info()` reports current and
+  maximum credit and pending key counts. Once credit capacity is exhausted,
+  no new burn is paid even though the Counterparty burn is irreversible, so
+  users must check capacity before burning. Pending capacity can temporarily
+  refuse a request until another callback settles. Bridges deployed from a
+  version before 1.5.0 have neither ceiling nor the `tx_hash` shape check and
+  should be redeployed.
 
 - **The deployer can still WITHDRAW custody where owner WITHDRAW is
   allowed.** A raw `WITHDRAW` moves a contract's custody to its deployer

@@ -2,7 +2,7 @@
 
 module.exports = function registerCustodyTests(context) {
     const {
-        ADDR, MAKER, TAKER, STRANGER, TICK, T, assertSuccess, assertReverted, assertContractBalance,
+        ADDR, MAKER, TAKER, STRANGER, TICK, STAKE, T, assertSuccess, assertReverted, assertContractBalance,
         h, deployBet, depositAnd, publishRounds, settleBy
     } = context;
 
@@ -23,6 +23,14 @@ module.exports = function registerCustodyTests(context) {
             assertReverted(await depositAnd(TAKER, 'accept', '50'), 'insufficient deposit');
             h.seedBalance(MAKER, TICK, '300');
             assertReverted(await depositAnd(MAKER, 'accept'), 'cannot take their own bet');
+        });
+
+        it('a contract caller cannot become the taker', async function () {
+            await deployBet('OVER');
+            await depositAnd(MAKER, 'fund');
+            h.seedBalance('C:BTC:7', TICK, STAKE);
+            assertReverted(await depositAnd('C:BTC:7', 'accept'), 'plain address');
+            assertContractBalance(h.ledger, ADDR, TICK, '200');
         });
     });
 };

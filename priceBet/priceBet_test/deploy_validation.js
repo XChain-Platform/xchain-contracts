@@ -9,6 +9,11 @@ function registerTermValidation(ctx, deployWith) {
         const r = await deployWith([MAKER, PAIR, STRIKE, 'ABOVE', TICK, STAKE, '7', '5']);
         assert.strictEqual(r.success, false, 'side=ABOVE should revert in initialize');
     });
+    it('rejects a contract address as maker', async function () {
+        const r = await deployWith(['C:BTC:7', PAIR, STRIKE, 'OVER', TICK, STAKE, '7', '5']);
+        assert.strictEqual(r.success, false);
+        assert.ok(String(r.error).includes('plain address'));
+    });
     it('rejects a non-positive stake and a non-positive round', async function () {
         assert.strictEqual(await deploys(terms('0')), false);
         assert.strictEqual(await deploys(terms(STAKE, STRIKE, '0')), false);

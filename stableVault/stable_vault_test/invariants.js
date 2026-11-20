@@ -44,6 +44,7 @@ const CODE = fs.readFileSync(path.join(__dirname, '..', 'stableVault.js'), 'utf8
 const ADDR = 'C:BTC:1';
 const COLL = 'GOLD', STABLE = 'DUSD', PAIR = 'GOLD/USD';
 const RATIO = '150', BONUS = '10', MAXAGE = '10';
+const MAX_SUPPLY = '1000000000';
 const ACTORS = ['alice', 'bob', 'carol', 'liq'];
 const SEED = '1000';
 const PRICE_DEC = 18;
@@ -114,9 +115,14 @@ function checkInvariants(h, collDec, stableDec, tag) {
     assert.ok(units(L.getBalance(ADDR, COLL), collDec) >= tracked, tag + ': collateral custody below books');
     assert.strictEqual(units(h.state(ADDR, 'totalDebt'), stableDec), sumDebt, tag + ': totalDebt != sum of vault debts');
     assert.strictEqual(h.state(ADDR, 'vaults'), String(liveVaults), tag + ': vault counter drift');
-    assert.strictEqual(units(L.tokens[STABLE].SUPPLY, stableDec), sumDebt, tag + ': stable supply != outstanding debt');
-    assert.strictEqual(units(L.total(STABLE), stableDec), sumDebt, tag + ': stable held != outstanding debt');
-    assert.strictEqual(h.state(ADDR, 'trackedStable'), '0', tag + ': trackedStable moved');
+    const cap = units(MAX_SUPPLY, stableDec);
+    const inventory = units(h.state(ADDR, 'stableInventory'), stableDec);
+    const held = units(L.getBalance(ADDR, STABLE), stableDec);
+    const outside = units(L.total(STABLE), stableDec) - held, incoming = held - inventory;
+    assert.strictEqual(units(L.tokens[STABLE].SUPPLY, stableDec), cap, tag + ': stable supply moved');
+    assert.strictEqual(units(L.total(STABLE), stableDec), cap, tag + ': stable conservation drift');
+    assert.strictEqual(cap - inventory, sumDebt, tag + ': inventory does not mirror debt');
+    assert.strictEqual(outside + incoming, sumDebt, tag + ': outside stable plus deposits != debt');
 }
 
 function randAmt(R, dec, maxWhole) {
@@ -305,11 +311,11 @@ function randAmt(R, dec, maxWhole) {
         let r = liquidate(h, 'bob', 'alice', '250');
         assert.ok(r.success, r.error);
         assert.deepStrictEqual(r.actions.map((a) => [a.action, a.params.tick, a.params.quantity]),
-            [['DESTROY', STABLE, '200'], ['SEND', COLL, '2.20022002'], ['SEND', STABLE, '50']]);
+            [['SEND', COLL, '2.20022002'], ['SEND', STABLE, '50']]);
         assert.strictEqual(vault(h, 'alice', 'coll'), '0.79977998');
         checkInvariants(h, 8, 8, 'liquidation');
         assert.ok(call(h, 'alice', 'withdraw', ['0.79977998']).success, 'owner keeps the leftover');
-        // Bad debt: the seizure caps at the collateral and the whole debt still burns.
+        // Bad debt: the seizure caps at the collateral and the whole debt returns to inventory.
         h = setup(8, 8);
         assert.ok(depositColl(h, 'alice', '3').success);
         assert.ok(call(h, 'alice', 'borrow', ['200']).success);
@@ -318,7 +324,7 @@ function randAmt(R, dec, maxWhole) {
         setPrice(h, '1');
         r = liquidate(h, 'bob', 'alice', '200');
         assert.ok(r.success, r.error);
-        assert.strictEqual(r.actions[1].params.quantity, '3');
+        assert.strictEqual(r.actions[0].params.quantity, '3');
         assert.strictEqual(vault(h, 'alice', 'coll'), '0');
         assert.strictEqual(vault(h, 'alice', 'debt'), '0');
         checkInvariants(h, 8, 8, 'bad debt');

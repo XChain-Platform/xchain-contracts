@@ -19,7 +19,7 @@ function registerBorrowRepayTests(ctx) {
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '200');
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '200');
         // Mint + send net out: no stable strands in custody.
-        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '999999800');
 
         assertReverted(await borrow(ALICE, '1'), 'under-collateralized');
     });
@@ -35,7 +35,7 @@ function registerBorrowRepayTests(ctx) {
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
         assertBalance(ctx.h.ledger, ALICE, STABLE, '50');      // excess back
-        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0'); // 200 burned
+        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '1000000000');
     });
 
     it('a debt-free vault withdraws everything without touching the oracle', async function () {
@@ -100,7 +100,7 @@ function registerLiquidationTests(ctx) {
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '0.25');
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
-        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0'); // debt burned
+        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '1000000000');
 
         // The leftover 0.25 GOLD still belongs to Alice.
         assertSuccess(await withdraw(ALICE, '0.25'));
@@ -127,6 +127,7 @@ function registerNonGridSeizureTest(ctx) {
             code: CODE, deployer: ALICE, contractAddress: ADDR,
             params: [COLL0, STABLE, PAIR, RATIO, BONUS, MAXAGE]
         });
+        ctx.h.ledger.creditContractBalance(ADDR, STABLE, '1000000000');
         setPrice('100');
         ctx.h.deposit(ALICE, ADDR, COLL0, '3');
         assertSuccess(await ctx.h.execute({ contractAddress: ADDR, method: 'deposit', params: [], caller: ALICE }));

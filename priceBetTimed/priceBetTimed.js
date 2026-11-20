@@ -123,7 +123,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.6.1'
+        version:     '1.7.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -154,6 +154,7 @@ module.exports = {
         var deadlineBlocks = xchain.getInputParam(7);
 
         xchain.require(maker, 'maker required');
+        requirePayableAddress(xchain, maker, 'maker');
         xchain.require(coinPair, 'coinPair required');
         // Gate the strike's notation first, so unparseable text gets the plain-decimal message.
         requirePlainDecimal(xchain, strike, 'strike');
@@ -213,6 +214,7 @@ module.exports = {
         xchain.require(xchain.state.get('status') === 'OPEN', 'bet not open');
 
         var taker = xchain.getSourceAddress();
+        requirePayableAddress(xchain, taker, 'taker');
         xchain.require(taker !== xchain.state.get('maker'), 'maker cannot take their own bet');
         xchain.require(
             xchain.getBlockTimestamp() < parseInt(xchain.state.get('settleTime')),
@@ -453,6 +455,17 @@ module.exports = {
         };
     }
 };
+
+function requirePayableAddress(xchain, value, label) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length > 0;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, label + ' must be a plain address that can receive SEND');
+}
 
 // Normalize an oracle read to { price, roundNumber, timestamp, outsideWindow }
 // or null. The production accessor (indexer getOracleDataForVM via xchain-vm

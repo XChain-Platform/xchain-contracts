@@ -17,6 +17,12 @@ function registerTickAndBidTests(tests) {
         assert.strictEqual(r.success, false, 'deploy with itemTick === bidTick should revert');
     });
 
+    it('rejects a contract address as seller', async function () {
+        const { r } = await deployFresh(tests, 'C:BTC:2', ['C:BTC:7', ITEM, '10', BID, '50', '5']);
+        assert.strictEqual(r.success, false, 'contract seller cannot receive settlement');
+        assert.ok(String(r.error).includes('plain address'));
+    });
+
     it('rejects a non-positive minBid', async function () {
         const { r } = await deployFresh(tests, 'C:BTC:3', [SELLER, ITEM, '10', BID, '0', '5']);
         assert.strictEqual(r.success, false, 'deploy with minBid=0 should revert');

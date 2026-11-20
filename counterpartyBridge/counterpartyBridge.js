@@ -21,23 +21,18 @@
 // ---------------------------------------------------------------------------
 // WHAT THIS IS
 //
-// A burn-to-mint bridge for a single Counterparty asset. Counterparty rides
-// on top of Bitcoin (its balances are computed by Counterparty nodes from
-// OP_RETURN/bare-multisig data embedded in ordinary Bitcoin transactions), so
-// the VM sandbox cannot see Counterparty state directly, and even if it
-// could, no two validators would necessarily agree on a third-party
-// Counterparty indexer's interpretation. This bridge uses the same
-// off-chain attestation pattern as `urlOracle`: it asks the network to GET
-// tokenscan.io's public "sends" API (https://tokenscan.io/api#sends) and
-// anchors the agreed response on-chain before trusting it.
+// A burn-to-mint bridge for a single Counterparty asset. Counterparty balances
+// are computed by Counterparty nodes from data embedded in ordinary Bitcoin
+// transactions, so the VM sandbox cannot see them, and validators need not
+// agree on a third-party indexer's reading. Like `urlOracle`, this bridge asks
+// the network to GET tokenscan.io's public "sends" API
+// (https://tokenscan.io/api#sends) and anchors the agreed response on-chain.
 //
-// The bridge is genuinely 1:1, not a snapshot: minting is gated on the
-// holder having sent `cpAsset` to a well-known, unspendable Counterparty
-// "burn" address (BURN_ADDRESS below - no known private key has ever
-// signed for it). A holder cannot claim and then also keep/sell the
-// original asset on Counterparty, because the asset is gone the moment the
-// burn transaction confirms - unlike a balance-snapshot design, which can
-// only ever observe a point-in-time holding, not its permanent removal.
+// The bridge is genuinely 1:1, not a snapshot: minting is gated on the holder
+// having sent `cpAsset` to a well-known unspendable "burn" address
+// (BURN_ADDRESS below). The asset is gone the moment the burn confirms, so a
+// holder cannot claim and also keep or sell it, which a balance snapshot can
+// never rule out.
 //
 //   1. requestClaim() -> the caller asks the network to list every "Send"
 //      Counterparty transaction that has ever landed on BURN_ADDRESS. Emits
@@ -45,12 +40,10 @@
 //   2. (off-chain) N providers GET the API, sign the body, the indexer
 //      anchors the agreed response on-chain.
 //   3. onClaim(request_id, address) -> the indexer calls this back. Every
-//      settled send whose `source` is `address`, whose `asset` is `cpAsset`,
-//      and whose Counterparty `tx_hash` has not already been credited is
-//      summed and sent from the contract's custody in one shot; each
-//      `tx_hash` is then marked permanently credited (the nullifier - keyed
-//      by burn transaction, not by address, so the same address can
-//      burn-and-claim again later).
+//      settled send of `cpAsset` from `address` whose `tx_hash` is not yet
+//      credited is summed and sent from custody in one shot, and each
+//      `tx_hash` is marked credited (the nullifier is keyed by burn, not by
+//      address, so an address can burn and claim again later).
 //
 // CUSTODY MODEL: an XChain MINT is not issuer-gated (any address may MINT a
 // tick that sets no LOCK_MINT or allow list), so the deploy pre-mints the
@@ -59,23 +52,23 @@
 // supply or fill the cap ahead of a real claimant. (Owner WITHDRAW of this
 // custody is the remaining trust edge; see "Known limitations" in the README.)
 //
-// Because the Counterparty holder's Bitcoin address IS the caller's XChain
-// address on that chain (XChain transactions ARE Bitcoin/Dogecoin/Litecoin
-// transactions), the claim needs no separate registration step: the address
-// that burned the asset is the address the minted tokens land on.
+// The holder's Bitcoin address IS the caller's XChain address on that chain,
+// so no registration step is needed: the address that burned the asset is the
+// address the tokens land on.
 //
-// SCOPE: this bridges ONE Counterparty asset to ONE XChain tick per deploy
-// (deploy one instance per asset you want to migrate) - see "Known
-// limitations" in the README, especially around BURN_ADDRESS being a
-// globally shared, industry-wide burn address.
+// SCOPE: ONE Counterparty asset to ONE XChain tick per deploy. See "Known
+// limitations" in the README, especially on BURN_ADDRESS being shared
+// industry-wide.
 // ---------------------------------------------------------------------------
 
-// A widely-recognized, industry-standard Bitcoin "burn" address: valid
-// checksum, but nobody has ever demonstrated a private key for it, so any
-// asset sent there is permanently unspendable. It is NOT specific to this
-// bridge - many unrelated projects burn to the same address (see "Known
-// limitations" in the README for what that shared usage costs this design).
+// An industry-standard Bitcoin burn address: valid checksum, no known private
+// key, so anything sent there is unspendable. Many unrelated projects burn to
+// it too; see "Known limitations" in the README for what that costs.
 var BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
+// Permanent credit keys and in-flight request keys share the VM's 10,000-key
+// state budget. These ceilings leave room for fixed configuration keys.
+var MAX_CREDIT_KEYS = 9000;
+var MAX_PENDING = 900;
 
 // True only for a plain fixed-notation decimal: digits, with at most one decimal
 // point that has digits on both sides. Same shape check as
@@ -101,16 +94,21 @@ function isPlainDecimal(value) {
     return true;
 }
 
+function isHexTxHash(value) {
+    if (typeof value !== 'string' || value.length !== 64) return false;
+    for (var i = 0; i < value.length; i++) {
+        var c = value.charAt(i);
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    return true;
+}
+
 // Quantise a computed amount DOWN to xchainTick's decimal grid before minting.
-// The indexer re-normalises every emitted amount to the tick's decimals at
-// ledger-write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up,
-// NOT half-even, the mode is stated in xchain-indexer/src/consensus/xchain_price.js and
-// pinned by test, because a mis-read mode at the .5 boundary is a consensus
-// fork), which can round a computed
-// quantity UP past maxSupply and revert the whole EXECUTE (see crowdsale.js
-// for the same footgun in more detail). Pure exact string surgery on the
-// fixed-notation decimal, not mathjs floor/mod (which rounds to significant
-// digits, not the decimal grid).
+// The indexer re-rounds every emitted amount to the tick's decimals HALF-UP
+// (stated in xchain-indexer/src/consensus/xchain_price.js and pinned by test),
+// which can push a quantity past maxSupply and revert the EXECUTE (crowdsale.js
+// has the same footgun). Exact string surgery, not mathjs floor/mod, which
+// rounds to significant digits rather than the decimal grid.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -143,10 +141,9 @@ function isAtLeastExact(xchain, a, b) {
 //   { "data": [ { "asset": "...", "source": "...", "destination": "...",
 //                 "quantity": "...", "status": "valid", "tx_hash": "..." },
 //               ... ], "total": N }
-// Returns [] (never throws) on anything that does not match - malformed
-// JSON, an unexpected shape, or simply no matching rows - so all of those
-// collapse to "nothing burned yet" rather than a crash. Only `status ===
-// 'valid'` rows count (Counterparty can carry invalid/unconfirmed sends).
+// Returns [] (never throws) on malformed JSON, an unexpected shape or no
+// matching rows, so each reads as "nothing burned yet". Only `status ===
+// 'valid'` rows count.
 function extractBurnSends(payload, asset, source) {
     var parsed;
     try { parsed = JSON.parse(payload); } catch (e) { return []; }
@@ -155,28 +152,21 @@ function extractBurnSends(payload, asset, source) {
     var out = [];
     for (var i = 0; i < parsed.data.length; i++) {
         var row = parsed.data[i];
-        // `quantity` is the ONE field of this third-party payload that gets used as
-        // a number, and onClaim() hands it straight to floorToDecimals, which is
-        // string surgery that PRESUPPOSES fixed notation. Every other template
-        // feeds that helper a value xchain.math computed (always fixed notation);
-        // here it is raw text an API we do not control chose the spelling of.
-        // Only a JSON string is taken: JSON.parse has already rounded a JSON number
-        // to a double, so 9007199254740995 arrives as 9007199254740996 and would
-        // re-render as a plain decimal of the wrong value. Fed '1.23456789e2' the
-        // floor CORRUPTS rather than no-ops: it returns '1.23456789' for 123.456789,
-        // crediting 1% of the burn with no user error and no revert to notice.
-        // Non-fixed rows are DROPPED here rather than reverting onClaim(), because
-        // a revert would roll back the `pending:` delete too and requestClaim()
-        // refuses a second check while one is pending: one badly-spelled row from
-        // a third party would wedge that address out of the bridge permanently. A
-        // dropped row leaves its tx_hash uncredited AND unmarked, so the burn is
-        // still claimable on a later, well-formed response. Same fail-soft
-        // contract as the malformed-JSON path above.
+        // `quantity` is third-party text handed to floorToDecimals, which
+        // presupposes fixed notation: fed '1.23456789e2' it returns '1.23456789'
+        // for 123.456789 and silently credits 1% of the burn. Only a JSON string
+        // is taken, since JSON.parse already rounded a JSON number to a double.
+        // `tx_hash` becomes a state key, so only 64 hex characters are taken,
+        // lowercased so one burn has one nullifier; anything else could make the
+        // key write throw. Bad rows are DROPPED rather than reverting onClaim(): a
+        // revert restores `pending:` and wedges the address out of requestClaim().
+        // A dropped row stays unmarked, so the burn is claimable on a later
+        // well-formed response, the same fail-soft contract as malformed JSON.
         if (row && row.asset === asset && row.source === source && row.status === 'valid'
-            && typeof row.tx_hash === 'string' && row.tx_hash.length > 0
+            && isHexTxHash(row.tx_hash)
             && typeof row.quantity === 'string'
             && isPlainDecimal(row.quantity)) {
-            out.push({ txHash: row.tx_hash, quantity: row.quantity });
+            out.push({ txHash: row.tx_hash.toLowerCase(), quantity: row.quantity });
         }
     }
     return out;
@@ -210,11 +200,20 @@ function completeClaim(xchain, address, claim) {
         return 'maxSupply exhausted';
     }
 
+    var claimedKey = 'claimedTotal:' + address;
+    var needed = claim.hashes.length + (xchain.state.get(claimedKey) === null ? 1 : 0);
+    var creditKeys = parseInt(xchain.state.get('creditKeys'), 10);
+    if (creditKeys + needed > MAX_CREDIT_KEYS) {
+        xchain.log('bridge key limit reached', address, claim.total);
+        return 'key limit reached';
+    }
+
     for (var i = 0; i < claim.hashes.length; i++)
         xchain.state.set('burned:' + claim.hashes[i], true);
     xchain.state.set('totalClaimed', newTotalClaimed);
-    xchain.state.set('claimedTotal:' + address,
-        xchain.math.add(xchain.state.get('claimedTotal:' + address) || '0', claim.total));
+    xchain.state.set(claimedKey,
+        xchain.math.add(xchain.state.get(claimedKey) || '0', claim.total));
+    xchain.state.set('creditKeys', String(creditKeys + needed));
 
     xchain.emit.send({
         destination: address,
@@ -234,7 +233,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.4.2'
+        version:     '1.5.0'
     },
 
     abi: { version: 1, methods: {
@@ -249,13 +248,10 @@ module.exports = {
     } },
 
     // initialize(cpAsset, xchainTick, maxSupply, decimals)
-    // Issues xchainTick (contract-owned) with a hard cap of maxSupply - set
-    // this to cpAsset's known total supply so the bridge can never mint more
-    // XChain-side than exists Counterparty-side, no matter how many
-    // addresses burn-and-claim. decimals must match how the sends API
-    // reports `quantity` for this asset (8 for a divisible Counterparty
-    // asset, 0 for an indivisible one - see /api/asset/{asset} on the same
-    // API to check) so claimed amounts land on the tick's real grid.
+    // Issues xchainTick capped at maxSupply: set it to cpAsset's total supply so
+    // the bridge never pays out more than exists Counterparty-side. decimals must
+    // match how the sends API reports `quantity` (8 divisible, 0 indivisible; see
+    // /api/asset/{asset}) so claimed amounts land on the tick's real grid.
     initialize: function (xchain) {
         var cpAsset    = xchain.getInputParam(0);
         var xchainTick = xchain.getInputParam(1);
@@ -281,6 +277,8 @@ module.exports = {
         xchain.state.set('maxSupply', maxSupply);
         xchain.state.set('decimals', decimals);
         xchain.state.set('totalClaimed', '0');
+        xchain.state.set('creditKeys', '0');
+        xchain.state.set('pendingCount', '0');
 
         // Pre-mint the whole supply into this contract's custody and lock MINT
         // (and any further MINT_SUPPLY), so claims below are the only way out.
@@ -296,37 +294,29 @@ module.exports = {
         });
     },
 
-    // requestClaim(): the caller asks the network to list every Send
-    // Counterparty has ever recorded landing on BURN_ADDRESS. Self-serve by
-    // design (getSourceAddress() is both the address whose burns get
-    // scanned and, once onClaim settles, the mint destination) - nobody can
-    // trigger a check that would then mint to a third party. Unlike a
-    // one-shot claim, this can be called again later once new burns exist
-    // (only ONE check may be in flight per address at a time).
+    // requestClaim(): ask the network to list every Send that landed on
+    // BURN_ADDRESS. Self-serve: the caller is both the address whose burns are
+    // scanned and the payout destination, so nobody can direct a mint to a third
+    // party. Callable again for later burns, one check in flight per address.
     requestClaim: function (xchain) {
         var caller = xchain.getSourceAddress();
         xchain.require(!xchain.state.get('pending:' + caller), 'a claim check is already pending for this address');
+        var pendingCount = parseInt(xchain.state.get('pendingCount'), 10);
+        xchain.require(pendingCount < MAX_PENDING,
+            'too many claim checks in flight; retry later');
 
-        // tokenscan.io has no source+asset-filtered endpoint - it returns
-        // every Send that ever landed on BURN_ADDRESS, across every asset
-        // and every sender, paged. The limit here is NOT a generous
-        // headroom choice - it is bounded hard by the indexer's on-chain
-        // attestation-response payload cap (8192 bytes total ACTION data;
-        // each row of this feed runs ~200-250 bytes, so anything close to
-        // tokenscan's own page-size ceiling would never fit on-chain at
-        // all). See README "Known limitations" for what this costs once
-        // global traffic to this shared address grows.
+        // tokenscan.io has no source+asset filter: it pages every Send to
+        // BURN_ADDRESS across all assets and senders. The page limit is bounded
+        // by the on-chain attestation payload cap (8192 bytes of ACTION data at
+        // ~200-250 bytes a row), not chosen for headroom; see README "Known
+        // limitations" for what that costs as traffic to the shared address grows.
         var url = 'https://cp20.tokenscan.io/api/sends/' + BURN_ADDRESS + '/1/15';
 
-        var requestId = xchain.attestation.request(
-            'http_get',
-            url,
-            'onClaim',
-            [caller],
-            { redundancy: 3, deadlineBlocks: 20 }
-        );
+        var requestId = xchain.attestation.request('http_get', url, 'onClaim', [caller],
+            { redundancy: 3, deadlineBlocks: 20 });
 
         xchain.state.set('pending:' + caller, requestId);
+        xchain.state.set('pendingCount', String(pendingCount + 1));
         xchain.log('claim requested', caller, requestId);
         return requestId;
     },
@@ -355,7 +345,7 @@ module.exports = {
         xchain.require(resp !== null || expired, 'no response yet');
 
         if (expired || resp.status !== 'ok') {
-            xchain.state.delete('pending:' + address);
+            clearPending(xchain, address);
             xchain.log('burn check failed', requestId, expired ? 'expired' : resp.status);
             return 'not confirmed';
         }
@@ -365,7 +355,7 @@ module.exports = {
         var decimals = parseInt(xchain.state.get('decimals'), 10);
         var claim = collectNewBurns(xchain, sends, decimals);
 
-        xchain.state.delete('pending:' + address);
+        clearPending(xchain, address);
 
         // Same exact test on the total, so a sub-1e-15 sum is still paid.
         if (isAtLeastExact(xchain, '0', claim.total)) {
@@ -383,8 +373,8 @@ module.exports = {
 
     burned: function (xchain) {
         var txHash = xchain.getInputParam(0);
-        xchain.require(typeof txHash === 'string' && txHash.length > 0, 'tx_hash required');
-        return !!xchain.state.get('burned:' + txHash);
+        xchain.require(isHexTxHash(txHash), 'tx_hash must be 64 hex characters');
+        return !!xchain.state.get('burned:' + txHash.toLowerCase());
     },
 
     info: function (xchain) {
@@ -394,7 +384,17 @@ module.exports = {
             decimals: xchain.state.get('decimals'),
             maxSupply: xchain.state.get('maxSupply'),
             totalClaimed: xchain.state.get('totalClaimed'),
+            creditKeys: xchain.state.get('creditKeys'),
+            maxCreditKeys: String(MAX_CREDIT_KEYS),
+            pendingCount: xchain.state.get('pendingCount'),
+            maxPending: String(MAX_PENDING),
             burnAddress: BURN_ADDRESS
         });
     }
 };
+
+function clearPending(xchain, address) {
+    xchain.state.delete('pending:' + address);
+    var count = parseInt(xchain.state.get('pendingCount'), 10);
+    xchain.state.set('pendingCount', String(count > 0 ? count - 1 : 0));
+}

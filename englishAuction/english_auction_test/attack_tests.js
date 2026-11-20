@@ -63,6 +63,29 @@ function registerAccessAndBidFloorTests(tests) {
     });
 }
 
+function registerContractCallerTests(tests) {
+    const { assertSuccess, assertReverted, assertContractState, ADDR, env, deployAuction,
+        depositAndFund, bid } = tests;
+
+    it('a contract caller cannot become the high bidder', async function () {
+        await deployAuction();
+        await depositAndFund();
+        assertReverted(await bid('C:BTC:7', '50'), 'plain address');
+        assertContractState(env.h.ledger, ADDR, 'highBidder', null);
+        assertContractState(env.h.ledger, ADDR, 'status', 'ACTIVE');
+    });
+
+    it('a refused contract bid cannot block settlement for the current leader', async function () {
+        await deployAuction(2);
+        await depositAndFund();
+        assertSuccess(await bid('alice', '50'));
+        assertReverted(await bid('C:BTC:7', '100'), 'plain address');
+        env.h.mineBlock(); env.h.mineBlock();
+        assertSuccess(await env.h.execute({ contractAddress: ADDR, method: 'settle', params: [], caller: 'anyone' }));
+        assertContractState(env.h.ledger, ADDR, 'status', 'SOLD');
+    });
+}
+
 function registerSelfRaiseAndDeadlineTests(tests) {
     const { assertSuccess, assertReverted, assertBalance, assertContractBalance, assertContractState,
         SELLER, BID, ADDR, env, deployAuction, depositAndFund, bid } = tests;
@@ -260,6 +283,7 @@ function registerItemGridControlTests(tests) {
 module.exports = function registerAttackTests(tests) {
     describe('attacks we considered', function () {
         registerAccessAndBidFloorTests(tests);
+        registerContractCallerTests(tests);
         registerSelfRaiseAndDeadlineTests(tests);
         registerStatusGuardAndOffGridTests(tests);
         registerPreFundedCancelTests(tests);

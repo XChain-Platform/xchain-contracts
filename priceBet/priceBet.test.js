@@ -245,6 +245,14 @@ function registerFundingAttacks(ctx) {
         await depositAnd(MAKER, 'fund');
         assertReverted(await depositAnd(MAKER, 'accept'), 'cannot take their own bet');
     });
+    it('a contract caller cannot become the taker', async function () {
+        await deployBet('OVER');
+        await depositAnd(MAKER, 'fund');
+        ctx.h.seedBalance('C:BTC:7', TICK, STAKE);
+        assertReverted(await depositAnd('C:BTC:7', 'accept'), 'plain address');
+        state('status', 'OPEN');
+        assertSuccess(await ctx.run('cancel', MAKER));
+    });
 }
 
 // Status guards on settle, cancel, reclaim and accept.

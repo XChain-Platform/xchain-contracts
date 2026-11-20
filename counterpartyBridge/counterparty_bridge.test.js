@@ -22,6 +22,8 @@ const registerNoBurnFailureTests = require('./counterparty_bridge_test/no_burn_f
 const registerAttackTests = require('./counterparty_bridge_test/attack_tests');
 const registerQuantityParseTests = require('./counterparty_bridge_test/quantity_parse_tests');
 const registerDeployValidationTests = require('./counterparty_bridge_test/deploy_validation_tests');
+const registerKeyLimitTests = require('./counterparty_bridge_test/key_limit_tests');
+const registerKeyCapacityTests = require('./counterparty_bridge_test/key_capacity_tests');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertContractState;
@@ -43,7 +45,7 @@ const MAX_SUPPLY   = '1000000';
 const BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 
 let txCounter = 0;
-function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart(62, '0'); }
+function nextTxHash() { txCounter += 1; return String(txCounter).padStart(64, '0'); }
 
 // Shape of a real tokenscan.io GET /api/sends/{address}/{page}/{limit}
 // response (see https://tokenscan.io/api#sends): every Send that ever
@@ -135,4 +137,6 @@ function buildContext() {
     registerAttackTests(context);
     registerQuantityParseTests(context);
     registerDeployValidationTests(context);
+    registerKeyLimitTests(context);
+    registerKeyCapacityTests(context);
 });
