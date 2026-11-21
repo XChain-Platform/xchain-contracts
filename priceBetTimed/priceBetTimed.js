@@ -123,7 +123,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.7.0'
+        version:     '1.8.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -144,6 +144,8 @@ module.exports = {
     //                  voided if no qualifying round has arrived
     //   (other params identical to priceBet)
     initialize: function (xchain) {
+        // EXECUTE can name any export; maker is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('maker') === null, 'already initialized');
         var maker          = xchain.getInputParam(0);
         var coinPair       = xchain.getInputParam(1);
         var strike         = xchain.getInputParam(2);

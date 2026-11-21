@@ -193,7 +193,7 @@ module.exports = {
     meta: {
         name:        'AMM',
         description: 'Two-token constant-product automated market maker: liquidity providers deposit both tokens for transferable LP share tokens, and swappers trade one token for the other at the k invariant price, paying a 0.3% fee that accrues to the pool.',
-        version:     '1.5.0'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -208,6 +208,8 @@ module.exports = {
 
     // initialize(tokenA, tokenB, lpTick): create an empty pool and issue the LP tick.
     initialize: function (xchain) {
+        // EXECUTE can name any export; tokenA is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('tokenA') === null, 'already initialized');
         var tokenA = xchain.getInputParam(0);
         var tokenB = xchain.getInputParam(1);
         var lpTick = xchain.getInputParam(2);

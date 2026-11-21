@@ -117,7 +117,7 @@ module.exports = {
     meta: {
         name:        'Stable Vault',
         description: 'Over-collateralized single-collateral stablecoin engine: vault owners borrow from a pre-minted, mint-locked stable inventory against deposited collateral while they stay above the minimum ratio at the oracle price, and anyone may liquidate a vault that falls below it for a bonus; it is a teaching template, not a production-grade stablecoin.',
-        version:     '2.0.0'
+        version:     '2.1.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -145,6 +145,8 @@ module.exports = {
     //   stableDecimals  decimal grid of the stable this contract issues,
     //                   0-18, default '8'
     initialize: function (xchain) {
+        // EXECUTE can name any export; collateralTick is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('collateralTick') === null, 'already initialized');
         var collateralTick = xchain.getInputParam(0);
         var stableTick     = xchain.getInputParam(1);
         var coinPair       = xchain.getInputParam(2);

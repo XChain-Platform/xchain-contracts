@@ -6,6 +6,7 @@ module.exports = function registerQuantityParseTests(context) {
         registerMixedPage(context);
         registerSpellingMatrix(context);
         registerNumericQuantity(context);
+        registerOverLongQuantity(context);
     });
     describe('on-grid quantities below the tolerant comparison floor', function () {
         registerSubToleranceQuantity(context);
@@ -148,6 +149,40 @@ function registerNumericQuantity(context) {
         const good = await claim(sendsPayload([{ txHash: txHash, quantity: '9007199254740995' }]));
         assertSuccess(good);
         assertEmittedActions(good, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '9007199254740995' } }]);
+    });
+}
+
+// The VM math layer refuses any operand longer than 256 characters, and zero
+// padding keeps a quantity a plain decimal, so length is checked at the parse seam.
+function registerOverLongQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, nextTxHash
+    } = context;
+    const claimWith = makeClaimWith(context);
+
+    it('an over-long plain-decimal quantity is dropped instead of reverting onClaim', async function () {
+        const LONG = ['0'.repeat(300) + '1', '9'.repeat(257), '0'.repeat(63) + '42', '1.' + '0'.repeat(63)];
+        for (const v of LONG) {
+            await deployBridge();
+            const h = getHarness();
+            const txHash = nextTxHash();
+            const cb = await claimWith(v, txHash);
+            assertSuccess(cb, `quantity of ${v.length} chars must not revert`);
+            assertEmittedActions(cb, []);
+            assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+            const state = h.ledger.getContractState(ADDR);
+            assert.ok(!('pending:' + HOLDER in state), 'pending must clear so the address can claim again');
+            assert.ok(!('burned:' + txHash in state), 'a dropped row must not mark its burn as credited');
+        }
+        await deployBridge();
+        const atCap = await claimWith('0'.repeat(62) + '42', nextTxHash());
+        assertSuccess(atCap, 'a 64-character quantity must be read');
+        assertEmittedActions(atCap, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '42' } }]);
+        await deployBridge();
+        const huge = await claimWith('9'.repeat(64), nextTxHash());
+        assertSuccess(huge, 'a 64-character quantity past maxSupply must fail soft');
+        assertEmittedActions(huge, []);
     });
 }
 

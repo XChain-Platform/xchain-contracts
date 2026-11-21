@@ -52,13 +52,11 @@
 // supply or fill the cap ahead of a real claimant. (Owner WITHDRAW of this
 // custody is the remaining trust edge; see "Known limitations" in the README.)
 //
-// The holder's Bitcoin address IS the caller's XChain address on that chain,
-// so no registration step is needed: the address that burned the asset is the
-// address the tokens land on.
+// The holder's Bitcoin address IS the caller's XChain address on that chain, so no
+// registration step is needed: the address that burned the asset is the one paid.
 //
 // SCOPE: ONE Counterparty asset to ONE XChain tick per deploy. See "Known
-// limitations" in the README, especially on BURN_ADDRESS being shared
-// industry-wide.
+// limitations" in the README, especially on BURN_ADDRESS being shared industry-wide.
 // ---------------------------------------------------------------------------
 
 // An industry-standard Bitcoin burn address: valid checksum, no known private
@@ -69,14 +67,14 @@ var BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 // state budget. These ceilings leave room for fixed configuration keys.
 var MAX_CREDIT_KEYS = 9000;
 var MAX_PENDING = 900;
+// Longest feed quantity read: a real one is about 20 characters, and the VM math
+// layer refuses operands over 256, so a longer zero-padded row would revert onClaim().
+var MAX_QUANTITY_CHARS = 64;
 
 // True only for a plain fixed-notation decimal: digits, with at most one decimal
-// point that has digits on both sides. Same shape check as
-// patterns/validation.js:requirePlainDecimal, but a PREDICATE rather than a
-// require(), for the reason spelled out at its call site in extractBurnSends.
-//
-// No RegExp: the VM's syntax validator bans RegExp literals in contract source, so
-// this is a character walk.
+// point that has digits on both sides. The patterns/validation.js:requirePlainDecimal
+// shape check as a PREDICATE (see its call site in extractBurnSends), and a
+// character walk because the VM's syntax validator bans RegExp literals.
 function isPlainDecimal(value) {
     var s = String(value);
     if (s.length === 0) return false;
@@ -104,11 +102,10 @@ function isHexTxHash(value) {
 }
 
 // Quantise a computed amount DOWN to xchainTick's decimal grid before minting.
-// The indexer re-rounds every emitted amount to the tick's decimals HALF-UP
-// (stated in xchain-indexer/src/consensus/xchain_price.js and pinned by test),
-// which can push a quantity past maxSupply and revert the EXECUTE (crowdsale.js
-// has the same footgun). Exact string surgery, not mathjs floor/mod, which
-// rounds to significant digits rather than the decimal grid.
+// The indexer re-rounds every emitted amount to the tick's decimals HALF-UP (stated
+// in xchain-indexer/src/consensus/xchain_price.js and pinned by test), which can push
+// a quantity past maxSupply and revert the EXECUTE (crowdsale.js has the same
+// footgun). Exact string surgery: mathjs floor/mod round to significant digits.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -141,9 +138,8 @@ function isAtLeastExact(xchain, a, b) {
 //   { "data": [ { "asset": "...", "source": "...", "destination": "...",
 //                 "quantity": "...", "status": "valid", "tx_hash": "..." },
 //               ... ], "total": N }
-// Returns [] (never throws) on malformed JSON, an unexpected shape or no
-// matching rows, so each reads as "nothing burned yet". Only `status ===
-// 'valid'` rows count.
+// Returns [] (never throws) on malformed JSON, an unexpected shape or no matching
+// rows, so each reads as "nothing burned yet". Only `status === 'valid'` rows count.
 function extractBurnSends(payload, asset, source) {
     var parsed;
     try { parsed = JSON.parse(payload); } catch (e) { return []; }
@@ -152,19 +148,20 @@ function extractBurnSends(payload, asset, source) {
     var out = [];
     for (var i = 0; i < parsed.data.length; i++) {
         var row = parsed.data[i];
-        // `quantity` is third-party text handed to floorToDecimals, which
-        // presupposes fixed notation: fed '1.23456789e2' it returns '1.23456789'
-        // for 123.456789 and silently credits 1% of the burn. Only a JSON string
-        // is taken, since JSON.parse already rounded a JSON number to a double.
-        // `tx_hash` becomes a state key, so only 64 hex characters are taken,
-        // lowercased so one burn has one nullifier; anything else could make the
-        // key write throw. Bad rows are DROPPED rather than reverting onClaim(): a
-        // revert restores `pending:` and wedges the address out of requestClaim().
-        // A dropped row stays unmarked, so the burn is claimable on a later
-        // well-formed response, the same fail-soft contract as malformed JSON.
+        // `quantity` is third-party text handed to floorToDecimals, which presupposes
+        // fixed notation: fed '1.23456789e2' it returns '1.23456789' for 123.456789 and
+        // silently credits 1% of the burn. Only a JSON string is taken, since JSON.parse
+        // already rounded a JSON number to a double, and only up to MAX_QUANTITY_CHARS.
+        // `tx_hash` becomes a state key, so only 64 hex characters are taken, lowercased
+        // so one burn has one nullifier; anything else could make the key write throw.
+        // Bad rows are DROPPED rather than reverting onClaim(): a revert restores
+        // `pending:` and wedges the address out of requestClaim(). A dropped row stays
+        // unmarked, so the burn is claimable on a later well-formed response, the same
+        // fail-soft contract as malformed JSON.
         if (row && row.asset === asset && row.source === source && row.status === 'valid'
             && isHexTxHash(row.tx_hash)
             && typeof row.quantity === 'string'
+            && row.quantity.length <= MAX_QUANTITY_CHARS
             && isPlainDecimal(row.quantity)) {
             out.push({ txHash: row.tx_hash.toLowerCase(), quantity: row.quantity });
         }
@@ -233,7 +230,7 @@ module.exports = {
     meta: {
         name:        'Counterparty Bridge',
         description: 'Burn-to-mint bridge for a single Counterparty asset: a holder burns the asset to a well-known unspendable address, an off-chain attestation of the tokenscan.io sends API confirms the burn, and the contract then sends the migrated tokens one for one from a supply pre-minted into its own custody with public MINT locked.',
-        version:     '1.5.0'
+        version:     '1.6.0'
     },
 
     abi: { version: 1, methods: {
@@ -253,6 +250,8 @@ module.exports = {
     // match how the sends API reports `quantity` (8 divisible, 0 indivisible; see
     // /api/asset/{asset}) so claimed amounts land on the tick's real grid.
     initialize: function (xchain) {
+        // EXECUTE can name any export; xchainTick is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('xchainTick') === null, 'already initialized');
         var cpAsset    = xchain.getInputParam(0);
         var xchainTick = xchain.getInputParam(1);
         var maxSupply  = xchain.getInputParam(2);

@@ -104,7 +104,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.4.2'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -122,6 +122,8 @@ module.exports = {
     // unit    : amount of a card sent per draw, e.g. "1.00000000" (> 0).
     // cardN   : the candidate card ticks (at least one).
     initialize: function (xchain) {
+        // EXECUTE can name any export; payTick is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('payTick') === null, 'already initialized');
         var payTick = xchain.getInputParam(0);
         var price   = xchain.getInputParam(1);
         var unit    = xchain.getInputParam(2);

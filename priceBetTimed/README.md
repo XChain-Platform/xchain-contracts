@@ -156,6 +156,13 @@ translation adds its own surface:
   the outcome is open. The scan starts at the tip, so `accept()` also requires the
   tip's timestamp to be before `settleTime` (`settle round already published`);
   otherwise a taker could match a bet whose deciding price is already public.
+  That second check works where the VM is shown rounds by height, as on the
+  reference chain (BTC). On a chain where it is shown only rounds stamped at or
+  before the current block's time, every visible round is already below
+  `settleTime` once the first check passes, so a deciding round stamped ahead of
+  that chain's block time stays hidden and a taker who has read it off-chain can
+  still match. A maker there should cancel an unmatched bet well before
+  `settleTime`.
 - **Gas exhaustion on a long round backlog.** The `settle()` walk is capped at
   200 `getPriceAtRound` reads per call (each a metered VM_STATE-class charge)
   and the cursor persists between calls, so an arbitrarily long stretch of

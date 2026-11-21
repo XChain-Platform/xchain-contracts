@@ -63,7 +63,7 @@ withdraw path outside an executed proposal.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. |
+| `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. Runs once: a later call reverts with `already initialized`. |
 | `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. A proposal must arm within `executeWindowBlocks`. Reverts unless `recipient` is 14 to 90 letters and digits and `memo` is a string of at most 250 characters with no `\|` or `;`; the memo is sent with the payout. |
 | `approvePoll(proposalId, pollIndex)` | guardian (guardian mode only) | Binds the verified poll to the proposal. |
 | `arm(...)` | the poll finalization callback only | Set as the binding poll's `CALLBACK_METHOD`. Verifies the result and starts the timelock; status `ARMED`. |

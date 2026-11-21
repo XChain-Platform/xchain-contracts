@@ -152,11 +152,28 @@ function registerItemAmountCases(context) {
     });
 }
 
+// buy() and cancel() pay the seller by SEND, which refuses a contract address.
+function registerPayableSellerCases(context) {
+    const { BID, CODE, E2EHarness, ITEM, SELLER, XChainVM, assert } = context;
+
+    it('rejects a contract address as seller', async function () {
+        const bad = new E2EHarness(XChainVM);
+        bad.seedBalance(SELLER, 'XCHAIN', '1000000');
+        const r = await bad.deploy({
+            code: CODE, deployer: SELLER, contractAddress: 'C:BTC:5',
+            params: ['C:BTC:7', ITEM, '10', BID, '1000', '100', '10']
+        });
+        assert.strictEqual(r.success, false, 'deploy with a contract-derived seller should revert');
+        assert.ok(String(r.error).includes('plain address'), String(r.error));
+    });
+}
+
 function registerDeployValidationCases(context) {
     describe('deploy-time validation', function () {
         registerDeployRejections(context);
         registerPriceNotationCases(context);
         registerItemAmountCases(context);
+        registerPayableSellerCases(context);
     });
 }
 

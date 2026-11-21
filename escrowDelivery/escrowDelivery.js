@@ -74,7 +74,7 @@ module.exports = {
     meta: {
         name:        'Delivery Escrow',
         description: 'Escrow that settles itself on delivery: it carries the two-party escrow custody model with an arbiter and a buyer timeout, plus an attested read of a carrier tracking URL that releases the funds to the seller when the page shows the configured delivery marker.',
-        version:     '1.4.1'
+        version:     '1.5.0'
     },
 
     abi: { version: 1, methods: {
@@ -100,6 +100,8 @@ module.exports = {
     // exact tracking URL is fixed in the same deploy terms so a caller cannot
     // choose a page that contains the public marker.
     initialize: function (xchain) {
+        // EXECUTE can name any export; buyer is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('buyer') === null, 'already initialized');
         var buyer          = xchain.getInputParam(0);
         var seller         = xchain.getInputParam(1);
         var arbiter        = xchain.getInputParam(2);

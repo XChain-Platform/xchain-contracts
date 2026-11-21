@@ -217,7 +217,7 @@ module.exports = {
     meta: {
         name:        'Crowdsale',
         description: 'Capped token sale with a soft cap, a hard cap and a deadline: the contract issues a fixed sale-token inventory at deploy and sends it to buyers who claim after a successful raise, while a raise that misses the soft cap refunds every buyer in full.',
-        version:     '1.7.1'
+        version:     '1.8.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -237,6 +237,8 @@ module.exports = {
     // Issues the sale token (max supply = hardCap * rate, contract-owned) and
     // opens the sale until getBlockHeight() + durationBlocks.
     initialize: function (xchain) {
+        // EXECUTE can name any export; owner is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('owner') === null, 'already initialized');
         var owner    = xchain.getInputParam(0);
         var payTick  = xchain.getInputParam(1);
         var saleTick = xchain.getInputParam(2);

@@ -95,6 +95,13 @@ EXECUTE(contract, "settle")                                           # anyone, 
   winner is public. `accept()` therefore requires that round to be still
   unpublished: an unmatched bet can never be taken as a free option on the
   maker's stake. `cancel()` stays the maker's escape and is unaffected.
+  The check is only as current as the oracle history the VM is shown. On the
+  reference chain (BTC) the VM is shown finalized rounds by height. On
+  a chain where the VM is shown rounds by block time rather than by a signed
+  admission height, a final settle round stamped later than the current block
+  reads as unpublished, so a taker who has read it off-chain can still match
+  until that chain's block time passes the round's timestamp. A maker there
+  should cancel an unmatched bet well before `settleRound`.
 - **Double settlement / replay.** Every payout path requires `MATCHED` (or
   `OPEN` for `cancel`) and writes a terminal status (`SETTLED` / `PUSH` /
   `VOID` / `CANCELLED`) before emitting; state writes and emissions commit

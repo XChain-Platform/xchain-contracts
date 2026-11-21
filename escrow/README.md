@@ -37,7 +37,7 @@ before sending it; a raw read forwarded as a quantity would strand dust custody.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms (`amount` must be a plain decimal: digits and at most one decimal point); status → `INIT`. |
+| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms (`amount` must be a plain decimal: digits and at most one decimal point); status → `INIT`. Runs once: a later call reverts with `already initialized`. |
 | `fund()` | anyone (usually buyer, BATCHed after DEPOSIT) | Verifies the contract holds ≥ `amount` of `tick`; anchors the reclaim deadline (`deadlineBlocks` from **this** block); status → `FUNDED`. |
 | `release()` | buyer **or** arbiter | Sends the held balance to the seller; status → `RELEASED`. |
 | `refund()` | seller **or** arbiter | Sends the held balance to the buyer; status → `REFUNDED`. |

@@ -231,7 +231,9 @@ bridge multiple assets, deploy one instance per asset.
   users must check capacity before burning. Pending capacity can temporarily
   refuse a request until another callback settles. Bridges deployed from a
   version before 1.5.0 have neither ceiling nor the `tx_hash` shape check and
-  should be redeployed.
+  should be redeployed. Bridges deployed before 1.6.0 do not cap the feed's
+  `quantity` length, so a single feed row over 256 characters reverts
+  `onClaim()` and locks that claimant out; they should be redeployed too.
 
 - **The deployer can still WITHDRAW custody where owner WITHDRAW is
   allowed.** A raw `WITHDRAW` moves a contract's custody to its deployer

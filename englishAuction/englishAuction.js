@@ -90,7 +90,7 @@ module.exports = {
     meta: {
         name:        'English Auction',
         description: 'Ascending-bid auction: each new bid must strictly exceed the current high bid and refunds the bidder it topped in the same execution, and after the deadline anyone can settle the item to the high bidder and the winning bid to the seller.',
-        version:     '1.6.0'
+        version:     '1.7.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -109,6 +109,8 @@ module.exports = {
     // here - it starts at fund(), when the item is actually in custody, same
     // deadline-anchoring rationale as the sibling escrow/vesting templates.
     initialize: function (xchain) {
+        // EXECUTE can name any export; seller is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('seller') === null, 'already initialized');
         var seller      = xchain.getInputParam(0);
         var itemTick    = xchain.getInputParam(1);
         var itemAmount  = xchain.getInputParam(2);
@@ -132,14 +134,11 @@ module.exports = {
         requirePlainDecimal(xchain, minBid, 'minBid');
         xchain.require(minBid && xchain.math.gt(minBid, '0'), 'minBid must be positive');
 
-        // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
-        // parseInt blesses spellings that mean something else entirely ('1e3' -> 1,
-        // '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and deadlineBlocks is
-        // raw deployer text measured in the same deploy that stores it. A seller
-        // reading '1e3' off the DEPLOY action believes they armed a 1000-block
-        // auction while initialize() armed a 1-block one, so bidding closes before
-        // anyone can bid - and every bid that then reverts on the deadline guard
-        // strands its batched DEPOSIT. See requireIntInRange.
+        // Shape-check the window, do NOT parseInt-then-range-check it: a radix-less
+        // parseInt reads '1e3' as 1 ('0x10' as 16, '7abc' as 7, '5.99' as 5), so a seller
+        // reading '1e3' off the DEPLOY action believes they armed a 1000-block auction
+        // while initialize() armed a 1-block one, and every bid that then reverts on
+        // the deadline guard strands its batched DEPOSIT. See requireIntInRange.
         requireIntInRange(xchain, deadline, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
         var window = parseInt(deadline, 10);
 

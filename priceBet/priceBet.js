@@ -89,7 +89,7 @@ module.exports = {
     meta: {
         name:        'Price Bet',
         description: 'Two-party binary option on an oracle price: the maker fixes the pair, strike, side and stake and a taker matches it, and once the agreed oracle round is published anyone can settle deterministically to the winning side, or return both stakes on an exact tie.',
-        version:     '1.5.0'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -115,6 +115,8 @@ module.exports = {
     //   deadlineBlocks how many blocks after accept() before the bet can be
     //                  voided if the oracle round is still unpublished
     initialize: function (xchain) {
+        // EXECUTE can name any export; maker is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('maker') === null, 'already initialized');
         var maker          = xchain.getInputParam(0);
         var coinPair       = xchain.getInputParam(1);
         var strike         = xchain.getInputParam(2);
@@ -138,13 +140,11 @@ module.exports = {
         requirePlainDecimal(xchain, amount, 'amount');
         xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
 
-        // Shape-check the integers, do NOT parseInt-then-range-check them. A
-        // radix-less parseInt blesses spellings that mean something else entirely
-        // ('1e2' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7), and both of these
-        // params are raw maker-supplied constructor text measured in the same
-        // deploy that stores them: a maker asking for a 100-block void window via
-        // '1e2' would silently get a 1-block one, and their bet would be voidable
-        // essentially immediately after it matched. See requireIntInRange.
+        // Shape-check the integers, do NOT parseInt-then-range-check them: a radix-less
+        // parseInt reads '1e2' as 1 ('0x10' as 16, '7abc' as 7, ' 7' as 7), so a maker
+        // asking for a 100-block void window via '1e2' would silently get a 1-block
+        // one, and their bet would be voidable right after it matched. See
+        // requireIntInRange.
         requireIntInRange(xchain, settleRound, 1, MAX_ROUND, 'settleRound');
         requireIntInRange(xchain, deadlineBlocks, 1, MAX_WINDOW_BLOCKS, 'deadlineBlocks');
         var round  = parseInt(settleRound, 10);

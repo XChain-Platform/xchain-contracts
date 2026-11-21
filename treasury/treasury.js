@@ -200,7 +200,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.7.1'
+        version:     '1.8.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -226,6 +226,8 @@ module.exports = {
     // `mode` is 'guardian' (polls must be bound via approvePoll before they can
     // arm) or 'open' (any passing poll naming a live proposal arms it).
     initialize: function (xchain) {
+        // EXECUTE can name any export; guardian is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('guardian') === null, 'already initialized');
         var guardian    = xchain.getInputParam(0);
         var govTick     = xchain.getInputParam(1);
         var timelockRaw = xchain.getInputParam(2);

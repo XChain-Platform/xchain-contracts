@@ -101,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.5.1'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -120,6 +120,8 @@ module.exports = {
     // start here. It starts at fund(), so there is no claimable gap before the
     // grant is actually in custody.
     initialize: function (xchain) {
+        // EXECUTE can name any export; grantor is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('grantor') === null, 'already initialized');
         var grantor     = xchain.getInputParam(0);
         var beneficiary = xchain.getInputParam(1);
         var tick        = xchain.getInputParam(2);

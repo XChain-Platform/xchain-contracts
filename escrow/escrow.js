@@ -64,7 +64,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: a buyer deposits tokens for a seller, and the funds are released, refunded, or reclaimed after a deadline only on an authorized instruction from the buyer, the seller, or the arbiter.',
-        version:     '1.4.1'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -90,6 +90,8 @@ module.exports = {
     // seller/arbiter settlement path. fund() arms the clock when custody is
     // actually taken (same pattern as the sibling vesting template).
     initialize: function (xchain) {
+        // EXECUTE can name any export; buyer is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('buyer') === null, 'already initialized');
         var buyer         = xchain.getInputParam(0);
         var seller        = xchain.getInputParam(1);
         var arbiter       = xchain.getInputParam(2);

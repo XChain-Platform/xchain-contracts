@@ -135,6 +135,19 @@ async function pausableCase() {
     assert.deepStrictEqual(guardResult(await h.execute({ contractAddress: ADDR, method: 'guard', params: ['SEND', '1a', '1b'], caller: '1Caller' })), {});
 }
 
+// EXECUTE can name initialize on a live guard; a replay must not undo the owner's pause.
+async function replayedInitializeCase() {
+    const h = harnessFor();
+    const ADDR = 'C:BTC:PGREINIT';
+    assert.strictEqual((await deployPolicy(h, MATRIX.pauseOnly, ADDR)).deployed.success, true);
+    assert.strictEqual((await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER })).success, true);
+
+    const replay = await h.execute({ contractAddress: ADDR, method: 'initialize', params: [], caller: NOTOWNER });
+    assert.strictEqual(replay.success, false, 'a second initialize must revert');
+    assert.match(String(replay.error), /already initialized/);
+    assert.strictEqual(h.ledger.getContractState(ADDR).paused, 'true');
+}
+
 async function freezeCase() {
     const h = harnessFor();
     const ADDR = 'C:BTC:PGFREEZE';
@@ -219,4 +232,5 @@ async function fullPolicyCase() {
     it('allowlist: a non-allowlisted sender is blocked until the owner allows it', allowlistCase);
     it('allowlist "both": the recipient is checked on the isolate, and an empty recipient is exempt', allowBothCase);
     it('full policy: the whole stack composes, and the pause gate still wins over a clean trade', fullPolicyCase);
+    it('a replayed initialize from a non-owner reverts and leaves the guard paused', replayedInitializeCase);
 });

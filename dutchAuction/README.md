@@ -80,6 +80,9 @@ await sdk.batch()
 
 ## Attacks we considered
 
+- **Unpayable seller.** Deploy rejects a contract-derived seller. Such an
+  address contains `:` and cannot be a SEND destination, so storing one would
+  make every `buy()` and `cancel()` revert and strand buyer deposits.
 - **Caller lies about the deposit.** `buy()` reads the contract's own balance
   via `getBalance`, never a caller-supplied amount, and computes the required
   price itself from the block height - a caller cannot claim a lower price

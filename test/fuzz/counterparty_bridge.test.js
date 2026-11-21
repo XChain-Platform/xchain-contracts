@@ -55,6 +55,8 @@ const RAW_SCALE = 40;
 // Reference eligibility for a quantity: plain fixed notation only (RegExp is fine in a test).
 const PLAIN_DECIMAL = /^[0-9]+(\.[0-9]+)?$/;
 const HEX_TX_HASH = /^[0-9a-fA-F]{64}$/;
+// The template reads at most this many quantity characters; longer rows are dropped.
+const MAX_QUANTITY_CHARS = 64;
 
 const BAD_SPELLINGS = ['1.5e-8', '1E3', '1e+21', '+1.5', '-5', '.5', '5.', ' 5', '5 ', '0x10', '0b101',
     '0o17', '1_000', '', 'NaN', 'Infinity', '-Infinity', '1.2.3', '1,5', '\t7', '٣'];
@@ -94,7 +96,7 @@ function referenceEligible(row) {
     if (typeof row.tx_hash !== 'string' || !HEX_TX_HASH.test(row.tx_hash)) return false;
     // A JSON number was already rounded to a double by JSON.parse, so only a string is creditable.
     if (typeof row.quantity !== 'string') return false;
-    return PLAIN_DECIMAL.test(row.quantity);
+    return row.quantity.length <= MAX_QUANTITY_CHARS && PLAIN_DECIMAL.test(row.quantity);
 }
 
 // Generate a well-formed quantity, sometimes zero-padded, with 0-20 fraction digits.
@@ -107,10 +109,18 @@ function validDecimal(rng) {
     return fracLen > 0 ? whole + '.' + frac : whole;
 }
 
+// Zero-pad a valid quantity to the cap, one past it, or past the math layer's 256-character limit.
+function paddedDecimal(rng) {
+    const base = validDecimal(rng);
+    const target = rng.pick([MAX_QUANTITY_CHARS, MAX_QUANTITY_CHARS + 1, 257 + rng.int(150)]);
+    return base.length >= target ? base : '0'.repeat(target - base.length) + base;
+}
+
 // Generate one quantity across every spelling class the feed could send.
 function randomQuantity(rng) {
     const roll = rng.next();
-    if (roll < 0.45) return validDecimal(rng);
+    if (roll < 0.42) return validDecimal(rng);
+    if (roll < 0.45) return paddedDecimal(rng);
     if (roll < 0.57) return rng.pick(BAD_SPELLINGS);
     if (roll < 0.72) {
         const base = validDecimal(rng);
