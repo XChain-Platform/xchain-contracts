@@ -49,8 +49,8 @@ code ceiling.
 |---|---|---|
 | [access-control.js](./access-control.js) | `onlyOwner` · `isOwner` · `onlyRole` | gate methods to the owner or a named role |
 | [pausable.js](./pausable.js) | `whenNotPaused` · `isPaused` · `setPaused` | an owner-controlled circuit breaker |
-| [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` | size transfers from real holdings, never caller input (`requireHeld` needs `isAtLeastExact` pasted too) |
-| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `isAtLeastExact` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front; compare amounts exactly |
+| [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` · `floorToDecimals` · `tickDecimals` | size transfers from real holdings, never caller input, and floor them onto the tick's grid (`requireHeld` needs `isAtLeastExact` pasted too) |
+| [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `isAtLeastExact` · `exceedsExactly` · `isPositiveExact` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front; compare amounts exactly |
 | [state-machine.js](./state-machine.js) | `requireStatus` · `requireStatusIn` · `setStatus` | an explicit `status` lifecycle with guarded transitions |
 
 `xchain.math.gt` / `gte` / `lt` / `lte` / `eq` / `compare` treat two values within
@@ -148,4 +148,4 @@ likewise does not gate bulk drops.
 
 ## License
 
-[MIT](../LICENSE), fork freely, including into closed-source contracts.
+[MIT](../LICENSE.md), fork freely, including into closed-source contracts.

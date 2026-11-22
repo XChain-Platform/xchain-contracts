@@ -53,7 +53,9 @@ first) against `BURN_ADDRESS`; `onClaim` scans `data` for rows whose
 `cpAsset`, and whose `status` is `valid`, sums every one whose `tx_hash`
 has not already been credited, and sends the total from custody in one shot.
 `quantity` is already a normalized decimal string (no separate
-raw-integer field to divide by divisibility).
+raw-integer field to divide by divisibility). A row whose `quantity` is a
+JSON number rather than a string is dropped: `JSON.parse` has already
+rounded it to a double, so a large or long value would be credited wrong.
 
 A row whose `quantity` is not a **plain fixed-notation decimal** (digits,
 at most one decimal point with digits on both sides) is dropped rather
@@ -106,7 +108,7 @@ trigger a check on someone else's behalf that then pays a third party.
 | Method | Who | Effect |
 |---|---|---|
 | `requestClaim()` | anyone (self-serve) | Emits an `http_get` attestation request listing every Send on `BURN_ADDRESS` (`redundancy: 3`, `deadlineBlocks: 20`); reverts if the caller already has a check pending. Callable again later, once new burns exist. |
-| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and sends the total from custody. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. |
+| `onClaim(request_id, address)` | indexer callback | Reads the settled response. Sums every not-yet-credited burn of `cpAsset` sent by `address`, quantises it onto the tick's decimal grid, and sends the total from custody. Zero new burns, a malformed body, or a failed attestation is a no-op (pending clears, retry later) - not a revert. A claim that would push `totalClaimed` past `maxSupply` is also a no-op: it returns `'maxSupply exhausted'`, sends nothing and leaves the burns uncredited - not a revert. |
 | `claimedTotal(address)` | anyone | Read-only: how much `address` has been credited in total so far (`'0'` if none). |
 | `burned(tx_hash)` | anyone | Read-only: whether a specific Counterparty burn transaction has already been credited. |
 | `info()` | anyone | `{ cpAsset, xchainTick, decimals, maxSupply, totalClaimed, burnAddress }`. |
@@ -132,6 +134,12 @@ EXECUTE(bridge, "claimedTotal", "<your_address>")               # verify
 - `maxSupply`: hard cap, in `xchainTick` units. **Set this to `cpAsset`'s
   known total supply** so the bridge can never mint more XChain-side than
   exists Counterparty-side no matter how many addresses burn-and-claim.
+  It must be a plain fixed-notation decimal (`"1e8"` or `"0x10"` reverts),
+  because it is written into the `ISSUE` exactly as given. It must also
+  carry no more fractional digits than `decimals` (trailing zeros aside),
+  or the deploy reverts: the indexer would round the pre-minted custody
+  onto the grid and it would disagree with the cap. A cap that fails this
+  usually means `decimals` does not match the Counterparty asset.
 - `decimals`: must match how the sends API reports `quantity` for this
   asset (8 for a divisible Counterparty asset, 0 for an indivisible one)
   so claimed amounts land on the tick's real grid.
@@ -162,6 +170,14 @@ bridge multiple assets, deploy one instance per asset.
   BEFORE the `SEND` is emitted. A burn reported again in a later
   `requestClaim()` round, or replayed via a stale settled response, is
   silently skipped rather than minted again.
+- **Unstorable burn keys.** Only 64-character hexadecimal transaction hashes
+  are accepted, and they are lowercased before nullifier lookup. Malformed,
+  oversized, NUL-containing, and astral text is dropped without reverting the
+  callback or leaving the claimant pending.
+- **State-key exhaustion.** Permanent burn and claimant keys are counted and
+  capped, as are in-flight pending keys. At the credit ceiling a callback
+  succeeds without payment, clears pending, and leaves the burn unmarked so a
+  state write cannot wedge the claimant at the VM key cap.
 - **Forged burn.** `onClaim` reads the burn list from
   `xchain.attestation.getResponse(request_id)`, indexer-side consensus
   state; a caller cannot supply the payload directly.
@@ -182,8 +198,20 @@ bridge multiple assets, deploy one instance per asset.
 - **Claiming past the Counterparty-side supply.** `maxSupply` (set at
   deploy from `cpAsset`'s real total supply) is both the token's cap and
   the pre-minted custody, and `onClaim` checks `totalClaimed + amount <=
-  maxSupply` itself with a clear revert message before sending, so custody
-  can never be overdrawn by claims.
+  maxSupply` itself before sending, so custody can never be overdrawn by
+  claims. A claim that would cross the cap does **not** revert: the
+  `EXECUTE` succeeds, sends nothing, leaves `totalClaimed` and
+  `claimedTotal` unchanged, leaves the response's burns unmarked, clears
+  `pending:<address>`, logs `bridge maxSupply exhausted` and returns
+  `'maxSupply exhausted'`. The refusal covers the whole response, so no
+  part of an over-cap claim is paid. It fails soft because a revert would
+  also roll back the `pending:` delete while the same over-cap response
+  kept replaying, locking the address out of `requestClaim()`. A
+  successful `onClaim` therefore does not prove tokens were sent: check
+  the return value or log, or compare `claimedTotal(address)` before and
+  after. The Counterparty-side burn is already irreversible and stays
+  uncredited, and a later `requestClaim()` returns the same burns, which
+  are refused again while the cap stays exhausted.
 - **Rounding a claim above the cap.** Claimed amounts are floored onto
   `xchainTick`'s decimal grid before minting (same footgun and fix as
   `crowdsale.claim()`): the indexer re-normalises every emitted quantity to
@@ -196,6 +224,16 @@ bridge multiple assets, deploy one instance per asset.
   gas or corrupt state.
 
 ## Known limitations (this is a teaching example)
+
+- **Each instance has finite claim capacity.** `info()` reports current and
+  maximum credit and pending key counts. Once credit capacity is exhausted,
+  no new burn is paid even though the Counterparty burn is irreversible, so
+  users must check capacity before burning. Pending capacity can temporarily
+  refuse a request until another callback settles. Bridges deployed from a
+  version before 1.5.0 have neither ceiling nor the `tx_hash` shape check and
+  should be redeployed. Bridges deployed before 1.6.0 do not cap the feed's
+  `quantity` length, so a single feed row over 256 characters reverts
+  `onClaim()` and locks that claimant out; they should be redeployed too.
 
 - **The deployer can still WITHDRAW custody where owner WITHDRAW is
   allowed.** A raw `WITHDRAW` moves a contract's custody to its deployer
@@ -258,7 +296,7 @@ bridge multiple assets, deploy one instance per asset.
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterpartyBridge.test.js
+npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterparty_bridge.test.js
 ```
 
 Requires Node 22 (`isolated-vm`).

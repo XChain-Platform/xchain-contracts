@@ -49,9 +49,10 @@
 // treasury, "pass" it unanimously - is inert in BOTH modes.
 //
 // What no protocol surface reports is whether the poll's gates were REAL.
-// QUORUM and MIN_VOTERS read as met when they were never configured (see POLL
-// CONVENTIONS below), and nothing on-chain says which option index the poll's
-// own text called "approve", so a poll over the governance token itself can
+// The protocol makes a binding poll set QUORUM and MIN_VOTERS, but their size
+// is the poll creator's choice and arm() sees only met/not-met flags (see POLL
+// CONVENTIONS below). Nothing on-chain says which option index the poll's own
+// text called "approve" either, so a poll over the governance token itself can
 // still be shaped to pass on almost no turnout. Verifying that off-chain
 // before binding the poll via approvePoll() is what the guardian is for, and
 // it is why 'guardian' stays the recommended posture. In 'open' mode any
@@ -71,9 +72,12 @@
 //     executeProposal() then refuses to pay unless option 0 strictly outweighs
 //     every other option. Only a strict plurality is enforced; anything
 //     stronger has to come from the poll's QUORUM and option design.
-//   - Set QUORUM and MIN_VOTERS on the poll. The protocol reports both gates
-//     as met when they were never configured, so arm()'s gate check cannot
-//     tell "met" from "absent"; the guardian verifies them before binding.
+//   - Set QUORUM and MIN_VOTERS on the poll. The protocol requires both on a
+//     binding poll (QUORUM > 0, MIN_VOTERS >= 1) but leaves their size to the
+//     poll creator, and arm() gets only met/not-met flags, so it cannot tell a
+//     real gate from a token-sized one (QUORUM 0.000001, MIN_VOTERS 1). A poll
+//     created before that requirement activated can carry no gates at all,
+//     which also reads as met. The guardian verifies the sizes before binding.
 //   - CALLBACK_CONTRACT = this contract's deploy action index,
 //     CALLBACK_METHOD = "arm", CALLBACK_PARAMS = [proposalId] and nothing
 //     else (arm() pins the argument count, so a spare param reverts),
@@ -97,6 +101,97 @@
 // ceiling priceBet.js and patterns/validation.js use for a block window.
 var MAX_WINDOW_BLOCKS = 1000000;
 
+// Proposal records are the only state whose cardinality follows user traffic.
+// Keep that cardinality fixed: a treasury can have this many live proposals in
+// total, one proposer ADDRESS can occupy only this many of those slots (the
+// governance balance is read only when propose() runs, so the cap is per address,
+// not per stake), and terminal summaries rotate through one bounded archive
+// value. PROPOSED records that do not arm within exec_window blocks are stale
+// and release their slots the next time propose() compacts the live set.
+var MAX_LIVE_PROPOSALS = 64;
+var MAX_LIVE_PER_PROPOSER = 16;
+var MAX_ARCHIVED_PROPOSALS = 16;
+
+// Payout SEND limits, checked at propose() so a poll-approved proposal cannot
+// stall ARMED on a payout the indexer would refuse. MAX_MEMO_LENGTH mirrors
+// the SEND memo cap (UTF-16 units). The recipient bounds are the shortest and
+// longest strings a bech32 or base58 address can take (a 2-byte witness
+// program is 14 characters, bech32 tops out at 90). The recipient walk is a
+// shape check only: a checksum or network mismatch still passes it.
+var MAX_MEMO_LENGTH = 250;
+var MIN_RECIPIENT_LENGTH = 14;
+var MAX_RECIPIENT_LENGTH = 90;
+
+function requireRecipientShape(xchain, value) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length >= MIN_RECIPIENT_LENGTH && s.length <= MAX_RECIPIENT_LENGTH;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, 'recipient must be a plain address: 14-90 letters and digits');
+}
+
+// The memo rides the payout SEND, which refuses a pipe, a semicolon or an
+// over-long memo. A proposal without a memo stays memo-less: a payout is never
+// sent under a memo the voters did not see.
+function requireSendableMemo(xchain, value) {
+    xchain.require(typeof value === 'string', 'memo must be a string');
+    xchain.require(value.length <= MAX_MEMO_LENGTH, 'memo must be at most 250 characters');
+    for (var i = 0; i < value.length; i++) {
+        var c = value.charAt(i);
+        xchain.require(c !== '|' && c !== ';', 'memo cannot contain | or ;');
+    }
+}
+
+function executableHeight(xchain, rec) {
+    var height = xchain.getBlockHeight();
+    var ready = rec.armed + parseInt(xchain.state.get('timelock'));
+    xchain.require(height >= ready, 'timelock has not elapsed');
+    xchain.require(height <= ready + parseInt(xchain.state.get('exec_window')),
+        'execution window has passed');
+    return height;
+}
+
+function requireApprovedPoll(xchain, rec) {
+    var poll = xchain.getPollResult(rec.poll);
+    xchain.require(poll !== null && poll.status === 'finalized' &&
+        String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
+    xchain.require(poll.tick === xchain.state.get('gov_tick'),
+        'poll electorate is not the governance token');
+
+    var options = poll.options || [];
+    var approval = null;
+    for (var i = 0; i < options.length; i++)
+        if (String(options[i].index) === '0') approval = options[i].weight;
+    xchain.require(approval !== null,
+        'approval option did not strictly outweigh every other option');
+    for (var j = 0; j < options.length; j++)
+        if (String(options[j].index) !== '0')
+            xchain.require(exceedsExactly(xchain, approval, options[j].weight),
+                'approval option did not strictly outweigh every other option');
+}
+
+function payProposal(xchain, id, rec, height) {
+    var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
+    xchain.require(exceedsExactly(xchain, amount, '0'),
+        'amount is below one unit of the tick');
+    var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0', '0');
+    xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
+
+    rec.status = 'EXECUTED';
+    rec.executed = height;
+    rec.paid = amount;
+    settleProposal(xchain, id, rec);
+    xchain.emit.send({
+        destination: rec.recipient,
+        tick: rec.tick,
+        quantity: amount,
+        memo: rec.memo
+    });
+    return amount;
+}
+
 module.exports = {
 
     // Contract identity, read off this export at deploy and recorded on chain:
@@ -105,7 +200,7 @@ module.exports = {
     meta: {
         name:        'Treasury',
         description: 'Poll-governed community treasury: anyone can deposit, but funds leave only through a proposal approved by a binding VOTE poll pinned to the governance token, and then only after a public timelock the guardian can veto.',
-        version:     '1.3.0'
+        version:     '1.8.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -131,6 +226,8 @@ module.exports = {
     // `mode` is 'guardian' (polls must be bound via approvePoll before they can
     // arm) or 'open' (any passing poll naming a live proposal arms it).
     initialize: function (xchain) {
+        // EXECUTE can name any export; guardian is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('guardian') === null, 'already initialized');
         var guardian    = xchain.getInputParam(0);
         var govTick     = xchain.getInputParam(1);
         var timelockRaw = xchain.getInputParam(2);
@@ -153,6 +250,9 @@ module.exports = {
         requireIntInRange(xchain, windowRaw, 1, MAX_WINDOW_BLOCKS, 'executeWindowBlocks');
         var timelock = parseInt(timelockRaw, 10);
         var window   = parseInt(windowRaw, 10);
+        // Gate the notation first: math.gt passes 'Infinity', which isAtLeastExact
+        // then fails for every holder, so no proposal could ever spend a deposit.
+        requirePlainDecimal(xchain, minProp, 'minProposeBalance');
         xchain.require(minProp && xchain.math.gt(minProp, '0'),
             'minProposeBalance must be positive');
         xchain.require(mode === 'guardian' || mode === 'open',
@@ -165,6 +265,8 @@ module.exports = {
         xchain.state.set('min_propose', minProp);
         xchain.state.set('mode', mode);
         xchain.state.set('proposal_count', '0');
+        xchain.state.set('live_proposals', '[]');
+        xchain.state.set('proposal_archive', '[]');
     },
 
     // propose(recipient, tick, amount, memo): record a spend proposal. Gated on
@@ -179,9 +281,11 @@ module.exports = {
 
         xchain.require(caller !== xchain.getContractAddress(), 'contract cannot propose');
         xchain.require(recipient, 'recipient required');
+        requireRecipientShape(xchain, recipient);
+        requireSendableMemo(xchain, memo);
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
-        // Notation gate at the door untrusted text comes through. `amount` is raw
+        // Notation gate at the door untrusted text comes through, ahead of the
+        // magnitude check so unparseable text gets the plain-decimal message. `amount` is raw
         // proposer text that is stored verbatim and only met by executeProposal()'s
         // floorToDecimals BLOCKS LATER, after a poll has approved it; the floor is
         // string surgery that presupposes fixed notation and math.gt() is no filter
@@ -189,10 +293,22 @@ module.exports = {
         // is deliberate: a proposal that fails the check at execute would be stuck
         // ARMED with a poll mandate behind it until its window expired.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
 
-        var held = xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0';
+        var held = xchain.math.add(xchain.getBalance(caller, xchain.state.get('gov_tick')) || '0', '0');
         xchain.require(isAtLeastExact(xchain, held, xchain.state.get('min_propose')),
             'insufficient governance holdings to propose');
+
+        var live = compactLiveProposals(xchain);
+        var callerLive = 0;
+        for (var i = 0; i < live.length; i++) {
+            var open = loadLiveProposal(xchain, live[i]);
+            if (open.proposer === caller) callerLive++;
+        }
+        xchain.require(callerLive < MAX_LIVE_PER_PROPOSER,
+            'proposer has reached the live proposal limit');
+        xchain.require(live.length < MAX_LIVE_PROPOSALS,
+            'treasury has reached the live proposal limit');
 
         var id = String(parseInt(xchain.state.get('proposal_count')) + 1);
         xchain.state.set('proposal_count', id);
@@ -208,6 +324,8 @@ module.exports = {
             poll:      null,
             armed:     null
         });
+        live.push(id);
+        saveLiveProposalIds(xchain, live);
         return id;
     },
 
@@ -227,7 +345,8 @@ module.exports = {
         requireCanonicalIndex(xchain, poll, 'pollIndex');
 
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'proposal is not awaiting a poll');
         rec.expected_poll = String(poll);
         saveProposal(xchain, id, rec);
     },
@@ -273,7 +392,8 @@ module.exports = {
             'poll electorate is not the governance token');
 
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED', 'proposal is not awaiting a poll');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'proposal is not awaiting a poll');
         if (xchain.state.get('mode') === 'guardian')
             xchain.require(rec.expected_poll === String(pollIndex),
                 'poll is not the guardian-approved poll for this proposal');
@@ -294,11 +414,12 @@ module.exports = {
             'only the guardian can veto');
         var id  = xchain.getInputParam(0);
         var rec = loadProposal(xchain, id);
-        xchain.require(rec.status === 'PROPOSED' || rec.status === 'ARMED',
+        var status = effectiveProposalStatus(xchain, rec);
+        xchain.require(status === 'PROPOSED' || status === 'ARMED',
             'proposal is not vetoable');
         rec.status = 'VETOED';
         rec.vetoed = xchain.getBlockHeight();
-        saveProposal(xchain, id, rec);
+        settleProposal(xchain, id, rec);
     },
 
     // cancel(proposalId): the proposer withdraws a proposal no poll has armed.
@@ -307,9 +428,11 @@ module.exports = {
         var rec = loadProposal(xchain, id);
         xchain.require(xchain.getSourceAddress() === rec.proposer,
             'only the proposer can cancel');
-        xchain.require(rec.status === 'PROPOSED', 'only an un-armed proposal can be cancelled');
+        xchain.require(effectiveProposalStatus(xchain, rec) === 'PROPOSED',
+            'only an un-armed proposal can be cancelled');
         rec.status = 'CANCELLED';
-        saveProposal(xchain, id, rec);
+        rec.cancelled = xchain.getBlockHeight();
+        settleProposal(xchain, id, rec);
     },
 
     // executeProposal(proposalId): anyone fires an armed proposal once the
@@ -321,72 +444,9 @@ module.exports = {
         var id  = xchain.getInputParam(0);
         var rec = loadProposal(xchain, id);
         xchain.require(rec.status === 'ARMED', 'proposal is not armed');
-
-        var height = xchain.getBlockHeight();
-        var ready  = rec.armed + parseInt(xchain.state.get('timelock'));
-        xchain.require(height >= ready, 'timelock has not elapsed');
-        xchain.require(height <= ready + parseInt(xchain.state.get('exec_window')),
-            'execution window has passed');
-
-        var poll = xchain.getPollResult(rec.poll);
-        xchain.require(poll !== null && poll.status === 'finalized' &&
-            String(poll.winning_option) === '0', 'poll result not verifiable on-chain');
-        // The electorate is re-checked here for the same reason the winner is:
-        // the poll snapshot, not the armed state, is what the payout answers to.
-        // The snapshot carries `tick` on every block that can reach this line,
-        // because arm() only accepts the callback signature that ships with it.
-        xchain.require(poll.tick === xchain.state.get('gov_tick'),
-            'poll electorate is not the governance token');
-
-        // Require a strict plurality for option 0. The tally breaks an exact
-        // weight tie toward the lowest option index, and arm()'s callback wire
-        // carries no per-option weights, so a tie is only detectable here.
-        var options  = poll.options || [];
-        var approval = null;
-        for (var i = 0; i < options.length; i++)
-            if (String(options[i].index) === '0') approval = options[i].weight;
-        xchain.require(approval !== null,
-            'approval option did not strictly outweigh every other option');
-        for (var j = 0; j < options.length; j++)
-            if (String(options[j].index) !== '0')
-                xchain.require(exceedsExactly(xchain, approval, options[j].weight),
-                    'approval option did not strictly outweigh every other option');
-
-        // Floor the payout onto the tick's decimal grid before both the custody
-        // check and the emission (amm/vesting/crowdsale do the same): the indexer
-        // HALF-UP re-normalises every emitted amount to its tick's decimals at
-        // ledger-write time (its bcmath rounds half-up, NOT half-even: the mode
-        // is stated in xchain-indexer/src/consensus/xchain_price.js and pinned by test,
-        // because a mis-read mode at the .5 boundary is a consensus fork), so an
-        // off-grid rec.amount could round UP past what the
-        // treasury holds, revert every retry, and wedge the poll-approved transfer
-        // in ARMED until the execution window expires. Flooring makes the ledger
-        // write a numeric no-op; the on-grid figure actually paid is recorded on
-        // the proposal (rec.paid) so the audit trail matches the ledger.
-        // rec.amount's fixed-notation precondition is what propose()'s
-        // requirePlainDecimal enforces; do not relax that check without
-        // normalising here instead.
-        var amount = floorToDecimals(rec.amount, tickDecimals(xchain, rec.tick));
-        xchain.require(xchain.math.gt(amount, '0'),
-            'amount is below one unit of the tick');
-
-        var held = xchain.getBalance(xchain.getContractAddress(), rec.tick) || '0';
-        // Compare exactly: a tolerant gte passes a treasury up to 1e-12 relative short of the payout.
-        xchain.require(isAtLeastExact(xchain, held, amount), 'insufficient treasury balance');
-
-        // State guard: EXECUTED is committed in the same atomic scope as the
-        // send, so a second executeProposal can never double-pay.
-        rec.status   = 'EXECUTED';
-        rec.executed = height;
-        rec.paid     = amount;
-        saveProposal(xchain, id, rec);
-
-        xchain.emit.send({
-            destination: rec.recipient,
-            tick:        rec.tick,
-            quantity:    amount
-        });
-        return amount;
+        var height = executableHeight(xchain, rec);
+        requireApprovedPoll(xchain, rec);
+        return payProposal(xchain, id, rec, height);
     },
 
     info: function (xchain) {
@@ -397,7 +457,10 @@ module.exports = {
             timelock:   xchain.state.get('timelock'),
             execWindow: xchain.state.get('exec_window'),
             minPropose: xchain.state.get('min_propose'),
-            proposals:  xchain.state.get('proposal_count')
+            proposals:  xchain.state.get('proposal_count'),
+            liveProposals: JSON.parse(xchain.state.get('live_proposals')).length,
+            maxLiveProposals: MAX_LIVE_PROPOSALS,
+            maxLivePerProposer: MAX_LIVE_PER_PROPOSER
         });
     },
 
@@ -408,11 +471,7 @@ module.exports = {
         var id = xchain.getInputParam(0);
         xchain.require(id, 'proposalId required');
         var rec = loadProposal(xchain, id);
-        if (rec.status === 'ARMED') {
-            var deadline = rec.armed + parseInt(xchain.state.get('timelock')) +
-                           parseInt(xchain.state.get('exec_window'));
-            if (xchain.getBlockHeight() > deadline) rec.status = 'EXPIRED';
-        }
+        rec.status = effectiveProposalStatus(xchain, rec);
         return JSON.stringify(rec);
     }
 };
@@ -561,12 +620,95 @@ function proposalKey(xchain, id) {
     return 'proposal:' + s;
 }
 
-// Read a proposal record by its canonical id.
+// Read a live proposal record by its canonical id.
+function loadLiveProposal(xchain, id) {
+    var raw = xchain.state.get(proposalKey(xchain, id));
+    xchain.require(raw !== null, 'unknown proposal');
+    return JSON.parse(raw);
+}
+
+// Read a live proposal or one of the bounded recent terminal summaries.
 function loadProposal(xchain, id) {
-    return JSON.parse(xchain.state.get(proposalKey(xchain, id)));
+    var key = proposalKey(xchain, id);
+    var raw = xchain.state.get(key);
+    if (raw !== null) return JSON.parse(raw);
+    var archive = JSON.parse(xchain.state.get('proposal_archive'));
+    for (var i = archive.length - 1; i >= 0; i--)
+        if (archive[i].id === String(id)) return archive[i];
+    xchain.require(false, 'unknown proposal');
 }
 
 // Write a proposal record by its canonical id.
 function saveProposal(xchain, id, rec) {
     xchain.state.set(proposalKey(xchain, id), JSON.stringify(rec));
+}
+
+// Derive expiry without growing state. An unarmed proposal gets exec_window
+// blocks to find and finalize its poll. An armed proposal keeps the complete
+// timelock plus execution window promised by the public API.
+function effectiveProposalStatus(xchain, rec) {
+    var height = xchain.getBlockHeight();
+    var window = parseInt(xchain.state.get('exec_window'));
+    if (rec.status === 'PROPOSED' && height > rec.created + window) return 'EXPIRED';
+    if (rec.status === 'ARMED') {
+        var deadline = rec.armed + parseInt(xchain.state.get('timelock')) + window;
+        if (height > deadline) return 'EXPIRED';
+    }
+    return rec.status;
+}
+
+function saveLiveProposalIds(xchain, ids) {
+    xchain.state.set('live_proposals', JSON.stringify(ids));
+}
+
+// Keep only a compact outcome in the bounded archive. Full proposal terms and
+// memos remain in the immutable action history; omitting them here prevents an
+// attacker from multiplying a near-limit memo across the archive value.
+function archiveProposal(xchain, id, rec) {
+    var archive = JSON.parse(xchain.state.get('proposal_archive'));
+    archive.push({
+        id: String(id),
+        proposer: rec.proposer,
+        status: rec.status,
+        created: rec.created,
+        settled: rec.executed || rec.vetoed || rec.cancelled || rec.expired,
+        amount: String(rec.amount).length <= 256 ? rec.amount : null,
+        paid: rec.paid || null
+    });
+    if (archive.length > MAX_ARCHIVED_PROPOSALS) archive.shift();
+    xchain.state.set('proposal_archive', JSON.stringify(archive));
+}
+
+// Remove a terminal proposal's individual key immediately, then retain its
+// compact outcome in the fixed archive value.
+function settleProposal(xchain, id, rec) {
+    var ids = JSON.parse(xchain.state.get('live_proposals'));
+    var kept = [];
+    for (var i = 0; i < ids.length; i++)
+        if (ids[i] !== String(id)) kept.push(ids[i]);
+    xchain.state.delete(proposalKey(xchain, id));
+    saveLiveProposalIds(xchain, kept);
+    archiveProposal(xchain, id, rec);
+}
+
+// Scan a fixed-size live set before admitting another proposal. This is both
+// the state-growth bound and the recovery path for abandoned proposals.
+function compactLiveProposals(xchain) {
+    var ids = JSON.parse(xchain.state.get('live_proposals'));
+    var kept = [];
+    for (var i = 0; i < ids.length; i++) {
+        var raw = xchain.state.get(proposalKey(xchain, ids[i]));
+        if (raw === null) continue;
+        var rec = JSON.parse(raw);
+        if (effectiveProposalStatus(xchain, rec) === 'EXPIRED') {
+            rec.status = 'EXPIRED';
+            rec.expired = xchain.getBlockHeight();
+            xchain.state.delete(proposalKey(xchain, ids[i]));
+            archiveProposal(xchain, ids[i], rec);
+        } else {
+            kept.push(ids[i]);
+        }
+    }
+    saveLiveProposalIds(xchain, kept);
+    return kept;
 }

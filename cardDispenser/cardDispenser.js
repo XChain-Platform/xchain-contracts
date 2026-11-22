@@ -52,9 +52,8 @@
 // it, which would strand the buyer's payment in the contract.
 // ---------------------------------------------------------------------------
 
-// Quantise an amount DOWN onto a tick's decimal grid. Used here only to ASK
-// whether `unit` is already on a card's grid (floor === value), never to rewrite
-// it. Same helper and rationale as amm.js/dutchAuction.js:floorToDecimals.
+// Quantise an amount DOWN without mathjs's tolerance-aware floor. Used for
+// copy counts and to ask whether `unit` is already on a card's decimal grid.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -88,11 +87,12 @@ function floorToDecimals(value, decimals) {
 // DEPOSIT - the very outcome the sold-out path refunds instead of reverting.
 function deliverableCopies(xchain, self, tick, unit) {
     var q      = xchain.math.divide(xchain.getBalance(self, tick) || '0', unit);
-    var copies = xchain.math.subtract(q, xchain.math.mod(q, '1')); // floor (>=0)
+    var copies = floorToDecimals(q, 0);
     if (xchain.math.isZero(copies)) return copies;
     var info = xchain.getTokenInfo(tick);
     if (!info || info.DECIMALS === null || info.DECIMALS === undefined) return '0';
-    if (floorToDecimals(unit, info.DECIMALS) !== unit) return '0';
+    // Numeric, not string, equality: '1.00000000' is on a 0-decimal grid.
+    if (!isAtLeastExact(xchain, floorToDecimals(unit, info.DECIMALS), unit)) return '0';
     return copies;
 }
 
@@ -104,7 +104,7 @@ module.exports = {
     meta: {
         name:        'Card Dispenser',
         description: 'Random card-pack dispenser: a buyer pays a fixed price and receives one unit of a card tick drawn with probability proportional to the copies the contract still holds, using block-hash entropy a miner can influence, so it suits low-value packs only.',
-        version:     '1.1.0'
+        version:     '1.5.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -122,11 +122,15 @@ module.exports = {
     // unit    : amount of a card sent per draw, e.g. "1.00000000" (> 0).
     // cardN   : the candidate card ticks (at least one).
     initialize: function (xchain) {
+        // EXECUTE can name any export; payTick is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('payTick') === null, 'already initialized');
         var payTick = xchain.getInputParam(0);
         var price   = xchain.getInputParam(1);
         var unit    = xchain.getInputParam(2);
 
         xchain.require(payTick, 'payTick required');
+        // Gate the notation of price too: it is stored verbatim and echoed by info().
+        requirePlainDecimal(xchain, price, 'price');
         xchain.require(price && xchain.math.gt(price, '0'), 'price must be > 0');
         // Gate the NOTATION of unit before the magnitude check. xchain.math accepts
         // every spelling mathjs parses ('2.5e-1', '0x10', '+1.5', '.5'), and unit is
@@ -170,11 +174,12 @@ module.exports = {
         var unit    = xchain.state.get('unit');
 
         // --- Payment: delta of the contract's payTick balance since last draw ---
-        var curPay = xchain.getBalance(self, payTick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var curPay = xchain.math.add(xchain.getBalance(self, payTick) || '0', '0');
         var paid   = xchain.math.subtract(curPay, xchain.state.get('acctPay'));
-        // Compare the payment exactly; the gte term independently keeps a non-finite
-        // price (only checked > 0 at deploy) unpayable.
-        xchain.require(xchain.math.gte(paid, price) && isAtLeastExact(xchain, paid, price), 'underpaid');
+        // Compare the payment exactly (price is a plain decimal, gated at deploy).
+        xchain.require(isAtLeastExact(xchain, paid, price), 'underpaid');
 
         // --- Build the in-stock weighted inventory: copies = floor(balance / unit) ---
         var cards   = xchain.state.get('cards').split('|');
@@ -191,11 +196,11 @@ module.exports = {
 
         // --- Sold out: refund instead of reverting (see header) ---
         if (xchain.math.isZero(total)) {
-            xchain.emit.send({ destination: buyer, tick: payTick, quantity: paid });
             // The refund takes `paid` back OUT of custody, so the watermark lands on
             // the post-refund balance. Advancing it to curPay would over-count by
             // exactly the refund and under-measure every later payment.
             xchain.state.set('acctPay', xchain.math.subtract(curPay, paid));
+            xchain.emit.send({ destination: buyer, tick: payTick, quantity: paid });
             return 'sold_out';
         }
 
@@ -211,9 +216,9 @@ module.exports = {
         xchain.require(chosen !== null, 'selection failed'); // unreachable: r < total
 
         // --- Dispense + advance accounting ---
-        xchain.emit.send({ destination: buyer, tick: chosen, quantity: unit });
         xchain.state.set('acctPay', curPay);  // any overpayment is kept (tip)
         xchain.state.set('nonce', xchain.math.add(xchain.state.get('nonce'), '1'));
+        xchain.emit.send({ destination: buyer, tick: chosen, quantity: unit });
         return chosen;
     },
 
@@ -223,12 +228,13 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('owner'), 'owner only');
         var tick = xchain.getInputParam(0);
         xchain.require(tick, 'tick required');
-        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
-        xchain.require(xchain.math.gt(held, '0'), 'nothing to withdraw');
-        xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
+        var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
+        // Exact: gt reads any amount <= 1e-15 as zero, so dust on an 18-decimal tick could never be swept.
+        xchain.require(isPositiveExact(held), 'nothing to withdraw');
         // A sweep of payTick empties it, so draw()'s watermark has to follow custody
         // down to 0 or the next draw measures a negative delta and reverts forever.
         if (tick === xchain.state.get('payTick')) xchain.state.set('acctPay', '0');
+        xchain.emit.send({ destination: xchain.state.get('owner'), tick: tick, quantity: held });
     },
 
     // info(): read-only snapshot of remaining stock per card.
@@ -314,6 +320,21 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+// Return true when v > 0 exactly, by the sign and digits of the value itself.
+// xchain.math.gt treats a value within the absolute tolerance of zero as equal to
+// it, so a real dust balance would be refused. Same helper as
+// patterns/validation.js:isPositiveExact.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
 }
 
 // Horner fold of a string into a bounded big integer in [0, MOD).

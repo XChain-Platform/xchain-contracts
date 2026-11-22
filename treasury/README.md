@@ -38,10 +38,11 @@ cannot arm anything in either mode.
 What no protocol surface reports is whether the poll's *gates* were real, and
 that is what is left for a human to check.
 
-`QUORUM` and `MIN_VOTERS` read as met when they were never configured, and
-nothing on-chain says which option index the poll's own text called "approve",
-so a poll over the *governance* token can still be shaped to pass on almost no
-turnout.
+The protocol makes a binding poll set `QUORUM` and `MIN_VOTERS`, but their
+size is the poll creator's choice and `arm()` sees only met/not-met flags.
+Nothing on-chain says which option index the poll's own text called "approve"
+either, so a poll over the *governance* token can still be shaped to pass on
+almost no turnout.
 
 - **`guardian` mode (recommended):** a poll can only arm the proposal it was
   bound to via `approvePoll()`, and only the guardian can bind. The guardian
@@ -62,15 +63,26 @@ withdraw path outside an executed proposal.
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. |
-| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. |
+| `initialize(guardian, govTick, timelockBlocks, executeWindowBlocks, minProposeBalance, mode)` | deployer | Sets immutable config. `mode` is `"guardian"` or `"open"`. Runs once: a later call reverts with `already initialized`. |
+| `propose(recipient, tick, amount, memo)` | any `govTick` holder with ≥ `minProposeBalance` | Records proposal N; status `PROPOSED`. Returns the id. A proposal must arm within `executeWindowBlocks`. Reverts unless `recipient` is 14 to 90 letters and digits and `memo` is a string of at most 250 characters with no `\|` or `;`; the memo is sent with the payout. |
 | `approvePoll(proposalId, pollIndex)` | guardian (guardian mode only) | Binds the verified poll to the proposal. |
 | `arm(...)` | the poll finalization callback only | Set as the binding poll's `CALLBACK_METHOD`. Verifies the result and starts the timelock; status `ARMED`. |
 | `veto(proposalId)` | guardian | Kills a `PROPOSED` or `ARMED` proposal; status `VETOED`. |
 | `cancel(proposalId)` | proposer | Withdraws a not-yet-armed proposal; status `CANCELLED`. |
 | `executeProposal(proposalId)` | anyone | After the timelock, inside the execution window: re-verifies the poll via `getPollResult`, then sends exactly (recipient, tick, amount); status `EXECUTED`. |
 | `info()` | anyone (read-only) | Config and proposal count. |
-| `proposalInfo(proposalId)` | anyone (read-only) | One proposal record; reports `EXPIRED` for an armed proposal whose window passed. |
+| `proposalInfo(proposalId)` | anyone (read-only) | A live proposal record or one of the 16 most recent compact terminal summaries; reports `EXPIRED` when a live proposal's applicable window passed. |
+
+Proposal state is bounded. At most 64 proposals can be live at once, and one
+address can hold at most 16 of those slots. A `PROPOSED` record that has not
+armed after `executeWindowBlocks` is expired; an `ARMED` record expires after
+its timelock and execution window. The next `propose()` removes expired
+records before checking either cap. `cancel`, `veto`, and successful execution
+remove the full record immediately and rotate a compact outcome into a
+16-entry archive stored under one state key. The immutable action history is
+the source for older or full terminal proposal details. Compact summaries keep
+the status, proposer, heights, paid amount, and ordinary voted amounts (amount
+strings longer than 256 characters are omitted from the summary).
 
 `propose(...)` requires `amount` to be a **plain fixed-notation decimal**
 (digits, at most one decimal point with digits on both sides). It is a
@@ -120,10 +132,14 @@ conventions, then (guardian mode) asks the guardian to bind it:
   then refuses to pay unless option 0 strictly outweighs every other option.
   Only a strict plurality is enforced: a community that wants more must
   express it through the poll's `QUORUM` and option design.
-- Set `QUORUM` and `MIN_VOTERS`. The protocol reports both gates as met when
-  they were never configured, so the callback's gate check cannot distinguish
-  "met" from "absent"; the guardian checks they are real before binding.
-  Size the quorum so that buying it costs more than the treasury holds.
+- Set `QUORUM` and `MIN_VOTERS`. The protocol requires both on a binding poll
+  (`QUORUM` > 0, `MIN_VOTERS` >= 1, under `VOTE_BINDING_MINIMUMS`) but leaves
+  their size to the poll creator, and the callback carries only met/not-met
+  flags, so `arm()` cannot tell a real gate from a token-sized one (`QUORUM`
+  0.000001, `MIN_VOTERS` 1). A poll created before that requirement activated
+  can carry no gates at all, which also reads as met. The guardian checks the
+  sizes before binding. Size the quorum so that buying it costs more than the
+  treasury holds.
 - `WEIGHT_MODE`: prefer `time_weighted`. It weights by holdings over a window,
   so tokens bought the day of the vote count for little; this directly defeats
   the buy-then-vote pattern.
@@ -166,26 +182,45 @@ conventions, then (guardian mode) asks the guardian to bind it:
   armed state.
 - **Queue spam.** `propose` requires `minProposeBalance` of the governance
   token, and the contract's own callback identity is explicitly barred from
-  proposing.
+  proposing. One address can occupy no more than 16 of the 64 live slots, and
+  an abandoned unarmed proposal releases its slot after
+  `executeWindowBlocks`, so the contract's state-key budget stays bounded.
+  The caps are per address, not per stake: `propose` reads the governance
+  balance only at the moment it runs, so one holder can move the same balance
+  between addresses and fill all 64 slots until those unarmed proposals go
+  stale, and every other holder is refused meanwhile; the same holder can
+  retake the slots once they go stale, every `executeWindowBlocks`. Funds are
+  not at risk, since arming and execution are unaffected. The guardian's `veto` frees one
+  slot per call; a fork that needs Sybil resistance should tie each live slot
+  to its own locked or bonded balance.
 
 ## Known limitations (by design, for a teaching baseline)
 
 - **The poll's gates are not verifiable on-chain.** Repeated because it is the
-  big one: `QUORUM` and `MIN_VOTERS` report as met when they were never set,
-  and the option labels are not on-chain text this contract can read, so a
+  big one: `QUORUM` and `MIN_VOTERS` must be set on a binding poll, but a
+  token-sized gate reports as met exactly like a real one, and the option
+  labels are not on-chain text this contract can read, so a
   poll can satisfy every check `arm()` can make and still be a low-turnout
   raid. Verifying that is the guardian's job, which is why `guardian` is the
   recommended mode. (The *electorate* half of this limitation is now closed:
   the protocol delivers the poll's `TICK`, and `arm()` pins it to `govTick`.)
+- **The recipient check is shape-only.** `propose()` cannot verify a checksum
+  or network, so a well-formed but invalid address still arms and then fails
+  at execution until the proposal expires or is vetoed. A recipient can also
+  refuse a payout that carries no memo (an address that requires one), or by
+  a tick allow or block list or a transfer controller. A memo-less proposal is
+  sent memo-less, never under an invented memo, so a payout to an exchange or
+  custodian must carry the memo that recipient needs. Guardians should check
+  the recipient and memo before calling `approvePoll`.
 - **One transfer per proposal.** No batching, no streaming; deploy the vesting
   template from a proposal's recipient address if you need scheduled release.
 - **The guardian can censor.** It cannot steal, but it can refuse to bind or
   veto everything. That is the intended trade for surviving voter apathy;
   communities that reject it should run `open` mode with a large timelock and
   real monitoring.
-- **No quorum introspection.** The contract sees only met/not-met flags, which
-  read "met" when the poll set no gates at all. Poll hygiene is the guardian's
-  job (guardian mode) or the community's (open mode).
+- **No quorum introspection.** The contract sees only met/not-met flags, never
+  the gate sizes, so a token-sized gate reads "met". Poll hygiene is the
+  guardian's job (guardian mode) or the community's (open mode).
 - **A tied poll still arms.** The finalization callback carries only the
   winning option's index, not per-option weights, so `arm()` cannot see a tie;
   `executeProposal()` catches it from the poll snapshot and never pays out.

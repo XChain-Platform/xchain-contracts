@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// readme-version-badge.test.js: the README version badge tracks package.json.
+// readme_version_badge.test.js: the README version badge tracks package.json.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -16,7 +16,7 @@
 //
 // This file joins the two. It needs no VM, so it runs on every platform.
 //
-//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme-version-badge.test.js
+//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme_version_badge.test.js
 
 'use strict';
 

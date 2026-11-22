@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// counterpartyBridge.test.js: behavioral + adversarial tests for counterpartyBridge.js
+// counterparty_bridge.test.js: behavioral + adversarial tests for counterpartyBridge.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -10,7 +10,7 @@
 // never drift.
 //
 // Run from the xchain-vm package so its deps (mocha, isolated-vm, mathjs) resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterpartyBridge.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/counterpartyBridge/counterparty_bridge.test.js
 
 'use strict';
 
@@ -22,6 +22,8 @@ const registerNoBurnFailureTests = require('./counterparty_bridge_test/no_burn_f
 const registerAttackTests = require('./counterparty_bridge_test/attack_tests');
 const registerQuantityParseTests = require('./counterparty_bridge_test/quantity_parse_tests');
 const registerDeployValidationTests = require('./counterparty_bridge_test/deploy_validation_tests');
+const registerKeyLimitTests = require('./counterparty_bridge_test/key_limit_tests');
+const registerKeyCapacityTests = require('./counterparty_bridge_test/key_capacity_tests');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertContractState;
@@ -43,7 +45,7 @@ const MAX_SUPPLY   = '1000000';
 const BURN_ADDRESS = '1BitcoinEaterAddressDontSendf59kuE';
 
 let txCounter = 0;
-function nextTxHash() { txCounter += 1; return 'tx' + String(txCounter).padStart(62, '0'); }
+function nextTxHash() { txCounter += 1; return String(txCounter).padStart(64, '0'); }
 
 // Shape of a real tokenscan.io GET /api/sends/{address}/{page}/{limit}
 // response (see https://tokenscan.io/api#sends): every Send that ever
@@ -91,9 +93,15 @@ function buildContext() {
     // Seeds a settled attestation response on the harness's MockLedger, the
     // way the indexer would after off-chain providers agree on the sends
     // API's body. h.execute() reads it via ledger.buildAttestationAccessor().
+    // The live attestation view the indexer hands the VM holds only rows whose
+    // response status is 'ok'; a failed, error or expired outcome has no
+    // readable row. A non-ok status therefore seeds nothing, so no test can
+    // pass by reading a row the live path would hide.
     function seedSendsResponse(requestId, payload, status) {
+        const effective = status || 'ok';
+        if (effective !== 'ok') return;
         h.ledger.seedAttestation(requestId, {
-            status: status || 'ok', payload: payload, providerId: 'http_get', blockIndex: 200, validatorCount: 3
+            status: effective, payload: payload, providerId: 'http_get', blockIndex: 200, validatorCount: 3
         });
     }
 
@@ -129,4 +137,6 @@ function buildContext() {
     registerAttackTests(context);
     registerQuantityParseTests(context);
     registerDeployValidationTests(context);
+    registerKeyLimitTests(context);
+    registerKeyCapacityTests(context);
 });

@@ -28,13 +28,16 @@ undo the `DEPOSIT` before it, and the deposit stays in the contract's custody.
 The contract **never
 trusts a caller-supplied amount**; it reads its own balance with
 `xchain.getBalance(xchain.getContractAddress(), tick)`. That single habit is what
-makes custody contracts safe on XChain.
+makes custody contracts safe on XChain. The read can come back in exponent
+notation (`"5e-7"` below 0.000001, `"1e+21"` at 1e21), and an emitted amount must
+be a plain decimal, so the template passes it through `xchain.math.add(held, '0')`
+before sending it; a raw read forwarded as a quantity would strand dust custody.
 
 ## Lifecycle
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms (`amount` must be a plain decimal: digits and at most one decimal point); status → `INIT`. |
+| `initialize(buyer, seller, arbiter, tick, amount, deadlineBlocks)` | deployer | Sets immutable terms (`amount` must be a plain decimal: digits and at most one decimal point); status → `INIT`. Runs once: a later call reverts with `already initialized`. |
 | `fund()` | anyone (usually buyer, BATCHed after DEPOSIT) | Verifies the contract holds ≥ `amount` of `tick`; anchors the reclaim deadline (`deadlineBlocks` from **this** block); status → `FUNDED`. |
 | `release()` | buyer **or** arbiter | Sends the held balance to the seller; status → `RELEASED`. |
 | `refund()` | seller **or** arbiter | Sends the held balance to the buyer; status → `REFUNDED`. |

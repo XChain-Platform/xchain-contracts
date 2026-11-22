@@ -101,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Vesting',
         description: 'Linear token vesting with a cliff: a grantor locks tokens for a beneficiary who claims whatever has vested at the current block height, measured in blocks and truncated down, and a revocable grant lets the grantor reclaim the still-unvested remainder.',
-        version:     '1.4.0'
+        version:     '1.6.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -120,6 +120,8 @@ module.exports = {
     // start here. It starts at fund(), so there is no claimable gap before the
     // grant is actually in custody.
     initialize: function (xchain) {
+        // EXECUTE can name any export; grantor is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('grantor') === null, 'already initialized');
         var grantor     = xchain.getInputParam(0);
         var beneficiary = xchain.getInputParam(1);
         var tick        = xchain.getInputParam(2);
@@ -170,7 +172,9 @@ module.exports = {
 
         var tick  = xchain.state.get('tick');
         var total = xchain.state.get('total');
-        var held  = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        // getBalance can hand back exponent text ("5e-7", "1e+21"), which an emitted
+        // amount may not carry; math.add(x, '0') renders it as a plain decimal.
+        var held  = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Require custody of the full total, compared exactly: a grant armed short
         // of `total` makes the final claim's SEND exceed custody and revert.
         xchain.require(isAtLeastExact(xchain, held, total), 'insufficient deposit');
@@ -196,9 +200,9 @@ module.exports = {
             'only the grantor can cancel');
 
         var tick = xchain.state.get('tick');
-        var held = xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+        var held = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
         // Refuse an empty cancel so it cannot burn the INIT state for nothing.
-        xchain.require(xchain.math.gt(held, '0'), 'nothing to reclaim');
+        xchain.require(isPositiveExact(held), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({ destination: xchain.state.get('grantor'), tick: tick, quantity: held });
@@ -226,7 +230,7 @@ module.exports = {
             xchain.math.subtract(vested, claimed),
             tickDecimals(xchain, tick)
         );
-        xchain.require(xchain.math.gt(claimable, '0'), 'nothing to claim');
+        xchain.require(isPositiveExact(claimable), 'nothing to claim');
 
         xchain.state.set('claimed', xchain.math.add(claimed, claimable));
 
@@ -257,7 +261,7 @@ module.exports = {
             xchain.math.subtract(total, vested),
             tickDecimals(xchain, tick)
         );
-        xchain.require(xchain.math.gt(unvested, '0'), 'nothing to revoke (fully vested)');
+        xchain.require(isPositiveExact(unvested), 'nothing to revoke (fully vested)');
 
         // Freeze the cap at total minus the grantor's floored payout, so the two
         // payouts sum to exactly total (a raw `vested` cap is floored again by
@@ -373,4 +377,19 @@ function isAtLeastExact(xchain, a, b) {
         else if (c !== '0' && c !== '.') return false;
     }
     return !(neg && nonzero);
+}
+
+// Return true when v > 0 exactly, by the sign and digits of the value itself.
+// xchain.math.gt treats a value within the absolute tolerance of zero as equal to
+// it, so a real sub-tolerance payout would be refused as "nothing". Used by the
+// cancel, claim and revoke payout guards.
+function isPositiveExact(v) {
+    var s = String(v);
+    if (s.charAt(0) === '-') return false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c >= '1' && c <= '9') return true;
+        if (c !== '0' && c !== '.') return false;
+    }
+    return false;
 }

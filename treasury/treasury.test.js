@@ -25,6 +25,8 @@ const registerAmountValidationTests = require('./treasury_test/amount_validation
 const registerDeployValidationTests = require('./treasury_test/deploy_validation');
 const registerProposalIdTests = require('./treasury_test/proposal_ids');
 const registerPollIndexTests = require('./treasury_test/poll_index');
+const registerNotationGateTests = require('./treasury_test/notation_gates');
+const registerRecipientMemoTests = require('./treasury_test/recipient_memo');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions, assertBalance,
@@ -40,7 +42,7 @@ const CODE = fs.readFileSync(path.join(__dirname, 'treasury.js'), 'utf8');
 
 const GUARDIAN = 'guardian';
 const HOLDER   = 'holder';
-const PAYEE    = 'payee';
+const PAYEE    = 'bcrt1qe6l04hhwjg98fmggptdm0cemj6lm7hhwzahaul';
 const ATTACKER = 'attacker';
 const ADDR     = 'C:BTC:1';
 const GOV      = 'GOV';
@@ -156,4 +158,9 @@ Object.assign(context, {
     registerDeployValidationTests(context);
     registerProposalIdTests(context);
     registerPollIndexTests(context);
+    registerNotationGateTests(context);
+    registerRecipientMemoTests(context);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./treasury_test/invariants');

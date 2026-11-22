@@ -103,6 +103,12 @@
 // blocks), the same ceiling patterns/validation.js uses in its example.
 var MAX_SETTLE_TIME = 253402300799;
 var MAX_WINDOW_BLOCKS = 1000000;
+var MAX_PRICE_CHARS = 40;
+
+// Every payout carries this memo. A recipient can require a memo on incoming
+// SENDs, and a refused emission reverts the whole execution, so a memo-less
+// refund would let either party block both stakes from coming back.
+var PAYOUT_MEMO = 'priceBetTimed payout';
 
 // Rounds a single call may read while walking cursor -> tip. Shared by settle()
 // and reclaim() so the two agree on how much history one execution pays for;
@@ -117,7 +123,7 @@ module.exports = {
     meta: {
         name:        'Timed Price Bet',
         description: 'Two-party binary option decided by clock time: the parties agree on a settle timestamp, and settlement scans finalized oracle rounds from a cursor recorded at acceptance, capped at 200 reads per call, for the first round at or after that instant.',
-        version:     '1.4.0'
+        version:     '1.8.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -125,7 +131,7 @@ module.exports = {
     abi: { version: 1, methods: {
         fund:    { summary: 'Maker escrows their stake (BATCH after a DEPOSIT)', params: [] },
         accept:  { summary: 'Taker matches the stake and takes the opposite side (BATCH after a DEPOSIT)', params: [] },
-        settle:  { summary: 'Pay the winner from the first oracle round at/after settleTime (anyone)', params: [] },
+        settle:  { summary: 'Pay the winner, or refund both sides for a tie or unusable deciding price (anyone)', params: [] },
         cancel:  { summary: 'Maker reclaims their stake while the bet is unmatched', params: [] },
         reclaim: { summary: 'Void the bet and refund both sides if no qualifying round ever arrives', params: [] },
         info:    { summary: 'Read the bet terms and status', params: [], view: true }
@@ -138,6 +144,8 @@ module.exports = {
     //                  voided if no qualifying round has arrived
     //   (other params identical to priceBet)
     initialize: function (xchain) {
+        // EXECUTE can name any export; maker is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('maker') === null, 'already initialized');
         var maker          = xchain.getInputParam(0);
         var coinPair       = xchain.getInputParam(1);
         var strike         = xchain.getInputParam(2);
@@ -148,16 +156,18 @@ module.exports = {
         var deadlineBlocks = xchain.getInputParam(7);
 
         xchain.require(maker, 'maker required');
+        requirePayableAddress(xchain, maker, 'maker');
         xchain.require(coinPair, 'coinPair required');
-        xchain.require(strike && xchain.math.gt(strike, '0'), 'strike must be positive');
+        // Gate the strike's notation first, so unparseable text gets the plain-decimal message.
         requirePlainDecimal(xchain, strike, 'strike');
+        xchain.require(strike && xchain.math.gt(strike, '0'), 'strike must be positive');
         xchain.require(side === 'OVER' || side === 'UNDER', 'side must be OVER or UNDER');
         xchain.require(tick, 'tick required');
-        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
         // Notation gate, NOT a grid check (the tick's decimals are unreadable at
-        // deploy). The positivity test above is no filter at all, and refundBoth()'s
+        // deploy). The positivity test below is no filter at all, and refundBoth()'s
         // floorToDecimals silently corrupts non-fixed input. See requirePlainDecimal.
         requirePlainDecimal(xchain, amount, 'amount');
+        xchain.require(amount && xchain.math.gt(amount, '0'), 'amount must be positive');
 
         // Shape-check the integers, do NOT parseInt-then-range-check them. A
         // radix-less parseInt blesses spellings that mean something else entirely
@@ -198,12 +208,15 @@ module.exports = {
     // liveness deadline AND the scan cursor: rounds already finalized at the
     // match can never qualify (their timestamps predate this block, which
     // predates settleTime), so the scan starts at the round current NOW. The
-    // current round itself stays in scope (cursor = its number, not +1) as
-    // slack for any clock skew between round consensus time and block time.
+    // current round itself stays in scope (cursor = its number, not +1), and
+    // because the scan reads it first, a tip whose timestamp already reaches
+    // settleTime is the deciding round published before the match: accept()
+    // refuses it, the same rule priceBet applies to its settle round.
     accept: function (xchain) {
         xchain.require(xchain.state.get('status') === 'OPEN', 'bet not open');
 
         var taker = xchain.getSourceAddress();
+        requirePayableAddress(xchain, taker, 'taker');
         xchain.require(taker !== xchain.state.get('maker'), 'maker cannot take their own bet');
         xchain.require(
             xchain.getBlockTimestamp() < parseInt(xchain.state.get('settleTime')),
@@ -231,6 +244,13 @@ module.exports = {
             !roundOutsideWindow(xchain, xchain.state.get('coinPair'), latest.roundNumber),
             'tip round is outside the retrievable oracle window'
         );
+        // Round timestamps can run ahead of block time (clock skew, non-monotonic BTC
+        // header times), so block time < settleTime does not prove the outcome is
+        // open. The tip is the first round settle() reads; at/after settleTime its
+        // price is already public and a match would be a free option on the maker's
+        // stake.
+        xchain.require(latest.timestamp < parseInt(xchain.state.get('settleTime')),
+            'settle round already published');
         var cursor = latest.roundNumber;
 
         xchain.state.set('taker', taker);
@@ -314,8 +334,16 @@ module.exports = {
 
         // Compare exactly: math.eq/gt treat values within 1e-12 relative as equal,
         // so a price one base unit off a large strike would otherwise settle as a push.
-        var atOrAbove = isAtLeastExact(xchain, found.price, strike);
-        var atOrBelow = isAtLeastExact(xchain, strike, found.price);
+        var usable = isUsablePrice(found.price);
+        var atOrAbove = usable && isAtLeastExact(xchain, found.price, strike);
+        var atOrBelow = usable && isAtLeastExact(xchain, strike, found.price);
+
+        // An unusable deciding value proves neither side and must not default to UNDER.
+        if (!atOrAbove && !atOrBelow) {
+            xchain.state.set('status', 'VOID');
+            refundBoth(xchain);
+            return 'VOID';
+        }
 
         // Exactly at the strike: a push. Both stakes go back.
         if (atOrAbove && atOrBelow) {
@@ -339,7 +367,8 @@ module.exports = {
         xchain.emit.send({
             destination: winner,
             tick: xchain.state.get('tick'),
-            quantity: pot
+            quantity: pot,
+            memo: PAYOUT_MEMO
         });
         return 'SETTLED';
     },
@@ -355,7 +384,8 @@ module.exports = {
         xchain.emit.send({
             destination: xchain.state.get('maker'),
             tick: xchain.state.get('tick'),
-            quantity: held
+            quantity: held,
+            memo: PAYOUT_MEMO
         });
     },
 
@@ -428,6 +458,17 @@ module.exports = {
     }
 };
 
+function requirePayableAddress(xchain, value, label) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length > 0;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, label + ' must be a plain address that can receive SEND');
+}
+
 // Normalize an oracle read to { price, roundNumber, timestamp, outsideWindow }
 // or null. The production accessor (indexer getOracleDataForVM via xchain-vm
 // readonly-accessors) returns that object; a bare-string price (legacy/mock
@@ -474,9 +515,10 @@ function latestRound(xchain) {
 }
 
 // Contract's own balance of the bet tick. The single source of truth for
-// custody; caller-supplied amounts are never trusted.
+// custody; caller-supplied amounts are never trusted. math.add(x, '0') renders the
+// snapshot's exponent text ("5e-7") as the plain decimal an emitted amount must be.
 function heldBalance(xchain) {
-    return xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0';
+    return xchain.math.add(xchain.getBalance(xchain.getContractAddress(), xchain.state.get('tick')) || '0', '0');
 }
 
 // Return true when a >= b exactly, by the sign of the exact subtract ('-0' is zero).
@@ -514,10 +556,29 @@ function refundBoth(xchain) {
     var held   = heldBalance(xchain);
     var rest   = xchain.math.subtract(held, amount);
 
-    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount });
-    if (xchain.math.gt(rest, '0')) {
-        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest });
+    xchain.emit.send({ destination: xchain.state.get('maker'), tick: tick, quantity: amount, memo: PAYOUT_MEMO });
+    if (!isAtLeastExact(xchain, '0', rest)) {
+        xchain.emit.send({ destination: xchain.state.get('taker'), tick: tick, quantity: rest, memo: PAYOUT_MEMO });
     }
+}
+
+// Accept only the positive plain-decimal notation produced by the oracle rail.
+// This returns false rather than throwing so settlement always has a fund exit.
+function isUsablePrice(price) {
+    if (price === null || price === undefined) return false;
+    var s = String(price);
+    if (s.length === 0 || s.length > MAX_PRICE_CHARS) return false;
+    var dot = -1;
+    var nonzero = false;
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '.') {
+            if (dot >= 0 || i === 0 || i === s.length - 1) return false;
+            dot = i;
+        } else if (c < '0' || c > '9') return false;
+        else if (c !== '0') nonzero = true;
+    }
+    return nonzero;
 }
 
 // Reject any spelling of a numeric term that is not a plain fixed-notation

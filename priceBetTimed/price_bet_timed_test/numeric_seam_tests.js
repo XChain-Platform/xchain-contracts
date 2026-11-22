@@ -69,5 +69,14 @@ function registerNearStrikeSettlementTests(context) {
             assertBalance(h.ledger, MAKER, TICK, '100');
             assertBalance(h.ledger, TAKER, TICK, '100');
         });
+
+        for (const price of ['Infinity', 'NaN', '', 'abc', '1e5', '-1', '0', '0.00', '1'.repeat(41)]) {
+            it(`voids and refunds both sides for unusable price ${JSON.stringify(price)}`, async function () {
+                assert.strictEqual(await settleAt('OVER', price), 'VOID');
+                assertContractState(h.ledger, ADDR, 'status', 'VOID');
+                assertBalance(h.ledger, MAKER, TICK, '100');
+                assertBalance(h.ledger, TAKER, TICK, '100');
+            });
+        }
     });
 }

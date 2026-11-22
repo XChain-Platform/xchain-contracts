@@ -13,15 +13,19 @@
 //     payout: function (xchain) {
 //       var tick   = xchain.state.get('tick');
 //       var amount = heldBalance(xchain, tick);          // size from real holdings
-//       xchain.require(xchain.math.gt(amount, '0'), 'nothing to pay out');
+//       xchain.require(!isAtLeastExact(xchain, '0', amount), 'nothing to pay out');
 //       xchain.state.set('status', 'PAID');              // commit state FIRST
 //       xchain.emit.send({ destination: xchain.state.get('payee'), tick: tick, quantity: amount });
 //     }
 //   };
 
-// The contract's own balance of `tick`, defaulting to '0' for an untracked tick.
+// The contract's own balance of `tick`, defaulting to '0' for an untracked tick, in
+// fixed notation. getBalance hands back the indexer's snapshot text, which is exponent
+// form below 1e-6 ("5e-7") and from 1e21 ("1e+21"); an emitted amount must be a plain
+// decimal, so a raw read forwarded as a quantity reverts the EXECUTE and strands dust.
+// math.add(x, '0') is exact here and always returns fixed notation.
 function heldBalance(xchain, tick) {
-    return xchain.getBalance(xchain.getContractAddress(), tick) || '0';
+    return xchain.math.add(xchain.getBalance(xchain.getContractAddress(), tick) || '0', '0');
 }
 
 // Throw unless the contract holds at least `amount` of `tick`, compared exactly.
@@ -36,4 +40,31 @@ function requireHeld(xchain, tick, amount) {
 // swap, which derives amountIn from balance minus reserve).
 function depositedSince(xchain, tick, reserve) {
     return xchain.math.subtract(heldBalance(xchain, tick), reserve || '0');
+}
+
+// Quantise a fixed-notation quantity DOWN onto a tick's decimal grid before you emit
+// it. The indexer rounds an off-grid emission HALF-UP, which can pay out more than
+// the contract holds or has booked. Exact string surgery, not mathjs floor/mod
+// (those round to significant digits, not the grid). It PRESUPPOSES fixed notation:
+// gate raw caller text with requirePlainDecimal (validation.js) first.
+function floorToDecimals(value, decimals) {
+    var s = String(value);
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.substring(1);
+    var dot = s.indexOf('.');
+    if (dot < 0) return value;                          // already an integer
+    var frac = s.substring(dot + 1);
+    if (frac.length <= decimals) return value;          // already on the grid
+    var kept = decimals > 0 ? '.' + frac.substring(0, decimals) : '';
+    var out = s.substring(0, dot) + kept;
+    return neg ? '-' + out : out;
+}
+
+// Decimals of `tick` from the ledger snapshot, reverting when the snapshot carries no
+// token info (it covers only ticks the caller or this contract holds).
+function tickDecimals(xchain, tick) {
+    var info = xchain.getTokenInfo(tick);
+    xchain.require(info && info.DECIMALS !== null && info.DECIMALS !== undefined,
+        'token decimals unavailable: ' + tick);
+    return info.DECIMALS;
 }

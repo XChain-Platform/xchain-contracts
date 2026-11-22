@@ -4,16 +4,18 @@
 // getTokenInfo(stableTick) is null on a real node. These deploys seed only
 // the collateral, so the grid must come from state, declared on the same
 // emit.issue that creates the token.
-function deployNoStableInfo(ctx, params) {
+async function deployNoStableInfo(ctx, params) {
     const { XChainVM, E2EHarness, CODE, ALICE, ADDR, COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE } = ctx;
     ctx.h = new E2EHarness(XChainVM);
     ctx.h.seedBalance(ALICE, 'XCHAIN', '1000000');
     ctx.h.seedBalance(ALICE, COLL, '100');
     ctx.h.ledger.setTokenDecimals(COLL, 8);
-    return ctx.h.deploy({
+    const deployed = await ctx.h.deploy({
         code: CODE, deployer: ALICE, contractAddress: ADDR,
         params: params || [COLL, STABLE, PAIR, RATIO, BONUS, MAXAGE]
     });
+    if (deployed.success) ctx.h.ledger.creditContractBalance(ADDR, STABLE, ctx.STABLE_MAX_SUPPLY);
+    return deployed;
 }
 
 function registerDeclaredGridTests(ctx) {
@@ -39,6 +41,9 @@ function registerDeclaredGridTests(ctx) {
         const issue = r.result.emittedActions.find(e => e.action === 'ISSUE');
         assert.strictEqual(issue.params.decimals, '2',
             'the ISSUE must carry the grid borrow() floors against');
+        assert.strictEqual(issue.params.mintSupply, ctx.STABLE_MAX_SUPPLY);
+        assert.strictEqual(issue.params.lockMint, '1');
+        assert.strictEqual(issue.params.lockMintSupply, '1');
         setPrice('100');
         assertSuccess(await depositColl(ALICE, '3'));
         assertSuccess(await borrow(ALICE, '1.239'));

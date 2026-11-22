@@ -23,9 +23,12 @@ BATCH( DEPOSIT(auction, BID_TICK, 80),  EXECUTE(auction, "bid")  )
 
 The contract **never trusts a caller-supplied amount**. Because every out-bid
 deposit is refunded within the same execution that supersedes it, the
-contract's `bidTick` balance is always exactly the current high bid - so a new
-bid's size is read as *the growth in that balance since the last bid*
-(`held - highBid`), not a separately-passed parameter.
+contract's `bidTick` balance right after each successful bid is exactly the
+current high bid - so a new bid's size is read as *the growth in that balance
+since the last bid* (`held - highBid`), not a separately-passed parameter. A
+stray DEPOSIT that arrives between bids sits on top of that balance until the
+next successful bid absorbs it (see "A rejected bid's DEPOSIT is not rolled
+back" below).
 
 The two commands still settle independently: a `BATCH` is **not** atomic, so an
 `EXECUTE` that fails does not undo the `DEPOSIT` before it. See "A rejected bid's
@@ -39,8 +42,8 @@ considered](#attacks-we-considered).
 | `initialize(seller, itemTick, itemAmount, bidTick, minBid, deadlineBlocks)` | deployer | Sets immutable terms; status → `INIT`. |
 | `fund()` | seller (BATCHed after DEPOSIT) | Verifies the contract holds ≥ `itemAmount` of `itemTick`; anchors the bidding deadline from **this** block; status → `ACTIVE`. |
 | `bid()` | anyone except the current leader (BATCHed after DEPOSIT) | Must be at least `minBid` and strictly exceed the current high bid; refunds the previous leader in the same call. |
-| `settle()` | anyone, after the deadline | Item → high bidder, winning bid → seller (status → `SOLD`); or item → seller if nobody bid (status → `UNSOLD`). |
-| `cancel()` | seller, only before any bid | Returns the item to the seller; status → `CANCELLED`. Reachable from `INIT` too, where it returns the contract's **held** item balance so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
+| `settle()` | anyone, after the deadline | `itemAmount` → high bidder, winning bid → seller, any item held above `itemAmount` → seller (status → `SOLD`); or the whole held item balance → seller if nobody bid (status → `UNSOLD`). |
+| `cancel()` | seller, only before any bid | Returns the contract's **held** item balance (at least `itemAmount` on a live auction, including any surplus `fund()` accepted) to the seller; status → `CANCELLED`. Reachable from `INIT` too, so a seller whose `fund()` was rejected can reclaim the deposit. Terminal either way. |
 | `info()` | anyone (read-only) | `{ status, highBid, highBidder, minBid, deadline }`. |
 
 ## Using it (SDK)
@@ -72,6 +75,9 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
 
 - **Caller lies about the deposit.** `fund()` and `bid()` both read the
   contract's own balance via `getBalance`, never a caller-supplied amount.
+- **Unpayable bidder or seller.** Deploy rejects a contract-derived seller and
+  `bid()` rejects a contract caller. Such addresses contain `:` and cannot be a
+  SEND destination, so storing one would make refunds or settlement revert.
 - **Bid that doesn't actually beat the leader.** `bid()` requires the deposit
   delta to be at least `minBid` and strictly greater than the current
   `highBid`.
@@ -100,10 +106,25 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   deadline, below `minBid`, not exceeding the current high bid, or a self-raise
   by the current leader - the DEPOSIT batched ahead of it has already settled
   and stays in the contract's `bidTick` custody. It is **not recoverable by its
-  sender**: the delta-accounting folds it into the *next* successful bidder's
-  credited bid, and from there it reaches the seller at `settle()`. Same footgun
-  the `cardDispenser` and `dutchAuction` templates document. Read `info()` and
-  be sure the bid will clear before batching the DEPOSIT behind it.
+  sender**, and no method returns it: `settle()` pays the seller exactly the
+  stored `highBid`, and `cancel()` returns only the item. Where it ends up:
+  - **A later bid succeeds.** The delta-accounting credits the stray to the
+    *next* successful bidder as part of their bid. It travels with that bid, so
+    it goes back to that bidder if they are outbid, and reaches the seller only
+    if that bid wins.
+  - **No later bid succeeds.** The stray is stuck in the contract for good. That
+    covers a DEPOSIT sent after the deadline or once the auction is `SOLD`,
+    `UNSOLD` or `CANCELLED`, a stray followed by an `UNSOLD` settle or by the
+    seller's `cancel()`, and any `bidTick` deposited after the last successful
+    bid.
+  - **A bid made before `fund()`.** It reverts as not `ACTIVE`, but its DEPOSIT
+    is absorbed by the first successful bid once the seller funds; it is lost
+    only if the seller cancels instead.
+
+  Same footgun the `cardDispenser` and `dutchAuction` templates document. Before
+  batching a DEPOSIT behind `bid()`, read `info()` and check that the status is
+  `ACTIVE`, the current block is below `deadline`, your amount is at least
+  `minBid` and above `highBid`, and you are not the current `highBidder`.
 
 ## Known limitations (by design, for a teaching baseline)
 
@@ -127,11 +148,16 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
   can win the item at that price.
 - **No bid increment schedule.** Any bid that clears `minBid` and exceeds the
   current high bid is accepted, however small the margin.
+- **`minBid` must be a plain fixed-notation decimal.** `initialize()` rejects
+  spellings such as `"1e3"`, `"0x10"` or `"Infinity"`, because `minBid` is
+  stored and echoed by `info()` exactly as written.
 - **An `itemAmount` off the item tick's decimal grid is rejected at `fund()`,
   not at deploy.** The item tick's decimals are unreadable while the contract
   holds none of it, so the constructor can only check that `itemAmount` is a
   plainly spelled positive decimal; the grid check runs at `fund()`, the first
-  point the ledger can answer and the last before bidding opens. Rejecting is
+  point the ledger can answer and the last before bidding opens. The check
+  compares values, not spellings, so an `itemAmount` written with trailing
+  zeros (`"10.00000000"` on a zero-decimal item) is on the grid. Rejecting is
   deliberate rather than silently flooring: the ledger re-quantises every
   emitted amount at write time, so an off-grid `itemAmount` would deliver less
   than advertised - nothing at all on a 0-decimal tick - while the winner paid
@@ -146,11 +172,11 @@ await sdk.contracts.execute({ contractActionIndex: auctionIndex, method: 'settle
 
 ## Tests
 
-`englishAuction.test.js` runs the real template through the VM (Node 22 /
+`english_auction.test.js` runs the real template through the VM (Node 22 /
 isolated-vm):
 
 ```
-cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/englishAuction.test.js
+cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/englishAuction/english_auction.test.js
 ```
 
 ## License

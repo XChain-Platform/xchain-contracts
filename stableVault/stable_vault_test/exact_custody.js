@@ -6,7 +6,7 @@ module.exports = function registerExactCustodyTests(ctx) {
     const {
         ALICE, BOB, LIQ, ADDR, COLL, STABLE, assertSuccess, assertReverted, assertBalance,
         assertContractBalance, assertContractState, deployVault, setPrice, depositColl,
-        borrow, withdraw, liquidate
+        borrow, repay, withdraw, liquidate
     } = ctx;
 
     describe('attacks we considered: exact custody at large balances', function () {
@@ -17,7 +17,7 @@ module.exports = function registerExactCustodyTests(ctx) {
             await depositColl(ALICE, '1000000');
             assertReverted(await withdraw(ALICE, '1000000.00000001'), 'insufficient collateral');
             assertSuccess(await withdraw(ALICE, '1000000'));
-            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '0');
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', null);
             assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '10');
             assertContractBalance(ctx.h.ledger, ADDR, COLL, '10');
             assertSuccess(await withdraw(BOB, '10'));
@@ -35,5 +35,86 @@ module.exports = function registerExactCustodyTests(ctx) {
             assertReverted(await liquidate(LIQ, ALICE, '999999.99999999'), 'must cover the full debt');
             assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', '1000000');
         });
+
+        // At price 1.1 the owed collateral equals the debt, 5 base units above coll (inside the band).
+        it('a liquidation never seizes more than the vault holds when owed is within the band', async function () {
+            await deployVault();
+            ctx.h.seedBalance(ALICE, COLL, '100000');
+            await depositColl(BOB, '10');
+            setPrice('100');
+            await depositColl(ALICE, '100000');
+            assertSuccess(await borrow(ALICE, '100000.00000005'));
+            setPrice('1.1');
+            ctx.h.seedBalance(LIQ, STABLE, '100000.00000005');
+            assertSuccess(await liquidate(LIQ, ALICE, '100000.00000005'));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', null);
+            assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '10');
+            assertContractBalance(ctx.h.ledger, ADDR, COLL, '10');
+            assertBalance(ctx.h.ledger, LIQ, COLL, '100000');
+            assertSuccess(await withdraw(BOB, '10'));
+            assertBalance(ctx.h.ledger, BOB, COLL, '100');
+        });
+
+        registerRepayExcessTest(ctx);
     });
+
+    registerDustDeltaTests(ctx);
 };
+
+function registerRepayExcessTest(ctx) {
+    const { ALICE, ADDR, COLL, STABLE, assertSuccess, assertBalance,
+        assertContractState, deployVault, setPrice, depositColl, borrow, repay } = ctx;
+    it('a repay one base unit over a large debt refunds the excess and zeroes the debt', async function () {
+        await deployVault();
+        ctx.h.seedBalance(ALICE, COLL, '20000');
+        setPrice('100');
+        await depositColl(ALICE, '15000');
+        assertSuccess(await borrow(ALICE, '1000000'));
+        ctx.h.seedBalance(ALICE, STABLE, '1000000.00000001');
+        const result = await repay(ALICE, '1000000.00000001');
+        assertSuccess(result);
+        ctx.assert.deepStrictEqual(result.emittedActions.map(a => [a.action, a.params.quantity]), [
+            ['SEND', '0.00000001']
+        ]);
+        assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
+        assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
+        assertBalance(ctx.h.ledger, ALICE, STABLE, '0.00000001');
+    });
+}
+
+// One base unit of an 18-decimal tick sits under the 1e-15 tolerance a math.gt zero test applies.
+function registerDustDeltaTests(ctx) {
+    const {
+        ALICE, ADDR, COLL, STABLE, assertSuccess, assertBalance, assertContractBalance,
+        assertContractState, deployVault, setPrice, depositColl, borrow, repay, withdraw
+    } = ctx;
+    const DUST = '0.000000000000000001';
+
+    describe('custody deltas below the tolerant comparison floor', function () {
+        it('deposit credits and withdraw returns a one-base-unit collateral delta', async function () {
+            await deployVault('18');
+            ctx.h.ledger.setTokenDecimals(COLL, 18);
+            assertSuccess(await depositColl(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', DUST);
+            assertContractState(ctx.h.ledger, ADDR, 'trackedColl', DUST);
+            assertSuccess(await withdraw(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'trackedColl', '0');
+            assertContractBalance(ctx.h.ledger, ADDR, COLL, '0');
+            assertBalance(ctx.h.ledger, ALICE, COLL, '100');
+        });
+
+        it('borrow mints and repay burns a one-base-unit stable amount', async function () {
+            await deployVault('18');
+            setPrice('100');
+            assertSuccess(await depositColl(ALICE, '3'));
+            assertSuccess(await borrow(ALICE, DUST));
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', DUST);
+            const result = await repay(ALICE, DUST);
+            assertSuccess(result);
+            ctx.assert.deepStrictEqual(result.emittedActions, []);
+            assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':debt', null);
+            assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '0');
+            assertContractBalance(ctx.h.ledger, ADDR, STABLE, '1000000000');
+        });
+    });
+}

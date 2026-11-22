@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// priceBetTimed.test.js: behavioral + adversarial tests for priceBetTimed.js
+// price_bet_timed.test.js: behavioral + adversarial tests for priceBetTimed.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -9,7 +9,7 @@
 // Loads the ACTUAL priceBetTimed.js template (no copy), so the test can never drift.
 //
 // Run from the xchain-vm package so its deps (mocha, isolated-vm, mathjs) resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/priceBetTimed.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/price_bet_timed.test.js
 
 'use strict';
 
@@ -21,6 +21,7 @@ const registerOracleWindowAndTimingAttackTests = require('./price_bet_timed_test
 const registerCustodyTests = require('./price_bet_timed_test/custody_tests');
 const registerNumericSeamTests = require('./price_bet_timed_test/numeric_seam_tests');
 const registerDeployValidationTests = require('./price_bet_timed_test/deploy_validation_tests');
+const registerPayoutMemoTests = require('./price_bet_timed_test/payout_memo_tests');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertBalance,
@@ -135,6 +136,43 @@ function buildContext() {
     };
 }
 
+function registerExactPayoutGuardTests(context) {
+    const {
+        ADDR, MAKER, TAKER, STRANGER, TICK, PAIR, STRIKE, T, CODE, XChainVM, E2EHarness, assert,
+        assertSuccess, assertBalance, assertContractBalance, h, setHarness, seedTipRound,
+        depositAnd, publishRounds, settleBy
+    } = context;
+
+    describe('exact payout guards', function () {
+        it('payout guards use exact comparisons', function () {
+            assert.doesNotMatch(CODE, /math\.gt\(rest, '0'\)/);
+        });
+
+        it('a one-unit 18-decimal residual is paid to the taker', async function () {
+            const tiny = '0.000000000000000001';
+            setHarness(new E2EHarness(XChainVM));
+            h.seedBalance(MAKER, 'XCHAIN', '1000000');
+            h.seedBalance(MAKER, TICK, '1');
+            h.seedBalance(TAKER, TICK, '1');
+            h.ledger.setTokenDecimals(TICK, 18);
+            assertSuccess(await h.deploy({
+                code: CODE, deployer: MAKER, contractAddress: ADDR,
+                params: [MAKER, PAIR, STRIKE, 'OVER', TICK, '1', String(T), '5']
+            }));
+            seedTipRound();
+            assertSuccess(await depositAnd(MAKER, 'fund', '1'));
+            assertSuccess(await depositAnd(TAKER, 'accept', '1'));
+            h.ledger.debitContractBalance(ADDR, TICK, '0.999999999999999999');
+
+            publishRounds({ 2: { ts: T + 50, price: STRIKE } });
+            assertSuccess(await settleBy(STRANGER));
+            assertBalance(h.ledger, MAKER, TICK, '1');
+            assertBalance(h.ledger, TAKER, TICK, tiny);
+            assertContractBalance(h.ledger, ADDR, TICK, '0');
+        });
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: priceBetTimed', function () {
     this.timeout(0);
     const context = buildContext();
@@ -144,4 +182,9 @@ function buildContext() {
     registerCustodyTests(context);
     registerNumericSeamTests(context);
     registerDeployValidationTests(context);
+    registerExactPayoutGuardTests(context);
+    registerPayoutMemoTests(context);
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./price_bet_timed_test/invariants');

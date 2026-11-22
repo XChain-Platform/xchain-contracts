@@ -88,7 +88,7 @@ readable.
 
 | Return | Meaning |
 |---|---|
-| `SETTLED` / `PUSH` | Terminal: pot paid to the winner / stakes returned (tie). |
+| `SETTLED` / `PUSH` / `VOID` | Terminal: pot paid to the winner, stakes returned for a tie, or stakes returned for an unusable deciding price. |
 | `PENDING` | No round at/after `settleTime` exists yet. Valid no-op; try later. |
 | `SCANNING` | Qualifying round exists but the 200-read cap was hit paging the backlog; cursor saved; call again. |
 
@@ -101,7 +101,7 @@ discard the cursor advance (state writes only commit on success).
 |---|---|---|
 | `initialize(maker, coinPair, strike, side, tick, amount, settleTime, deadlineBlocks)` | deployer | Immutable terms; `settleTime` must be in the future; status → `INIT`. |
 | `fund()` | maker (BATCH after DEPOSIT) | Escrows the stake; status → `OPEN`. |
-| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair; anchors cursor + void deadline; status → `MATCHED`. |
+| `accept()` | taker (BATCH after DEPOSIT) | Requires block time < `settleTime` and a readable oracle tip for the pair whose timestamp is still before `settleTime`; anchors cursor + void deadline; status → `MATCHED`. |
 | `settle()` | anyone | See table above. |
 | `cancel()` | maker | Reclaims the stake while unmatched. |
 | `reclaim()` | maker or taker | Voids + refunds if no qualifying round exists `deadlineBlocks` after the match. The guard reads the cursor-to-tip range, capped like `settle()`'s walk; if the cap stops it short it refuses and asks for a `settle()` call to page the cursor forward. |
@@ -135,8 +135,12 @@ All of the sibling [priceBet](../priceBet/README.md) protections apply
 (balance-verified stakes, no self-match, terminal-status-before-emit guard,
 `reclaim()` unusable once a deciding round exists, over-deposit drains on
 refund, grid-floored refund legs, fixed-notation-only `amount` and `strike`
-enforced at deploy, deferred-emission reentrancy model). The timestamp
+enforced at deploy, memo-carrying payouts so a recipient's memo requirement
+cannot block a refund, deferred-emission reentrancy model). The timestamp
 translation adds its own surface:
+
+- **Unpayable party.** Deploy rejects a contract-derived maker and `accept()`
+  rejects a contract caller as taker because SEND cannot pay either address.
 
 - **Spot-price timing discretion.** Settling on `getPrice()` would let the
   first caller pick the moment. The deciding round is *the first finalized
@@ -147,6 +151,18 @@ translation adds its own surface:
   so rounds finalized before the match can never decide the bet (their
   consensus timestamps predate it). The current round stays in scope as slack
   for clock skew between round consensus time and block time.
+- **Sniping a match after the deciding round is published.** Round timestamps
+  can run ahead of block time, so block time < `settleTime` alone does not prove
+  the outcome is open. The scan starts at the tip, so `accept()` also requires the
+  tip's timestamp to be before `settleTime` (`settle round already published`);
+  otherwise a taker could match a bet whose deciding price is already public.
+  That second check works where the VM is shown rounds by height, as on the
+  reference chain (BTC). On a chain where it is shown only rounds stamped at or
+  before the current block's time, every visible round is already below
+  `settleTime` once the first check passes, so a deciding round stamped ahead of
+  that chain's block time stays hidden and a taker who has read it off-chain can
+  still match. A maker there should cancel an unmatched bet well before
+  `settleTime`.
 - **Gas exhaustion on a long round backlog.** The `settle()` walk is capped at
   200 `getPriceAtRound` reads per call (each a metered VM_STATE-class charge)
   and the cursor persists between calls, so an arbitrarily long stretch of
@@ -174,7 +190,7 @@ translation adds its own surface:
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/priceBetTimed.test.js
+npx mocha --timeout 0 ../xchain-contracts/priceBetTimed/price_bet_timed.test.js
 ```
 
 Requires Node 22 (`isolated-vm`).

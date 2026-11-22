@@ -11,7 +11,7 @@ If you're reporting a security issue, **stop here** and read [`SECURITY.md`](./S
 - Project overview: [`README.md`](./README.md)
 - Full component docs: the [`xchain-documentation`](https://github.com/XChain-Platform/xchain-documentation) repository (architecture, contract patterns, protocol spec)
 - Disclosure policy: [`SECURITY.md`](./SECURITY.md)
-- License: [`LICENSE`](./LICENSE) (MIT, intentionally permissive so you can build proprietary contracts on top)
+- License: [`LICENSE`](./LICENSE.md) (MIT, intentionally permissive so you can build proprietary contracts on top)
 
 ---
 
@@ -112,7 +112,7 @@ module.exports = {
     meta: {
         name:        'Escrow',
         description: 'Two-party escrow with an arbiter: ...',
-        version:     '1.0.0'
+        version:     '<semver>'
     },
     abi: { /* ... */ },
     // ...
@@ -128,7 +128,7 @@ Rules:
 - `version` is a string, 1 to 32 bytes. Templates use semver.
 - Use string literals. A computed name is deterministic on chain but invisible to the SDK's pre-flight and to anyone reading the source.
 - **Any edit to a template's source bumps `meta.version`** in the same commit: patch for a comment or doc-only change, minor for new behaviour, major for a change that breaks an existing deployment's assumptions. Deployed copies are immutable, so the version is the only thing that tells a reader which revision of the template a given contract was deployed from.
-- Generated guards get their `meta` from `lib/policy-gen.js`, which defaults `name` from the policy config's `name`, `description` to a sentence naming the gated action classes and the enforced rules, and `version` to `1.0.0`; a caller-supplied `meta` overrides those field by field.
+- Generated guards get their `meta` from `lib/policy_gen.js`, which defaults `name` from the policy config's `name`, `description` to a sentence naming the gated action classes and the enforced rules, and `version` to `1.0.0`; a caller-supplied `meta` overrides those field by field.
 - `meta` also accepts an optional `ownerWithdraw` boolean. Omit it (the default) and, from the `OWNER_WITHDRAW_OPT_IN` flag day, the deployer's own raw WITHDRAW action is refused for that contract; `ownerWithdraw: true` opts back in. Set it only when a template's documented flow has the deployer pull tokens out of custody with a bare WITHDRAW; never on a template that holds other people's tokens (a pool, an escrow, a vault, a sale).
 
 The SDK vendors part of this library base64 into `xchain-sdk/src/contract/templates.js`, sha256-pinned by its `template-parity` test: every file in `patterns/`, plus only the templates named by `TEMPLATE_NAMES` in `xchain-sdk/scripts/sync-templates.js`. Run the SDK's `npm run sync:templates` in the same change as any edit to one of those files. A template outside that list is not in the SDK, so `sdk.scaffold()` cannot return it and no SDK check sees its edits.
@@ -139,7 +139,7 @@ The SDK vendors part of this library base64 into `xchain-sdk/src/contract/templa
 
 Match the existing log style: a concise subject line, then a short body explaining what changed and why.
 
-- Branch off `master` and keep history linear (rebase, don't merge).
+- Fork the repository, branch off `develop`, and open your pull request against `develop`. Keep history linear (rebase, don't merge). `master` is what production runs and only ever receives release merges from `develop`; a pull request into `master` from a fork or any other branch fails the `base-branch guard` check and cannot be merged.
 - One logical change per commit; don't batch unrelated work.
 - **No `Co-Authored-By` trailers.** This is a project policy.
 - **Never `--no-verify`.** If a hook fails, fix the cause; don't bypass it.

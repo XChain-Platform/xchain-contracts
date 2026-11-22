@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// policy-gen.e2e.test.js: the generated guards cross the REAL deploy gate.
+// policy_gen_e2e.test.js: the generated guards cross the REAL deploy gate.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
 // Why this file exists
 // --------------------
-// lib/policy-gen.js is the one DEPLOYABLE output this library ships that nobody
+// lib/policy_gen.js is the one DEPLOYABLE output this library ships that nobody
 // hand-wrote: `xchain-contracts policy` prints it and users deploy it verbatim.
-// Its sibling in lib/policy-gen.test.js checks the generated source two ways,
+// Its sibling in test/policy_gen.test.js checks the generated source two ways,
 // and neither is the deploy gate:
 //   - lintSource() from xchain-vm/src/lint-core.js is acorn-only. Its own header
 //     says it carries every deploy-time check EXCEPT the V8 syntax compile.
@@ -22,7 +22,7 @@
 // that suite green while a live deploy or execute rejected it.
 //
 // Every hand-written template already crosses the gate through
-// E2EHarness.deploy() (urlOracle/urlOracle.test.js, patterns/patterns.e2e.test.js);
+// E2EHarness.deploy() (urlOracle/url_oracle.test.js, patterns/patterns.e2e.test.js);
 // this file gives the generated guards the same treatment: deploy each config in
 // the shared matrix, execute representative guard and admin behaviour on the
 // isolate, and hold a live-gate negative control so a gate that stopped running
@@ -32,14 +32,14 @@
 // degrades to describe.skip elsewhere, and test/preflight.test.js is what turns
 // that skip red on a venue that is supposed to have the harness.
 //
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/lib/policy-gen.e2e.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/test/policy_gen_e2e.test.js
 
 'use strict';
 
 const assert = require('assert');
 const path = require('path');
-const { generatePolicy } = require('./policy-gen.js');
-const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('../test/policy-matrix.js');
+const { generatePolicy } = require('../lib/policy_gen.js');
+const { OWNER, NOTOWNER, CREATOR, MARKET, MATRIX } = require('./helpers/policy_matrix.js');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness;
@@ -135,6 +135,19 @@ async function pausableCase() {
     assert.deepStrictEqual(guardResult(await h.execute({ contractAddress: ADDR, method: 'guard', params: ['SEND', '1a', '1b'], caller: '1Caller' })), {});
 }
 
+// EXECUTE can name initialize on a live guard; a replay must not undo the owner's pause.
+async function replayedInitializeCase() {
+    const h = harnessFor();
+    const ADDR = 'C:BTC:PGREINIT';
+    assert.strictEqual((await deployPolicy(h, MATRIX.pauseOnly, ADDR)).deployed.success, true);
+    assert.strictEqual((await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER })).success, true);
+
+    const replay = await h.execute({ contractAddress: ADDR, method: 'initialize', params: [], caller: NOTOWNER });
+    assert.strictEqual(replay.success, false, 'a second initialize must revert');
+    assert.match(String(replay.error), /already initialized/);
+    assert.strictEqual(h.ledger.getContractState(ADDR).paused, 'true');
+}
+
 async function freezeCase() {
     const h = harnessFor();
     const ADDR = 'C:BTC:PGFREEZE';
@@ -219,4 +232,5 @@ async function fullPolicyCase() {
     it('allowlist: a non-allowlisted sender is blocked until the owner allows it', allowlistCase);
     it('allowlist "both": the recipient is checked on the isolate, and an empty recipient is exempt', allowBothCase);
     it('full policy: the whole stack composes, and the pause gate still wins over a clean trade', fullPolicyCase);
+    it('a replayed initialize from a non-owner reverts and leaves the guard paused', replayedInitializeCase);
 });

@@ -5,8 +5,48 @@ module.exports = function registerQuantityParseTests(context) {
         registerExponentialQuantity(context);
         registerMixedPage(context);
         registerSpellingMatrix(context);
+        registerNumericQuantity(context);
+        registerOverLongQuantity(context);
+    });
+    describe('on-grid quantities below the tolerant comparison floor', function () {
+        registerSubToleranceQuantity(context);
     });
 };
+
+// A tolerant gt reads any amount <= 1e-15 as zero; the 18-decimal grid holds 1e-18.
+function registerSubToleranceQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, nextTxHash
+    } = context;
+    const claimWith = makeClaimWith(context);
+
+    it('credits a one-base-unit burn on an 18-decimal deploy', async function () {
+        await deployBridge(undefined, '18');
+        const h = getHarness();
+        h.ledger.setTokenDecimals(XC_TICK, 18);
+        const txHash = nextTxHash();
+        const cb = await claimWith('0.000000000000000001', txHash);
+        assertSuccess(cb);
+        assertEmittedActions(cb, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '0.000000000000000001' } }]);
+        assertContractState(h.ledger, ADDR, 'burned:' + txHash, true);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0.000000000000000001');
+        assertContractState(h.ledger, ADDR, 'claimedTotal:' + HOLDER, '0.000000000000000001');
+    });
+
+    it('still skips dust that floors to zero on an 8-decimal deploy', async function () {
+        await deployBridge();
+        const h = getHarness();
+        const txHash = nextTxHash();
+        const cb = await claimWith('0.000000009', txHash);
+        assertSuccess(cb);
+        assertEmittedActions(cb, []);
+        assert.strictEqual(cb.returnValue, JSON.stringify('no burns to claim'));
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!('burned:' + txHash in h.ledger.getContractState(ADDR)),
+            'a dust row must not be marked credited');
+    });
+}
 
 function makeClaimWith(context) {
     const { ADDR, HOLDER, assertSuccess, getHarness, seedSendsResponse, sendsPayload } = context;
@@ -74,6 +114,75 @@ function registerMixedPage(context) {
         assert.ok(!('burned:' + badTx in h.ledger.getContractState(ADDR)),
             'the dropped row must not be marked credited');
         assertContractState(h.ledger, ADDR, 'totalClaimed', '10.25');
+    });
+}
+
+// JSON.parse rounds a JSON number to a double before the contract sees it, so
+// 9007199254740995 arrives as 9007199254740996 and still reads as a plain decimal.
+function registerNumericQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, seedSendsResponse,
+        sendsPayload, nextTxHash
+    } = context;
+
+    it('a JSON-number quantity is dropped, and the same burn as a string is credited exactly', async function () {
+        await deployBridge('10000000000000000', '0');
+        const h = getHarness();
+        h.ledger.setTokenDecimals(XC_TICK, 0);
+        const txHash = nextTxHash();
+        const claim = async function (payload) {
+            const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+            assertSuccess(req);
+            const requestId = JSON.parse(req.returnValue);
+            seedSendsResponse(requestId, payload);
+            return h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        };
+        const raw = sendsPayload([{ txHash: txHash, quantity: 'QTY' }]).replace('"QTY"', '9007199254740995');
+        const dropped = await claim(raw);
+        assertSuccess(dropped, 'a numeric row must not wedge the address');
+        assertEmittedActions(dropped, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!('burned:' + txHash in h.ledger.getContractState(ADDR)),
+            'a dropped row must not mark its burn as credited');
+
+        const good = await claim(sendsPayload([{ txHash: txHash, quantity: '9007199254740995' }]));
+        assertSuccess(good);
+        assertEmittedActions(good, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '9007199254740995' } }]);
+    });
+}
+
+// The VM math layer refuses any operand longer than 256 characters, and zero
+// padding keeps a quantity a plain decimal, so length is checked at the parse seam.
+function registerOverLongQuantity(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
+        assertContractState, deployBridge, getHarness, nextTxHash
+    } = context;
+    const claimWith = makeClaimWith(context);
+
+    it('an over-long plain-decimal quantity is dropped instead of reverting onClaim', async function () {
+        const LONG = ['0'.repeat(300) + '1', '9'.repeat(257), '0'.repeat(63) + '42', '1.' + '0'.repeat(63)];
+        for (const v of LONG) {
+            await deployBridge();
+            const h = getHarness();
+            const txHash = nextTxHash();
+            const cb = await claimWith(v, txHash);
+            assertSuccess(cb, `quantity of ${v.length} chars must not revert`);
+            assertEmittedActions(cb, []);
+            assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+            const state = h.ledger.getContractState(ADDR);
+            assert.ok(!('pending:' + HOLDER in state), 'pending must clear so the address can claim again');
+            assert.ok(!('burned:' + txHash in state), 'a dropped row must not mark its burn as credited');
+        }
+        await deployBridge();
+        const atCap = await claimWith('0'.repeat(62) + '42', nextTxHash());
+        assertSuccess(atCap, 'a 64-character quantity must be read');
+        assertEmittedActions(atCap, [{ action: 'SEND', params: { destination: HOLDER, tick: XC_TICK, quantity: '42' } }]);
+        await deployBridge();
+        const huge = await claimWith('9'.repeat(64), nextTxHash());
+        assertSuccess(huge, 'a 64-character quantity past maxSupply must fail soft');
+        assertEmittedActions(huge, []);
     });
 }
 

@@ -34,7 +34,7 @@ decimals, so it refuses an off-grid `total` there. While the grant is still
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(grantor, beneficiary, tick, total, cliffBlocks, durationBlocks, revocable)` | deployer | Sets terms; `revocable` is the string `"true"`/`"false"`; status → `INIT`. |
+| `initialize(grantor, beneficiary, tick, total, cliffBlocks, durationBlocks, revocable)` | deployer | Sets terms; `revocable` is the string `"true"`/`"false"`; status → `INIT`. Runs once: a later call reverts with `already initialized`. |
 | `fund()` | grantor only (BATCHed after DEPOSIT) | Verifies custody ≥ `total`; starts the clock; status → `ACTIVE`. |
 | `cancel()` | grantor (`INIT` only) | Returns the whole held deposit to the grantor; status → `CANCELLED`. |
 | `claim()` | beneficiary | Sends vested-but-unclaimed tokens to the beneficiary. |

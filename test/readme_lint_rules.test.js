@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// readme-lint-rules.test.js: the README's lint rule list tracks the VM linter.
+// readme_lint_rules.test.js: the README's lint rule list tracks the VM linter.
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -12,7 +12,7 @@
 // This file reads the deploy-blocking set and the code-size cap from the lint core
 // itself and fails when the README section stops naming one of them.
 //
-//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme-lint-rules.test.js
+//   node ../xchain-vm/node_modules/mocha/bin/mocha.js test/readme_lint_rules.test.js
 
 'use strict';
 
@@ -23,7 +23,7 @@ const path   = require('path');
 const REPO_DIR = path.join(__dirname, '..');
 const README   = fs.readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
 
-// Try both spellings of xchain-vm's lint core, current one first, as lib/policy-gen.test.js does.
+// Try both spellings of xchain-vm's lint core, current one first, as test/policy_gen.test.js does.
 const LINT_CORE_SPELLINGS = [path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint-core.js'),
                              path.join(REPO_DIR, '..', 'xchain-vm', 'src', 'lint_core.js')];
 
@@ -81,5 +81,19 @@ describe('README lint rule list', function () {
             'README.md "Linting" does not name the `code-size` rule the linter enforces');
         assert.ok(section.includes(MAX_CODE_SIZE.toLocaleString('en-US')),
             'README.md "Linting" does not state the ' + MAX_CODE_SIZE + '-byte code-size cap');
+    });
+
+    it('states both limits that emit the nesting-depth rule', function () {
+        const { MAX_NESTING_DEPTH, MAX_SYNTAX_DEPTH } = loadLintCore();
+        assert.ok(Number.isInteger(MAX_NESTING_DEPTH) && MAX_NESTING_DEPTH > 0,
+            'xchain-vm lint core exports no MAX_NESTING_DEPTH, so this guard would check nothing');
+        assert.ok(Number.isInteger(MAX_SYNTAX_DEPTH) && MAX_SYNTAX_DEPTH > 0,
+            'xchain-vm lint core exports no MAX_SYNTAX_DEPTH, so this guard would check nothing');
+        const match = lintingSection().match(/`nesting-depth`\s*\(([^)]*)\)/s);
+        assert.ok(match, 'README.md "Linting" has no description for `nesting-depth`');
+        assert.match(match[1], new RegExp('\\b' + MAX_NESTING_DEPTH + '\\b'),
+            'README.md "Linting" omits the delimiter nesting limit');
+        assert.match(match[1], new RegExp('\\b' + MAX_SYNTAX_DEPTH + '\\b'),
+            'README.md "Linting" omits the syntax-depth limit');
     });
 });

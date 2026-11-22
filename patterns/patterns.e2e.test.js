@@ -17,6 +17,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerValidatorSuites = require('./patterns_e2e/validator_suites');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -36,7 +37,7 @@ try {
 // inside the isolate, with every gate green. Sorted for a deterministic blob;
 // the pattern files are all top-level function declarations, so concatenation
 // order does not affect resolution. test/gate-wiring.test.js asserts, VM-free,
-// that those names stay unique and that every file is actually exercised below.
+// that those names stay unique and that every helper is actually called below.
 const PATTERN_FILES = fs.readdirSync(__dirname)
     .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
     .sort();
@@ -79,26 +80,29 @@ module.exports = {
 const OWNER = 'owner', STRANGER = 'stranger', RECIPIENT = 'recipient';
 const ADDR = 'C:BTC:1', TICK = 'TEST';
 
+const run = (h, method, params, caller) => h.execute({ contractAddress: ADDR, method, params, caller });
+
+let h;
+
+async function deployVault() {
+    h = new E2EHarness(XChainVM);
+    h.seedBalance(OWNER, 'XCHAIN', '1000000');
+    h.seedBalance(STRANGER, 'XCHAIN', '1000000');
+    h.seedBalance(OWNER, TICK, '500');
+    await h.deploy({ code: VAULT, deployer: OWNER, contractAddress: ADDR, params: [OWNER, TICK] });
+}
+
+async function fund(amount) {
+    h.deposit(OWNER, ADDR, TICK, amount || '500');
+}
+
 (XChainVM ? describe : describe.skip)('Patterns: composed vault (helpers execute)', function () {
     this.timeout(0);
-    let h;
-
-    async function deployVault() {
-        h = new E2EHarness(XChainVM);
-        h.seedBalance(OWNER, 'XCHAIN', '1000000');
-        h.seedBalance(STRANGER, 'XCHAIN', '1000000');
-        h.seedBalance(OWNER, TICK, '500');
-        await h.deploy({ code: VAULT, deployer: OWNER, contractAddress: ADDR, params: [OWNER, TICK] });
-    }
-
-    async function fund(amount) {
-        h.deposit(OWNER, ADDR, TICK, amount || '500');
-    }
 
     it('happy path: owner withdraws the held balance (safe-transfer + state-machine)', async function () {
         await deployVault();
         await fund('500');
-        const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER });
+        const r = await run(h, 'withdraw', [RECIPIENT], OWNER);
         assertSuccess(r);
         assertEmittedActions(r, [{ action: 'SEND', params: { destination: RECIPIENT, tick: TICK, quantity: '500' } }]);
         assertContractBalance(h.ledger, ADDR, TICK, '0');
@@ -109,34 +113,30 @@ const ADDR = 'C:BTC:1', TICK = 'TEST';
     it('onlyOwner: a stranger cannot withdraw', async function () {
         await deployVault();
         await fund('500');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [STRANGER], caller: STRANGER }),
-            'not the owner');
+        assertReverted(await run(h, 'withdraw', [STRANGER], STRANGER), 'not the owner');
         assertContractBalance(h.ledger, ADDR, TICK, '500'); // untouched
     });
 
     it('whenNotPaused: paused vault blocks withdraw, unpause restores it', async function () {
         await deployVault();
         await fund('500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'paused');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'unpause', params: [], caller: OWNER }));
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }));
+        assertSuccess(await run(h, 'pause', [], OWNER));
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'paused');
+        assertSuccess(await run(h, 'unpause', [], OWNER));
+        assertSuccess(await run(h, 'withdraw', [RECIPIENT], OWNER));
         assertBalance(h.ledger, RECIPIENT, TICK, '500');
     });
 
     it('requireStatus: withdraw is once-only (CLOSED blocks a second sweep)', async function () {
         await deployVault();
         await fund('500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'invalid state');
+        assertSuccess(await run(h, 'withdraw', [RECIPIENT], OWNER));
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'invalid state');
     });
 
     it('requirePositive: withdraw with nothing deposited reverts', async function () {
         await deployVault();
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [RECIPIENT], caller: OWNER }),
-            'nothing to withdraw');
+        assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'nothing to withdraw');
     });
 
     it('requireAddress: initialize rejects an empty owner', async function () {
@@ -147,9 +147,6 @@ const ADDR = 'C:BTC:1', TICK = 'TEST';
     });
 });
 
-// A tiny contract whose initialize validates one integer param via the REAL
-// requireIntInRange helper, so we prove (a) the regex-free helper loads and runs in
-// the VM, and (b) it rejects the non-integer shapes a radix-less parseInt would bless.
 const INTVALIDATOR = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
@@ -158,36 +155,6 @@ module.exports = {
     }
 };`;
 
-(XChainVM ? describe : describe.skip)('Patterns: requireIntInRange (integer-shape validation)', function () {
-    this.timeout(0);
-    async function deployWith(param) {
-        const b = new E2EHarness(XChainVM);
-        b.seedBalance(OWNER, 'XCHAIN', '1000000');
-        return b.deploy({ code: INTVALIDATOR, deployer: OWNER, contractAddress: 'C:BTC:7', params: [param] });
-    }
-
-    it('accepts a canonical base-10 integer in range', async function () {
-        assert.strictEqual((await deployWith('500')).success, true);
-    });
-
-    it('rejects non-integer / trailing-garbage / hex / whitespace shapes', async function () {
-        for (const bad of ['5.99', '500abc', '0x100', ' 5', '', 'abc', '-']) {
-            assert.strictEqual((await deployWith(bad)).success, false, 'should reject ' + JSON.stringify(bad));
-        }
-    });
-
-    it('rejects an out-of-range integer', async function () {
-        assert.strictEqual((await deployWith('0')).success, false);       // below min 1
-        assert.strictEqual((await deployWith('2000000')).success, false); // above max 1000000
-    });
-});
-
-// A tiny contract whose initialize validates one amount param via the REAL
-// requirePlainDecimal helper. Same proof as above for the notation gate: the
-// regex-free character walk loads and runs inside the VM, and it rejects exactly
-// the spellings that requirePositive blesses and floorToDecimals then corrupts.
-// requirePositive runs FIRST here, deliberately: the point of the pair is that
-// the positivity test alone lets '1.5e-8' and '1.23456789e2' straight through.
 const DECIMALVALIDATOR = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
@@ -198,52 +165,13 @@ module.exports = {
     }
 };`;
 
-(XChainVM ? describe : describe.skip)('Patterns: requirePlainDecimal (notation validation)', function () {
-    this.timeout(0);
-    let n = 0;
-    async function deployWith(param) {
-        const b = new E2EHarness(XChainVM);
-        b.seedBalance(OWNER, 'XCHAIN', '1000000');
-        return b.deploy({ code: DECIMALVALIDATOR, deployer: OWNER, contractAddress: 'C:BTC:' + (100 + n++), params: [param] });
-    }
-
-    it('accepts plain fixed-notation decimals', async function () {
-        for (const good of ['1', '100', '0.5', '0.00000001', '123456789.123456789']) {
-            assert.strictEqual((await deployWith(good)).success, true, 'should accept ' + JSON.stringify(good));
-        }
-    });
-
-    it('rejects the spellings requirePositive blesses and floorToDecimals corrupts', async function () {
-        // Every one of these is > 0 to mathjs, so requirePositive alone passes them.
-        for (const bad of ['1.5e-8', '1.23456789e2', '0x10', 'Infinity', '+1', '.5']) {
-            assert.strictEqual((await deployWith(bad)).success, false, 'should reject ' + JSON.stringify(bad));
-        }
-    });
-
-    it('rejects malformed decimals outright', async function () {
-        for (const bad of ['5.', '1.2.3', 'abc', '1 ']) {
-            assert.strictEqual((await deployWith(bad)).success, false, 'should reject ' + JSON.stringify(bad));
-        }
-    });
-
-    it('is a NOTATION gate, not a grid check: a legitimately spelled off-grid value passes', async function () {
-        // '0.000000015' is plainly spelled and still off an 8-decimal grid. The
-        // helper must let it through; the consumer's floorToDecimals is what
-        // quantises it. Anything else would make the two checks one, and the
-        // grid is unknowable at deploy time.
-        assert.strictEqual((await deployWith('0.000000015')).success, true);
-    });
+registerValidatorSuites({
+    INTVALIDATOR, DECIMALVALIDATOR, XChainVM, E2EHarness, OWNER, assert
 });
 
-// The vault above calls one helper from every pattern file, which is the scope
-// of the file-granular guard in test/gate-wiring.test.js, and that scope leaves
-// seven shipped helpers with lint and compile coverage only, among them the whole
-// XChain answer for the AccessControl (onlyRole), SafeERC20 (requireHeld,
-// depositedSince) and Enumerable (requireEnum) rows of oz-aliases.json, i.e. the
-// first things a Solidity reader pastes. This companion exercises exactly those
-// seven on the isolate: isOwner, onlyRole, isPaused, requireHeld, depositedSince,
-// requireStatusIn, requireEnum. The guard is now per-HELPER, so a new helper that
-// never runs here reddens the gate instead of hiding behind a covered sibling.
+// test/gate-wiring.test.js fails on any patterns/*.js helper no contract here calls. This
+// companion calls the rest the vault and both validators above skip, among them onlyRole,
+// requireHeld, depositedSince and requireEnum (AccessControl, SafeERC20, Enumerable in oz-aliases).
 const ROLEVAULT = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
@@ -278,6 +206,17 @@ module.exports = {
     atLeast: function (xchain) {
         xchain.state.set('atLeast', isAtLeastExact(xchain, xchain.getInputParam(0), xchain.getInputParam(1)) ? 'true' : 'false');
     },
+    // Record the strict exact helpers' verdicts the same way.
+    exceeds: function (xchain) {
+        xchain.state.set('exceeds', exceedsExactly(xchain, xchain.getInputParam(0), xchain.getInputParam(1)) ? 'true' : 'false');
+    },
+    positive: function (xchain) {
+        xchain.state.set('positive', isPositiveExact(xchain.getInputParam(0)) ? 'true' : 'false');
+    },
+    // Record an amount floored onto the vault tick's grid, as read from the ledger.
+    floor: function (xchain) {
+        xchain.state.set('floored', floorToDecimals(xchain.getInputParam(0), tickDecimals(xchain, xchain.state.get('tick'))));
+    },
     settle: function (xchain) {
         onlyRole(xchain, 'arbiter');
         whenNotPaused(xchain);
@@ -292,23 +231,105 @@ module.exports = {
 
 const ARBITER = 'arbiter';
 
+// `mode` is passed through verbatim, never defaulted with `||`: an empty mode is
+// one of the cases under test, and a falsy default would quietly deploy 'STRICT'
+// instead and turn that assertion into a test of nothing.
+async function deployRoleVault(mode) {
+    h = new E2EHarness(XChainVM);
+    for (const a of [OWNER, ARBITER, STRANGER]) h.seedBalance(a, 'XCHAIN', '1000000');
+    h.seedBalance(OWNER, TICK, '1000');
+    return h.deploy({
+        code: ROLEVAULT, deployer: OWNER, contractAddress: ADDR,
+        params: [OWNER, ARBITER, TICK, mode === undefined ? 'STRICT' : mode]
+    });
+}
+
+async function snapshotForms() {
+    await deployRoleVault();
+    assertSuccess(await run(h, 'snapshot', [], OWNER));
+    assertContractState(h.ledger, ADDR, 'sawOwner', 'true');
+    assertContractState(h.ledger, ADDR, 'sawPaused', 'false');
+
+    assertSuccess(await run(h, 'snapshot', [], STRANGER));
+    assertContractState(h.ledger, ADDR, 'sawOwner', 'false');
+
+    assertSuccess(await run(h, 'pause', [], ARBITER));
+    assertSuccess(await run(h, 'snapshot', [], OWNER));
+    assertContractState(h.ledger, ADDR, 'sawPaused', 'true');
+}
+
+// A tolerant gte reads 100000 as covering 100000.00000001 (1e-12 relative), so
+// pin that isAtLeastExact and requireHeld decide by the exact sign, per base unit.
+async function atLeastExact() {
+    await deployRoleVault();
+    const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
+        ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true'],
+        ['0', 'Infinity', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false'], ['0', 'NaN', 'false']];
+    for (const [a, b, want] of CASES) {
+        assertSuccess(await run(h, 'atLeast', [a, b], OWNER));
+        assertContractState(h.ledger, ADDR, 'atLeast', want);
+    }
+    h.seedBalance(OWNER, TICK, '200000');
+    h.deposit(OWNER, ADDR, TICK, '100000');
+    assertReverted(await run(h, 'settle', ['100000.00000001'], ARBITER), 'insufficient contract balance of ' + TICK);
+    assertSuccess(await run(h, 'settle', ['100000'], ARBITER));
+}
+
+// A tolerant gt reads 100000.00000001 as no greater than 100000, and 1e-18 as zero, so
+// pin that exceedsExactly and isPositiveExact decide per base unit and fail closed.
+async function strictExact() {
+    await deployRoleVault();
+    const GT = [['100000.00000001', '100000', 'true'], ['100000', '100000', 'false'], ['1.10', '1.1', 'false'],
+        ['100000', '100000.00000001', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false']];
+    for (const [a, b, want] of GT) {
+        assertSuccess(await run(h, 'exceeds', [a, b], OWNER));
+        assertContractState(h.ledger, ADDR, 'exceeds', want);
+    }
+    const POS = [['0.000000000000000001', 'true'], ['1', 'true'], ['0', 'false'], ['0.000', 'false'],
+        ['-0.00000001', 'false'], ['Infinity', 'false'], ['NaN', 'false']];
+    for (const [v, want] of POS) {
+        assertSuccess(await run(h, 'positive', [v], OWNER));
+        assertContractState(h.ledger, ADDR, 'positive', want);
+    }
+}
+
+// The indexer rounds an off-grid emission half-up, so pin that the floor truncates
+// onto the ledger's grid and that tickDecimals refuses a tick with no token info.
+async function gridFloor() {
+    await deployRoleVault();
+    h.ledger.setTokenDecimals(TICK, 8);
+    const CASES = [['1.234567899', '1.23456789'], ['1.23456789', '1.23456789'], ['7', '7'],
+        ['0.000000009', '0.00000000'], ['-1.234567899', '-1.23456789']];
+    for (const [v, want] of CASES) {
+        assertSuccess(await run(h, 'floor', [v], OWNER));
+        assertContractState(h.ledger, ADDR, 'floored', want);
+    }
+    h.ledger.setTokenDecimals(TICK, 0);
+    assertSuccess(await run(h, 'floor', ['5.9'], OWNER));
+    assertContractState(h.ledger, ADDR, 'floored', '5');
+
+    await deployRoleVault();
+    assertReverted(await run(h, 'floor', ['1.5'], OWNER), 'token decimals unavailable: ' + TICK);
+}
+
+async function depositedSinceReserve() {
+    await deployRoleVault();
+    h.deposit(OWNER, ADDR, TICK, '500');
+    // No reserve has ever been written, so the helper's `reserve || '0'`
+    // default is what makes this the full held balance.
+    assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+    assertContractState(h.ledger, ADDR, 'fresh', '500');
+
+    await deployRoleVault();
+    h.deposit(OWNER, ADDR, TICK, '200');
+    assertSuccess(await run(h, 'mark', [], OWNER));
+    h.deposit(OWNER, ADDR, TICK, '300');
+    assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+    assertContractState(h.ledger, ADDR, 'fresh', '300');
+}
+
 (XChainVM ? describe : describe.skip)('Patterns: role vault (the branch-form and multi-state helpers)', function () {
     this.timeout(0);
-    let h;
-
-    // `mode` is passed through verbatim, never defaulted with `||`: an empty mode is
-    // one of the cases under test, and a falsy default would quietly deploy 'STRICT'
-    // instead and turn that assertion into a test of nothing.
-    async function deployRoleVault(mode) {
-        h = new E2EHarness(XChainVM);
-        for (const a of [OWNER, ARBITER, STRANGER]) h.seedBalance(a, 'XCHAIN', '1000000');
-        h.seedBalance(OWNER, TICK, '1000');
-        return h.deploy({
-            code: ROLEVAULT, deployer: OWNER, contractAddress: ADDR,
-            params: [OWNER, ARBITER, TICK, mode === undefined ? 'STRICT' : mode]
-        });
-    }
-
     it('requireEnum: a mode outside the allowed set is rejected at deploy', async function () {
         assertSuccess(await deployRoleVault('STRICT'));
         assertSuccess(await deployRoleVault('LENIENT'));
@@ -316,81 +337,38 @@ const ARBITER = 'arbiter';
         assert.strictEqual((await deployRoleVault('')).success, false, 'an empty mode should not deploy');
     });
 
-    it('isOwner / isPaused: the non-throwing forms report the caller and the flag', async function () {
-        await deployRoleVault();
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
-        assertContractState(h.ledger, ADDR, 'sawOwner', 'true');
-        assertContractState(h.ledger, ADDR, 'sawPaused', 'false');
-
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: STRANGER }));
-        assertContractState(h.ledger, ADDR, 'sawOwner', 'false');
-
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'snapshot', params: [], caller: OWNER }));
-        assertContractState(h.ledger, ADDR, 'sawPaused', 'true');
-    });
+    it('isOwner / isPaused: the non-throwing forms report the caller and the flag', snapshotForms);
 
     it('onlyRole: the role holder passes and the owner does not inherit the role', async function () {
         await deployRoleVault();
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: OWNER }),
-            'not authorized (arbiter)');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: STRANGER }),
-            'not authorized (arbiter)');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'pause', params: [], caller: ARBITER }));
+        assertReverted(await run(h, 'pause', [], OWNER), 'not authorized (arbiter)');
+        assertReverted(await run(h, 'pause', [], STRANGER), 'not authorized (arbiter)');
+        assertSuccess(await run(h, 'pause', [], ARBITER));
     });
 
     it('requireHeld: settling more than the contract holds reverts', async function () {
         await deployRoleVault();
         h.deposit(OWNER, ADDR, TICK, '400');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }),
-            'insufficient contract balance of ' + TICK);
+        assertReverted(await run(h, 'settle', ['500'], ARBITER), 'insufficient contract balance of ' + TICK);
         assertContractState(h.ledger, ADDR, 'status', 'OPEN');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['400'], caller: ARBITER }));
+        assertSuccess(await run(h, 'settle', ['400'], ARBITER));
         assertContractState(h.ledger, ADDR, 'status', 'CLOSED');
     });
 
-    // A tolerant gte reads 100000 as covering 100000.00000001 (1e-12 relative), so
-    // pin that isAtLeastExact and requireHeld decide by the exact sign, per base unit.
-    it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', async function () {
-        await deployRoleVault();
-        const CASES = [['100000', '100000', 'true'], ['100000.00000001', '100000', 'true'],
-            ['100000', '100000.00000001', 'false'], ['0', '0.00000001', 'false'], ['1.10', '1.1', 'true'],
-            ['0', 'Infinity', 'false'], ['Infinity', '100', 'false'], ['NaN', '0', 'false'], ['0', 'NaN', 'false']];
-        for (const [a, b, want] of CASES) {
-            assertSuccess(await h.execute({ contractAddress: ADDR, method: 'atLeast', params: [a, b], caller: OWNER }));
-            assertContractState(h.ledger, ADDR, 'atLeast', want);
-        }
-        h.seedBalance(OWNER, TICK, '200000');
-        h.deposit(OWNER, ADDR, TICK, '100000');
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000.00000001'], caller: ARBITER }),
-            'insufficient contract balance of ' + TICK);
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['100000'], caller: ARBITER }));
-    });
+    it('isAtLeastExact / requireHeld: exact to one base unit where gte is tolerant', atLeastExact);
 
-    it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', async function () {
-        await deployRoleVault();
-        h.deposit(OWNER, ADDR, TICK, '500');
-        // No reserve has ever been written, so the helper's `reserve || '0'`
-        // default is what makes this the full held balance.
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertContractState(h.ledger, ADDR, 'fresh', '500');
+    it('exceedsExactly / isPositiveExact: strict and exact where gt is tolerant', strictExact);
 
-        await deployRoleVault();
-        h.deposit(OWNER, ADDR, TICK, '200');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'mark', params: [], caller: OWNER }));
-        h.deposit(OWNER, ADDR, TICK, '300');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertContractState(h.ledger, ADDR, 'fresh', '300');
-    });
+    it('depositedSince: defaults an unset reserve to 0, then measures growth past a mark', depositedSinceReserve);
+
+    it('floorToDecimals / tickDecimals: truncate onto the ledger grid, refuse a tick with no info', gridFloor);
 
     it('requireStatusIn: OPEN and HELD both settle, CLOSED does not', async function () {
         await deployRoleVault();
         h.deposit(OWNER, ADDR, TICK, '500');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'hold', params: [], caller: ARBITER }));
+        assertSuccess(await run(h, 'hold', [], ARBITER));
         assertContractState(h.ledger, ADDR, 'status', 'HELD');
-        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['500'], caller: ARBITER }));
-        assertReverted(await h.execute({ contractAddress: ADDR, method: 'settle', params: ['1'], caller: ARBITER }),
-            'CLOSED not in [OPEN, HELD]');
+        assertSuccess(await run(h, 'settle', ['500'], ARBITER));
+        assertReverted(await run(h, 'settle', ['1'], ARBITER), 'CLOSED not in [OPEN, HELD]');
     });
 });
-

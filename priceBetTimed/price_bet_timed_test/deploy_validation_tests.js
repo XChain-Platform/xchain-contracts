@@ -29,6 +29,18 @@ function registerNotationTests(context, deployWith) {
                 `stake ${JSON.stringify(v)} must deploy`);
         }
     });
+
+    // The notation gate runs before the positivity check, so text math cannot parse
+    // gets the plain-decimal message rather than a generic math error.
+    it('names the plain-decimal rule for an unparseable stake or strike', async function () {
+        const cases = [[MAKER, PAIR, STRIKE, 'OVER', TICK, 'abc', String(T), '5'],
+                       [MAKER, PAIR, 'abc', 'OVER', TICK, STAKE, String(T), '5']];
+        for (const params of cases) {
+            const r = await deployWith(params);
+            assert.strictEqual(r.success, false);
+            assert.ok(/plain decimal/.test(String(r.error)), 'unexpected revert: ' + r.error);
+        }
+    });
 }
 
 // Integer-shape and range cases for settleTime and deadlineBlocks.
@@ -82,6 +94,12 @@ module.exports = function registerDeployValidationTests(context) {
             assert.strictEqual(past.success, false, 'settleTime in the past should revert in initialize');
             const side = await deployWith([MAKER, PAIR, STRIKE, 'HIGHER', TICK, STAKE, String(T), '5']);
             assert.strictEqual(side.success, false, 'side=HIGHER should revert in initialize');
+        });
+
+        it('rejects a contract address as maker', async function () {
+            const r = await deployWith(['C:BTC:7', PAIR, STRIKE, 'OVER', TICK, STAKE, String(T), '5']);
+            assert.strictEqual(r.success, false);
+            assert.ok(String(r.error).includes('plain address'));
         });
 
         registerNotationTests(context, deployWith);

@@ -4,6 +4,8 @@ module.exports = function registerAttackTests(context) {
     describe('attacks we considered', function () {
         registerStaleResponseAttacks(context);
         registerDoubleCreditAttacks(context);
+        registerDuplicateHashInPageAttacks(context);
+        registerOverCapPageAttacks(context);
         registerSupplyCapAttack(context);
     });
 };
@@ -50,7 +52,7 @@ function registerStaleResponseAttacks(context) {
 
 function registerDoubleCreditAttacks(context) {
     const {
-        ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
+        assert, ADDR, HOLDER, OTHER, assertSuccess, assertReverted, assertEmittedActions,
         assertContractState, deployBridge, getHarness, seedSendsResponse,
         sendsPayload, nextTxHash
     } = context;
@@ -90,23 +92,126 @@ function registerDoubleCreditAttacks(context) {
     });
 }
 
-function registerSupplyCapAttack(context) {
+function registerDuplicateHashInPageAttacks(context) {
     const {
-        ADDR, HOLDER, OTHER, XC_TICK, CODE, assert, assertSuccess, assertReverted, assertEmittedActions,
+        assert, ADDR, HOLDER, assertSuccess, assertContractState, deployBridge, getHarness,
+        seedSendsResponse, sendsPayload, nextTxHash
+    } = context;
+
+    async function dupPage(rows) {
+        await deployBridge();
+        const h = getHarness();
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+        const requestId = JSON.parse(req.returnValue);
+        seedSendsResponse(requestId, sendsPayload(rows));
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        assertSuccess(cb);
+        return { h, requestId, cb };
+    }
+
+    function sentQuantities(cb) {
+        return (cb.emittedActions || []).filter(function (e) { return e.action === 'SEND'; })
+            .map(function (e) { return e.params.quantity; });
+    }
+
+    it('a tx_hash repeated inside one attested page is credited once (same quantity)', async function () {
+        const tx = nextTxHash();
+        const r = await dupPage([{ txHash: tx, quantity: '5' }, { txHash: tx, quantity: '5' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['5']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '5');
+        assertContractState(r.h.ledger, ADDR, 'claimedTotal:' + HOLDER, '5');
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + tx], true);
+    });
+
+    it('a tx_hash repeated inside one page with different quantities credits only the first row', async function () {
+        const tx = nextTxHash();
+        const r = await dupPage([{ txHash: tx, quantity: '5' }, { txHash: tx, quantity: '7' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['5']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '5');
+    });
+
+    it('repeated __proto__ and constructor hashes in one page are each credited once', async function () {
+        const r = await dupPage([{ txHash: '__proto__', quantity: '5' }, { txHash: '__proto__', quantity: '5' },
+            { txHash: 'constructor', quantity: '1' }, { txHash: 'constructor', quantity: '1' }]);
+        // Not 64-hex tx_hashes: every row is dropped, so none is credited more than once.
+        assert.deepStrictEqual(sentQuantities(r.cb), []);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '0');
+    });
+
+    it('two distinct tx_hashes in one page are both credited and the same page replays as a no-op', async function () {
+        const a = nextTxHash();
+        const b = nextTxHash();
+        const r = await dupPage([{ txHash: a, quantity: '5' }, { txHash: b, quantity: '5' }]);
+        assert.deepStrictEqual(sentQuantities(r.cb), ['10']);
+        assertContractState(r.h.ledger, ADDR, 'totalClaimed', '10');
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + a], true);
+        assert.strictEqual(r.h.ledger.contractState[ADDR]['burned:' + b], true);
+        r.h.ledger.contractState[ADDR]['pending:' + HOLDER] = r.requestId;
+        const replay = await r.h.execute({ contractAddress: ADDR, method: 'onClaim', params: [r.requestId, 'http_get', 'ok', '', HOLDER], caller: 'attacker' });
+        assertSuccess(replay);
+        assert.deepStrictEqual(sentQuantities(replay), []);
+    });
+}
+
+function registerOverCapPageAttacks(context) {
+    const {
+        ADDR, HOLDER, XC_TICK, assert, assertSuccess, assertEmittedActions,
         assertContractState, deployBridge, getHarness, seedSendsResponse,
         sendsPayload, nextTxHash
     } = context;
 
-    it('claims are capped at maxSupply across all claimants, before any SEND is emitted', async function () {
+    async function overCapRound(h, quantity) {
+        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
+        assertSuccess(req);
+        const requestId = JSON.parse(req.returnValue);
+        const txHash = nextTxHash();
+        seedSendsResponse(requestId, sendsPayload([{ txHash: txHash, quantity: quantity }]));
+        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
+        return { cb: cb, txHash: txHash };
+    }
+
+    it('a page that would exceed maxSupply settles as a no-op: no SEND, pending cleared, requestClaim callable again', async function () {
         await deployBridge('50', '8');
         const h = getHarness();
-        const req = await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER });
-        const requestId = JSON.parse(req.returnValue);
-        seedSendsResponse(requestId, sendsPayload([{ txHash: nextTxHash(), quantity: '100' }]));
-        const cb = await h.execute({ contractAddress: ADDR, method: 'onClaim', params: [requestId, 'http_get', 'ok', '', HOLDER], caller: HOLDER });
-        assertReverted(cb, 'maxSupply exhausted');
+        const r = await overCapRound(h, '100');
+        assertSuccess(r.cb, 'an over-cap page must not revert: that would roll back the pending delete');
+        assertEmittedActions(r.cb, []);
         assert.strictEqual(h.ledger.getContractBalance(ADDR, XC_TICK), '50', 'custody is untouched by a refused claim');
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '0');
+        assert.ok(!h.ledger.contractState[ADDR]['burned:' + r.txHash], 'the refused burn stays unmarked');
+        assert.ok(!h.ledger.contractState[ADDR]['pending:' + HOLDER], 'pending is cleared');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }), 'address is not locked out');
     });
+
+    it('at 18 decimals, a page of 1.000000000000000001 over a 9.999999999999999999 claim of maxSupply 10 is a no-op, not a wedge', async function () {
+        await deployBridge('10', '18');
+        const h = getHarness();
+        const first = await overCapRound(h, '9.999999999999999999');
+        assertSuccess(first.cb);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '9.999999999999999999');
+        const over = await overCapRound(h, '1.000000000000000001');
+        assertSuccess(over.cb);
+        assertEmittedActions(over.cb, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '9.999999999999999999');
+        assert.ok(!h.ledger.contractState[ADDR]['burned:' + over.txHash]);
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }));
+    });
+
+    it('after the exact supply is claimed, one more base unit is a no-op and requestClaim stays callable', async function () {
+        await deployBridge('10', '18');
+        const h = getHarness();
+        assertSuccess((await overCapRound(h, '10')).cb);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '10');
+        const extra = await overCapRound(h, '0.000000000000000001');
+        assertSuccess(extra.cb);
+        assertEmittedActions(extra.cb, []);
+        assertContractState(h.ledger, ADDR, 'totalClaimed', '10');
+        assertSuccess(await h.execute({ contractAddress: ADDR, method: 'requestClaim', params: [], caller: HOLDER }));
+    });
+}
+
+function registerSupplyCapAttack(context) {
+    const { XC_TICK, CODE, assert, deployBridge } = context;
 
     // XChain MINT is not issuer-gated, so an unlocked tick could be minted by anyone:
     // unbacked supply, and a filled cap that strands every real claimant.

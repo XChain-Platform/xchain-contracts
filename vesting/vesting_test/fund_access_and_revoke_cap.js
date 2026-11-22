@@ -31,12 +31,14 @@ function makeKit(ctx) {
         return typeof v === 'string' ? JSON.parse(v) : v;
     };
     kit.info = async function () { return kit.parse(await kit.call('info', 'stranger')); };
-    // Run info() the way the explorer's read-only simulation does: no balances, no token info.
+    // Run info() the way the explorer's read-only simulation does: the harness's network and
+    // tip block context (so the same height gates arm), but no balances and no token info.
     kit.simulateInfo = async function () {
         return kit.parse(await kit.h.vm.execute({
             code: kit.h.ledger.getContract(ADDR).code, state: kit.h.ledger.getContractState(ADDR),
             method: 'info', params: [], caller: 'simulation', contractAddress: ADDR,
-            blockContext: kit.h.ledger.getBlockContext(), balances: null, tokenInfo: null
+            blockContext: kit.h.ledger.getBlockContext(), balances: null, tokenInfo: null,
+            ...(kit.h.network == null ? {} : { network: kit.h.network })
         }));
     };
     return kit;
@@ -125,6 +127,17 @@ function registerInfoClaimableTests(ctx, kit) {
             await kit.offGrid('false');
             kit.at(1);
             assert.strictEqual((await kit.simulateInfo()).claimable, '2');
+        });
+
+        it('the read-only simulation runs under the harness network, not the gateless default', async function () {
+            await kit.offGrid('false');
+            const seen = [];
+            const real = kit.h.vm.execute.bind(kit.h.vm);
+            kit.h.vm.execute = function (opts) { seen.push(opts); return real(opts); };
+            await kit.simulateInfo();
+            assert.strictEqual(kit.h.network, 'mainnet');
+            assert.strictEqual(seen.length, 1);
+            assert.strictEqual(seen[0].network, kit.h.network);
         });
     });
 }

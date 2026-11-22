@@ -42,6 +42,20 @@ function registerRejectionTests(ctx) {
         assertContractState(ctx.h.ledger, ADDR, 'v:' + ALICE + ':coll', '3');
         assertReverted(await withdraw(ALICE, '1.5e-8'), 'plain decimal');
     });
+
+    // The notation gate runs before the magnitude check, so text mathjs cannot
+    // parse gets the plain-decimal message rather than a generic math error.
+    it('borrow and withdraw report unparseable text with the plain-decimal message', async function () {
+        await deployVault();
+        setPrice('100');
+        assertSuccess(await depositColl(ALICE, '3'));
+        for (const v of ['abc', '1_000x']) {
+            assertReverted(await borrow(ALICE, v), 'plain decimal');
+            assertReverted(await withdraw(ALICE, v), 'plain decimal');
+        }
+        assertReverted(await borrow(ALICE, '0'), 'amount must be positive');
+        assertReverted(await withdraw(ALICE, '0'), 'amount must be positive');
+    });
 }
 
 function registerFixedNotationAcceptanceTest(ctx) {
@@ -62,7 +76,7 @@ function registerFixedNotationAcceptanceTest(ctx) {
         // 1 + 0.5 + 100 + floor(0.000000015) = 101.50000001, all on the grid.
         assertContractState(ctx.h.ledger, ADDR, 'totalDebt', '101.50000001');
         assertBalance(ctx.h.ledger, ALICE, STABLE, '101.50000001');
-        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '0');
+        assertContractBalance(ctx.h.ledger, ADDR, STABLE, '999999898.49999999');
     });
 }
 

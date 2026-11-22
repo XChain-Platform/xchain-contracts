@@ -28,31 +28,32 @@ the DEPOSIT and `buy()` are in the **same transaction**. **Never DEPOSIT without
 buyer who calls `buy()`. (This per-caller attribution is the pattern the AMM will
 build on.)
 
-A `BATCH` is **not** atomic, which is why that rule bites: its sub-actions settle
-independently, so a `buy()` that reverts (`sale not open`, `sale closed (deadline
-passed)`, `hard cap exceeded`) leaves the `DEPOSIT` ahead of it standing in the
-contract, where the next buyer's delta absorbs it. Size the payment to clear.
+A `BATCH` is **not** atomic, so `buy()` returns the whole payment rather than
+reverting when the sale is closed, its deadline passed, or the hard cap would
+be exceeded. A bare DEPOSIT without `buy()` is still attributed to the next
+caller because the contract can observe only its custody balance.
 
 ## Lifecycle
 
 | Method | Who | Effect |
 |---|---|---|
-| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`) into contract custody, locks minting, and opens the sale. |
-| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call (a payment worth less than one unit comes back in full); reverts past the deadline or hard cap. |
+| `initialize(owner, payTick, saleTick, rate, softCap, hardCap, durationBlocks, saleDecimals)` | deployer | Issues and pre-mints the fixed sale-token inventory (`hardCap*rate`, floored onto the `saleDecimals` grid) into contract custody, locks minting, and opens the sale. `rate`, `softCap` and `hardCap` must be plain decimals (digits and one optional point). |
+| `buy()` | buyer (BATCHed after DEPOSIT) | Records the part of the caller's payment that buys whole sale-token units and returns the change in the same call. It returns the whole payment after close, past the deadline, above the hard cap, or once 9,000 buyers hold a contribution. |
 | `finalize()` | anyone | After the deadline (or once the hard cap is hit), sets `SUCCESS` if `raised >= softCap`, else `FAILED`. |
+| `burnUnsold()` | anyone (after finalization, once) | Permanently burns every sale token not allocated to a buyer after a successful sale, or the entire inventory after a failed sale. Outstanding successful claims remain fully backed. |
 | `claim()` | buyer (SUCCESS) | Sends `contribution * rate` sale tokens from contract custody to the buyer. |
 | `refund()` | buyer (FAILED) | Returns the buyer's full payment. |
 | `withdraw()` | owner (SUCCESS, once) | Sends the raised proceeds to the owner. |
-| `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline }`. |
+| `info()` | anyone (read-only) | `{ status, raised, softCap, hardCap, deadline, buyers, maxBuyers }`. |
 
 ## Attacks we considered
 
 - **Deposit misattribution.** Contributions are credited to the `buy()` caller via
   the balance delta - safe under a single `BATCH(DEPOSIT, buy)`. The footgun
-  (orphan deposits, whether un-batched or left behind by a reverted `buy()`) is
-  documented above; it is a usage rule, not a contract bug.
-- **Buying after close.** `buy()` reverts past the deadline and rejects any
-  contribution that would push `raised` over the hard cap.
+  from a bare, un-batched deposit) is documented above. Rejected purchases
+  return the measured balance delta in full so they cannot poison later buys.
+- **Buying after close.** `buy()` returns the whole measured payment past the
+  deadline, after finalization, or when it would push `raised` over the hard cap.
 - **Premature finalize.** `finalize()` requires either the deadline or the hard
   cap; it can't be called early to lock a favorable/unfavorable outcome.
 - **Double claim / double refund.** Each deletes the caller's contribution record
@@ -61,11 +62,14 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   SUCCESS-only, `refund()` is FAILED-only.
 - **Unauthorized or repeated withdrawal.** `withdraw()` is owner-only and guarded
   by a `withdrawn` flag.
-- **Token supply.** The full `hardCap*rate` supply is pre-minted into contract
+- **Token supply.** The full `hardCap*rate` supply, floored onto the sale
+  token's grid so the indexer never rounds it, is pre-minted into contract
   custody at issuance, with both `MINT` and later `MINT_SUPPLY` locked. Public
   `MINT` cannot consume the cap or create unbacked supply, and claims only send
-  tokens from the fixed inventory. Whatever claims do not take stays in custody
-  for good (see Known limitations).
+  tokens from the fixed inventory. After finalization, anyone can call
+  `burnUnsold()` once to destroy inventory no successful claim can use. On a
+  failed sale the whole inventory is unsold; on success the contract preserves
+  the exact grid-floored allocation recorded for every buyer.
 - **Rounding.** `xchain.math` bignumber throughout; no float literals (SDK-validated).
   `claim()` floors `contribution * rate` onto the sale token's grid, so a
   payment off that grid would buy fewer tokens than it paid for, with the
@@ -74,15 +78,17 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   running total for top-ups, and sends the rest back to the buyer at once;
   every recorded contribution receives exactly its purchased tokens. It returns
   change rather than reverting because a reverted `buy()` would leave the whole
-  deposit behind.
+  deposit behind. For the same reason `buy()` tests the payment for zero
+  exactly, not with the tolerant `gt`, so a deposit of a few base units of an
+  18-decimal `payTick` (at most 1e-15) is still attributed to its payer.
 
 ## Known limitations (teaching baseline)
 
 - **Exact, single payTick.** Buyers must pay in the configured `payTick`, deposited
   in the same `BATCH` as `buy()`. Other-tick deposits are not recoverable.
 - **Whole-payment caps.** A contribution whose accepted part would exceed the
-  hard cap is rejected outright (only grid change is returned, never a partial
-  fill of the cap). Buyers size their own deposits. Both
+  hard cap is returned in full, never partly filled. Buyers can retry with a
+  smaller amount. Both
   caps compare exactly, not within a tolerance, so `raised` can never pass the
   hard cap by even one base unit and outrun the sale token's `maxSupply`.
 - **Sub-base-unit overpay.** When `rate` times one pay-tick base unit does not
@@ -92,12 +98,18 @@ contract, where the next buyer's delta absorbs it. Size the payment to clear.
   in which case the sale runs to its deadline instead of closing early.
 - **Owner trust.** The owner withdraws on success; buyers rely on the published
   terms (rate/caps/deadline), which are immutable after deploy.
-- **Unsold inventory stays locked.** The template has no burn or sweep path, so
-  the sale tokens no claim takes stay in contract custody permanently:
-  `(hardCap - raised) * rate` after a success under the hard cap, and the whole
-  `hardCap * rate` after a failed sale. They never circulate, but the tick's
-  `MAX_SUPPLY` and supply figures still count them, and explorers list the
-  contract as a holder of that balance.
+- **At most 9,000 distinct buyers.** Each buyer holds one state key until it
+  claims or refunds, and the VM refuses a contract's 10,001st key. Past
+  `maxBuyers` a new buyer's payment is returned in the same call; existing
+  buyers can still add to their contribution. Check `buyers` against
+  `maxBuyers` in `info()` before signing. Anyone can fill the slots with
+  one-unit buys from many addresses and get the payments back by `refund()`
+  if the sale fails, so a sale that expects many small buyers should set
+  its price high enough to make that costly.
+- **Burn requires a follow-up call.** Unsold inventory stays in contract custody
+  until anyone calls `burnUnsold()` after finalization. The one-shot call removes
+  it from supply permanently and cannot reduce the inventory reserved for
+  successful claims.
 
 ## Tests
 

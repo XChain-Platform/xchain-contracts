@@ -93,6 +93,11 @@ de-correlate same-block draws.
   deploy, when the contract holds none of them; `initialize` still rejects a
   `unit` that is not a plain fixed-notation decimal, since `"2.5e-1"` would
   pass the grid check unchanged and the ledger would read it as `0.25`.
+  `price` gets the same notation check, because it is stored and echoed by
+  `info()` exactly as written.
+  The grid check compares values, not spellings, so a `unit` written with
+  trailing zeros (`"1.00000000"` on a zero-decimal card) is on the grid and
+  draws normally.
 - **Unauthorized sweep.** `withdraw(tick)` is owner-only
   (`getSourceAddress()` checked against the stored deployer).
 - **Rounding / float drift.** All arithmetic uses `xchain.math` bignumber ops;
@@ -102,7 +107,7 @@ de-correlate same-block draws.
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
+npx mocha --timeout 0 ../xchain-contracts/cardDispenser/card_dispenser.test.js
 ```
 
 > **On-chain deployment note.** `getBalance()`/`getTokenInfo()` are wired in

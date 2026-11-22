@@ -51,7 +51,7 @@ function registerSettlementAttacks(context) {
         const r = await buy('alice', '500');
         assertSuccess(r);
         assert.strictEqual(JSON.parse(r.returnValue), 'underpaid');
-        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '500' } }]);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: 'alice', tick: BID, quantity: '500', memo: 'dutchAuction settlement' } }]);
         assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
         assertContractBalance(context.h.ledger, ADDR, BID, '0');
     });
@@ -100,7 +100,7 @@ function registerOffGridFundAttack(context) {
         // to nothing.
         const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '10', memo: 'dutchAuction settlement' } }]);
         assertBalance(context.h.ledger, SELLER, ITEM, '10');
         assertContractBalance(context.h.ledger, ADDR, ITEM, '0');
         assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
@@ -123,7 +123,7 @@ function registerCancelRecoveryAttacks(context) {
         assertContractState(context.h.ledger, ADDR, 'status', 'INIT');
         const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
         assertSuccess(c);
-        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5' } }]);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: '5', memo: 'dutchAuction settlement' } }]);
         assertBalance(context.h.ledger, SELLER, ITEM, '10');
         assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
     });
@@ -146,11 +146,24 @@ function registerCancelRecoveryAttacks(context) {
         assertSuccess(await depositAndFund());
         assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
     });
+
+    // One base unit of an 18-decimal tick sits under the math comparison tolerance of zero.
+    it('cancel() returns a held item balance below the comparison tolerance', async function () {
+        const DUST = '0.000000000000000001';
+        await deployAuction(10);
+        context.h.ledger.setTokenDecimals(ITEM, 18);
+        context.h.deposit(SELLER, ADDR, ITEM, DUST);
+        const c = await context.h.execute({ contractAddress: ADDR, method: 'cancel', params: [], caller: SELLER });
+        assertSuccess(c);
+        assertEmittedActions(c, [{ action: 'SEND', params: { destination: SELLER, tick: ITEM, quantity: DUST, memo: 'dutchAuction settlement' } }]);
+        assertBalance(context.h.ledger, SELLER, ITEM, '10');
+        assertContractState(context.h.ledger, ADDR, 'status', 'CANCELLED');
+    });
 }
 
 function registerOnGridControls(context) {
     const {
-        ADDR, ITEM, SELLER, assertBalance, assertContractState, assertReverted,
+        ADDR, ITEM, SELLER, assertBalance, assertContractBalance, assertContractState, assertReverted,
         assertSuccess, buy, deployAuction, depositAndFund
     } = context;
 
@@ -170,6 +183,25 @@ function registerOnGridControls(context) {
         assertSuccess(await depositAndFund());
         assertSuccess(await buy('alice', '1000'));
         assertBalance(context.h.ledger, 'alice', ITEM, '10');
+    });
+
+    it('an on-grid itemAmount spelled with trailing zeros funds, sells and delivers it', async function () {
+        assertSuccess(await deployOffGridItem(context, '10.00000000'));
+        context.h.deposit(SELLER, ADDR, ITEM, '10');
+        assertSuccess(await context.h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }));
+        assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
+        assertSuccess(await buy('alice', '1000'));
+        assertBalance(context.h.ledger, 'alice', ITEM, '10');
+        assertContractBalance(context.h.ledger, ADDR, ITEM, '0');
+    });
+
+    it('an itemAmount one base unit past the grid is still rejected', async function () {
+        assertSuccess(await deployOffGridItem(context, '1.00000001'));
+        context.h.deposit(SELLER, ADDR, ITEM, '10');
+        assertReverted(
+            await context.h.execute({ contractAddress: ADDR, method: 'fund', params: [], caller: SELLER }),
+            'not representable at itemTick decimals');
+        assertContractState(context.h.ledger, ADDR, 'status', 'INIT');
     });
 }
 
@@ -204,6 +236,35 @@ function registerSubGridPriceAttack(context) {
         assertContractState(context.h.ledger, ADDR, 'status', 'ACTIVE');
         assertContractBalance(context.h.ledger, ADDR, ITEM, '10');
         assertBalance(context.h.ledger, 'mallory', ITEM, '0');
+    });
+}
+
+// Pin the on-grid side of the sub-grid guard: a floored price of exactly 1e-15 is one
+// real unit of an 18-decimal bid tick, which a tolerant gt reads as zero.
+function registerFineTickFloorPrice(context) {
+    const {
+        ADDR, BID, CODE, E2EHarness, ITEM, SELLER, XChainVM, assertBalance,
+        assertContractBalance, assertContractState, assertSuccess, buy, depositAndFund
+    } = context;
+
+    it('a floor price of one unit on an 18-decimal bid tick sells', async function () {
+        context.h = new E2EHarness(XChainVM);
+        context.h.seedBalance(SELLER, 'XCHAIN', '1000000');
+        context.h.seedBalance(SELLER, ITEM, '10');
+        context.h.ledger.setTokenDecimals(BID, 18);
+        context.h.ledger.setTokenDecimals(ITEM, 0);
+        await context.h.deploy({
+            code: CODE, deployer: SELLER, contractAddress: ADDR,
+            params: [SELLER, ITEM, '10', BID, '1', '0.0000000000000010001', '10']
+        });
+        await depositAndFund();
+        for (let i = 0; i < 50; i++) context.h.mineBlock(); // past duration: endPrice floors to 1e-15
+
+        assertSuccess(await buy('alice', '0.000000000000001'));
+        assertContractState(context.h.ledger, ADDR, 'status', 'SOLD');
+        assertBalance(context.h.ledger, 'alice', ITEM, '10');
+        assertBalance(context.h.ledger, SELLER, BID, '0.000000000000001');
+        assertContractBalance(context.h.ledger, ADDR, BID, '0');
     });
 }
 
@@ -248,6 +309,7 @@ function registerAttackCases(context) {
         registerCancelRecoveryAttacks(context);
         registerOnGridControls(context);
         registerSubGridPriceAttack(context);
+        registerFineTickFloorPrice(context);
     });
 }
 

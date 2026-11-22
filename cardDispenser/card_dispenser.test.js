@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // XChain Platform: Contract Template Library
-// cardDispenser.test.js: behavioral + adversarial tests for cardDispenser.js
+// card_dispenser.test.js: behavioral + adversarial tests for cardDispenser.js
 //
 // Copyright (c) 2026 Dankest, LLC. MIT License.
 //
@@ -9,13 +9,14 @@
 // Loads the ACTUAL cardDispenser.js template (no copy), so the test can't drift.
 //
 // Run from the xchain-vm package so its deps resolve:
-//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/cardDispenser/cardDispenser.test.js
+//   cd xchain-vm && npx mocha --timeout 0 ../xchain-contracts/cardDispenser/card_dispenser.test.js
 
 'use strict';
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const registerDeployValidationTests = require('./card_dispenser_test/deploy_validation');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -86,6 +87,16 @@ async function deployOffGridUnit(unit, cardDecimals) {
         params: [PAY, PRICE, unit, A, B, C]
     });
     h.ledger.creditContractBalance(ADDR, A, '1');
+}
+
+async function deployShortStock(unit, cardDecimals, balance) {
+    newHarness();
+    for (const tick of CARDS) h.ledger.setTokenDecimals(tick, cardDecimals);
+    await h.deploy({
+        code: CODE, deployer: OWNER, contractAddress: ADDR,
+        params: [PAY, PRICE, unit, A, B, C]
+    });
+    h.ledger.creditContractBalance(ADDR, A, balance);
 }
 
 async function deploySingle(price, copies) {
@@ -310,6 +321,25 @@ function offGridUnitTests() {
 }
 
 function exactComparisonTests() {
+    it('a balance just below one unit is sold out, not a phantom copy', async function () {
+        await deployShortStock('100000', 8, '99999.99999999');
+        const info = await h.execute({ contractAddress: ADDR, method: 'info', params: [], caller: BUYER });
+        assert.strictEqual(JSON.parse(JSON.parse(info.returnValue)).stock[A], '0');
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertContractBalance(h.ledger, ADDR, A, '99999.99999999');
+        assertContractState(h.ledger, ADDR, 'nonce', '0');
+    });
+
+    it('an 18-decimal balance just below one unit is sold out too', async function () {
+        await deployShortStock('1', 18, '0.999999999999999999');
+        const r = await draw();
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: PAY, quantity: PRICE } }]);
+        assertContractBalance(h.ledger, ADDR, A, '0.999999999999999999');
+    });
+
     it('draw() rejects a payment one base unit short of a large price', async function () {
         await deploySingle('100000', '5');
         assertReverted(await payAndDraw('99999.99999999'), 'underpaid');
@@ -330,43 +360,17 @@ function exactComparisonTests() {
         assertSuccess(r);
         assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: A, quantity: UNIT } }]);
     });
-}
 
-function deployValidationTests() {
-    it('rejects a deploy with no card ticks', async function () {
-        const { r } = await bareDeploy('C:BTC:2', [PAY, PRICE, UNIT]);   // no cards
-        assert.strictEqual(r.success, false, 'deploy without cards should revert in initialize');
-    });
-
-    it('rejects a non-positive price', async function () {
-        const { r } = await bareDeploy('C:BTC:3', [PAY, '0', UNIT, A]);
-        assert.strictEqual(r.success, false, 'deploy with price=0 should revert in initialize');
-    });
-}
-
-function unitNotationTests() {
-    // unit is stored verbatim, emitted verbatim as a draw's quantity, and fed to
-    // floorToDecimals by deliverableCopies - string surgery presupposing fixed
-    // notation. On '2.5e-1' the floor is a no-op, so the grid check would bless a
-    // unit the ledger reads as 0.25. The magnitude check is no filter: xchain.math
-    // parses every one of these.
-    it('rejects a unit that is not a plain fixed-notation decimal', async function () {
-        const BAD = ['2.5e-1', '1e3', '0x10', '+1.5', '.5', '5.', '1_000',
-                     '1.2.3', '', ' 1', 'abc', '-1'];
-        for (let i = 0; i < BAD.length; i++) {
-            const { r } = await bareDeploy('C:BTC:4', [PAY, PRICE, BAD[i], A]);
-            assert.strictEqual(r.success, false,
-                'deploy with unit ' + JSON.stringify(BAD[i]) + ' should revert');
-        }
-    });
-
-    // Notation-only: the card ticks' grids are unreadable at deploy (the contract
-    // holds none of them), so an off-grid but plainly spelled unit still deploys
-    // and is caught per card at draw() instead.
-    it('accepts an off-grid but plainly spelled unit and stores it verbatim', async function () {
-        const { r, ledger } = await bareDeploy('C:BTC:5', [PAY, PRICE, '0.25', A]);
+    // One base unit of an 18-decimal tick sits under the math comparison tolerance of zero.
+    it('the owner sweeps a held balance below the comparison tolerance', async function () {
+        const DUST = '0.000000000000000001';
+        await deployDispenser();
+        h.ledger.setTokenDecimals(PAY, 18);
+        h.deposit(BUYER, ADDR, PAY, DUST);
+        const r = await h.execute({ contractAddress: ADDR, method: 'withdraw', params: [PAY], caller: OWNER });
         assertSuccess(r);
-        assertContractState(ledger, 'C:BTC:5', 'unit', '0.25');
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: OWNER, tick: PAY, quantity: DUST } }]);
+        assertContractBalance(h.ledger, ADDR, PAY, '0');
     });
 }
 
@@ -383,7 +387,11 @@ function unitNotationTests() {
     // values within 1e-12 relative as equal.
     describe('payment and pick comparisons are exact (no mathjs tolerance)', exactComparisonTests);
     describe('deploy-time validation', function () {
-        deployValidationTests();
-        unitNotationTests();
+        registerDeployValidationTests({
+            PAY, PRICE, UNIT, A, assert, assertSuccess, assertContractState, bareDeploy
+        });
     });
 });
+
+// Seeded invariant suite on the in-process harness (runs without the VM sibling).
+require('./cardDispenser_test/invariants');

@@ -15,13 +15,14 @@
 // `policy` is the Tier 0 no-code path: describe a token policy (pausable, freeze
 // / denylist, allowlist, royalty split, permissions manifest) in a small JSON
 // config and it emits a deploy-ready controller guard contract plus the ISSUE v6
-// bind steps. No contract code is written by hand. See lib/policy-gen.js.
+// bind steps. No contract code is written by hand. See lib/policy_gen.js.
 
 'use strict';
 
 const fs   = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { generatePolicy } = require('../lib/policy_gen.js');
 
 const ROOT = path.join(__dirname, '..');   // the xchain-contracts package root
 
@@ -127,7 +128,6 @@ function cmdPolicy(args) {
         process.exit(2);
     }
 
-    const { generatePolicy } = require('../lib/policy-gen.js');
     let result;
     try {
         result = generatePolicy(raw);

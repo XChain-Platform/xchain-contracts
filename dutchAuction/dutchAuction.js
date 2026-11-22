@@ -57,24 +57,19 @@
 // and cancel() never returns it (it only returns the ITEM).
 // ---------------------------------------------------------------------------
 
-// Upper bound for the duration constructor param. A sanity ceiling, not a
-// protocol limit: fund() adds this window to a plain JS block height, so the
-// point is to keep a fat-fingered constructor term inside the exactly-
-// representable integer range rather than to constrain a real auction.
-// MAX_WINDOW_BLOCKS is 1e6 blocks (~19 years at 10-minute blocks), the same
-// ceiling escrow.js, treasury.js and patterns/validation.js use.
+// Sanity ceiling for durationBlocks, not a protocol limit: fund() adds it to a
+// plain JS block height, so it keeps a fat-fingered term exactly representable.
+// 1e6 blocks (~19 years), as in escrow.js, treasury.js and patterns/validation.js.
 var MAX_WINDOW_BLOCKS = 1000000;
+var SEND_MEMO = 'dutchAuction settlement';
 
 // Quantise a computed amount DOWN onto a tick's decimal grid before emitting it.
-// The indexer normalises every emitted amount to its tick's decimals at ledger-
-// write time (mathjs HALF-UP round: the indexer's bcmath rounds half-up, NOT
-// half-even, the mode is stated in xchain-indexer/src/consensus/xchain_price.js and pinned
-// by test, because a mis-read mode at the .5 boundary is a consensus fork),
-// which can round a computed quantity UP
-// past what the contract actually holds. Flooring the asking price onto
-// bidTick's grid before using it as both the "required minimum" and the
-// "amount sent to the seller" keeps both checks and both emissions exact. Same
-// helper and rationale as vesting.js/crowdsale.js/amm.js:floorToDecimals.
+// The indexer re-rounds every emitted amount to its tick's decimals HALF-UP, not
+// half-even, at ledger-write time (the mode is stated in
+// xchain-indexer/src/consensus/xchain_price.js and pinned by test), which can round
+// a quantity UP past what the contract holds. Flooring the asking price first keeps
+// the payment check and both emissions exact. Same helper as
+// vesting.js/crowdsale.js/amm.js:floorToDecimals.
 function floorToDecimals(value, decimals) {
     var s = String(value);
     var neg = s.charAt(0) === '-';
@@ -106,7 +101,7 @@ module.exports = {
     meta: {
         name:        'Dutch Auction',
         description: 'Descending-price auction: the asking price falls linearly per block from a start price to a floor, and the first buyer to pay the price in effect at their block takes the whole item, so there are no losing bids to refund.',
-        version:     '1.3.0'
+        version:     '1.7.0'
     },
 
     // Self-declared display metadata for wallets/explorers (spec:
@@ -125,6 +120,8 @@ module.exports = {
     // deadline-anchoring rationale as the sibling escrow/vesting/englishAuction
     // templates.
     initialize: function (xchain) {
+        // EXECUTE can name any export; seller is set only here, so a rerun is refused.
+        xchain.require(xchain.state.get('seller') === null, 'already initialized');
         var seller     = xchain.getInputParam(0);
         var itemTick   = xchain.getInputParam(1);
         var itemAmount = xchain.getInputParam(2);
@@ -134,6 +131,7 @@ module.exports = {
         var durationRaw = xchain.getInputParam(6);
 
         xchain.require(seller, 'seller required');
+        requirePayableAddress(xchain, seller, 'seller');
         xchain.require(itemTick && bidTick, 'itemTick, bidTick required');
         xchain.require(itemTick !== bidTick, 'itemTick and bidTick must differ');
         // itemAmount gets the same notation gate as the price terms below, for the
@@ -185,7 +183,7 @@ module.exports = {
 
         var itemTick   = xchain.state.get('itemTick');
         var itemAmount = xchain.state.get('itemAmount');
-        var held       = xchain.getBalance(xchain.getContractAddress(), itemTick) || '0';
+        var held       = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Require the full itemAmount exactly: buy() and cancel() emit it verbatim, so a
         // dust-short custody arms an auction whose every buy() reverts on the item SEND.
         xchain.require(isAtLeastExact(xchain, held, itemAmount), 'insufficient item deposit');
@@ -205,7 +203,8 @@ module.exports = {
         // top of this file), so the rejected seller reclaims it with cancel(), which
         // is reachable from INIT and returns the HELD balance.
         var itemGrid = tickDecimals(xchain, itemTick);
-        xchain.require(floorToDecimals(itemAmount, itemGrid) === itemAmount,
+        // Numeric, not string, equality: '1.00000000' is on a 0-decimal grid.
+        xchain.require(isAtLeastExact(xchain, floorToDecimals(itemAmount, itemGrid), itemAmount),
             'itemAmount is not representable at itemTick decimals (' + itemGrid + ')');
 
         xchain.state.set('start', String(xchain.getBlockHeight()));
@@ -219,13 +218,14 @@ module.exports = {
 
         var bidTick = xchain.state.get('bidTick');
         var price   = floorToDecimals(currentPrice(xchain), tickDecimals(xchain, bidTick));
-        var held    = xchain.getBalance(xchain.getContractAddress(), bidTick) || '0';
+        var held    = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), bidTick) || '0', '0');
 
         // Refuse a price the grid floored to nothing (the constructor gates endPrice's
         // notation, never the grid). Same guard as treasury.js executeProposal()'s
         // below-one-unit check, and without it the payment check below passes on a
-        // zero price and hands the item to a caller who deposited nothing.
-        xchain.require(xchain.math.gt(price, '0'), 'price is below one unit of the bid tick');
+        // zero price and hands the item to a caller who deposited nothing. Exact,
+        // because gt reads any price <= 1e-15 as zero, refusing a real unit of a fine tick.
+        xchain.require(!isAtLeastExact(xchain, '0', price), 'price is below one unit of the bid tick');
 
         var caller = xchain.getSourceAddress();
 
@@ -233,8 +233,8 @@ module.exports = {
         // left for a later caller to collect once the price falls to it. Compared
         // exactly, so even one base unit short is refunded rather than accepted.
         if (!isAtLeastExact(xchain, held, price)) {
-            if (xchain.math.gt(held, '0')) {
-                xchain.emit.send({ destination: caller, tick: bidTick, quantity: held });
+            if (!isAtLeastExact(xchain, '0', held)) {
+                xchain.emit.send({ destination: caller, tick: bidTick, quantity: held, memo: SEND_MEMO });
             }
             return 'underpaid';
         }
@@ -247,21 +247,30 @@ module.exports = {
         xchain.state.set('soldPrice', price);
         xchain.state.set('buyer', caller);
 
-        xchain.emit.send({ destination: caller, tick: xchain.state.get('itemTick'), quantity: xchain.state.get('itemAmount') });
-        xchain.emit.send({ destination: xchain.state.get('seller'), tick: bidTick, quantity: price });
-        if (xchain.math.gt(excess, '0')) {
-            xchain.emit.send({ destination: caller, tick: bidTick, quantity: excess });
+        // fund() accepts custody at or above itemAmount; any item surplus goes back to
+        // the seller here, since no method can reach it once the auction is SOLD.
+        var itemTick = xchain.state.get('itemTick');
+        var itemSurplus = xchain.math.subtract(
+            xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', xchain.state.get('itemAmount'));
+        xchain.emit.send({ destination: caller, tick: itemTick, quantity: xchain.state.get('itemAmount'), memo: SEND_MEMO });
+        xchain.emit.send({ destination: xchain.state.get('seller'), tick: bidTick, quantity: price, memo: SEND_MEMO });
+        if (!isAtLeastExact(xchain, '0', itemSurplus)) {
+            xchain.emit.send({ destination: xchain.state.get('seller'), tick: itemTick, quantity: itemSurplus, memo: SEND_MEMO });
+        }
+        if (!isAtLeastExact(xchain, '0', excess)) {
+            xchain.emit.send({ destination: caller, tick: bidTick, quantity: excess, memo: SEND_MEMO });
         }
     },
 
     // cancel(): seller reclaims the item, either before any purchase on a live
     // auction or from the pre-funded INIT state after fund() rejected the terms.
     // The INIT leg exists because a rejected fund() does NOT roll back the DEPOSIT
-    // that reached it, batched or not, so without it the item is stranded. It sweeps
-    // the contract's HELD item balance rather than the stored itemAmount: off the
-    // tick's grid itemAmount is exactly the unusable value fund() refused (the ledger
-    // re-quantises it at write time, possibly to zero), and after an 'insufficient
-    // item deposit' rejection the held balance is the smaller truth. cancel() is
+    // that reached it, batched or not, so without it the item is stranded. In both
+    // states it sweeps the contract's HELD item balance rather than the stored
+    // itemAmount: off the tick's grid itemAmount is exactly the unusable value fund()
+    // refused (the ledger re-quantises it at write time, possibly to zero), after an
+    // 'insufficient item deposit' rejection the held balance is the smaller truth, and
+    // on a live auction it also returns any surplus fund() accepted. cancel() is
     // terminal - a seller who was short and would rather top up should deposit the
     // remainder and call fund() again instead of cancelling.
     cancel: function (xchain) {
@@ -270,19 +279,18 @@ module.exports = {
         xchain.require(xchain.getSourceAddress() === xchain.state.get('seller'), 'only the seller can cancel');
 
         var itemTick = xchain.state.get('itemTick');
-        var quantity = status === 'ACTIVE'
-            ? xchain.state.get('itemAmount')
-            : (xchain.getBalance(xchain.getContractAddress(), itemTick) || '0');
+        var quantity = xchain.math.add(xchain.getBalance(xchain.getContractAddress(), itemTick) || '0', '0');
         // Guard the empty INIT case: without this a cancel() on a contract holding
         // nothing burns the terminal status on a send that moves no value, and the
-        // seller can no longer fund the auction they deployed.
-        xchain.require(xchain.math.gt(quantity, '0'), 'nothing to reclaim');
+        // seller can no longer fund the auction they deployed. Exact, because gt reads
+        // any amount <= 1e-15 as zero and would strand a dust deposit on an 18-decimal tick.
+        xchain.require(!isAtLeastExact(xchain, '0', quantity), 'nothing to reclaim');
 
         xchain.state.set('status', 'CANCELLED');
         xchain.emit.send({
             destination: xchain.state.get('seller'),
             tick: itemTick,
-            quantity: quantity
+            quantity: quantity, memo: SEND_MEMO
         });
     },
 
@@ -295,6 +303,18 @@ module.exports = {
         });
     }
 };
+
+// Stored payees must be SEND destinations. Contract callers contain ':' while base58
+// and bech32 addresses are alphanumeric, so a RegExp-free character walk catches them.
+function requirePayableAddress(xchain, value, label) {
+    var s = (typeof value === 'string') ? value : '';
+    var ok = s.length > 0;
+    for (var i = 0; ok && i < s.length; i++) {
+        var c = s.charAt(i);
+        ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+    xchain.require(ok, label + ' must be a plain address that can receive SEND');
+}
 
 // currentPrice(xchain): the asking price as of the current block.
 //   - before/at start: startPrice
@@ -318,17 +338,12 @@ function currentPrice(xchain) {
 }
 
 // Throw unless `value` is a plain fixed-notation decimal: digits, with at most one
-// decimal point carrying digits on both sides. No exponent, sign or radix prefix.
-// Same helper and rationale as patterns/validation.js:requirePlainDecimal.
-//
-// This is a NOTATION check, not a grid check, and it does not replace the floor:
-// '100.123456789' is legitimately spelled and still off an 8-decimal grid, and
-// bidTick's decimals are not readable at deploy time anyway (the auction holds
-// none of the tick yet). Notation is checked here; the grid is checked in buy().
-//
-// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
-// this is a character walk. Inlined rather than imported for the same single-file
-// reason requireIntInRange below carries its own copy.
+// decimal point carrying digits on both sides; no exponent, sign or radix prefix.
+// Same helper as patterns/validation.js:requirePlainDecimal. A NOTATION check, not
+// a grid check: '100.123456789' is well spelled yet off an 8-decimal grid, and
+// bidTick's decimals are unreadable at deploy, so the grid is checked in buy().
+// No RegExp (the VM's determinism validator rejects it), so this is a character
+// walk, inlined for the single-file reason requireIntInRange gives below.
 function requirePlainDecimal(xchain, value, label) {
     var s = String(value);
     xchain.require(s.length > 0, label + ' must be a plain decimal string');
@@ -349,16 +364,12 @@ function requirePlainDecimal(xchain, value, label) {
 }
 
 // Throw unless `v` is a canonical base-10 integer string within [min, max]
-// inclusive. Same helper and rationale as patterns/validation.js:requireIntInRange.
-//
-// Validate the SHAPE of `v`, not parseInt(v): a radix-less parseInt silently
-// accepts spellings a magnitude check then blesses ('1e3' -> 1, '0x10' -> 16,
-// '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), so initialize() would store a duration the
-// check never truly approved and the price curve would run on terms nobody chose.
-// No RegExp (the VM's determinism validator rejects RegExp in contract source), so
-// this is a character walk. Inlined rather than imported: contract sources load
-// as a single file into the isolated VM, which is why every adopting sibling
-// (escrow.js, treasury.js, stableVault.js, priceBet.js) carries its own copy.
+// inclusive. Same helper as patterns/validation.js:requireIntInRange. It checks the
+// SHAPE, not parseInt(v): a radix-less parseInt reads '1e3' -> 1, '0x10' -> 16,
+// '7abc' -> 7, ' 7' -> 7 and '5.99' -> 5, so a range check would bless terms nobody
+// chose. No RegExp (the VM's determinism validator rejects it), so this is a
+// character walk, inlined because contract sources load as a single file into the
+// isolated VM, which is why escrow.js, treasury.js and priceBet.js carry copies too.
 function requireIntInRange(xchain, v, min, max, name) {
     var msg = name + ' must be an integer in [' + min + ', ' + max + ']';
     var s = (typeof v === 'string') ? v : '';

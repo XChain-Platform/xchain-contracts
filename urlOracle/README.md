@@ -65,7 +65,7 @@ EXECUTE(contract, "price")   # read the committed body
 
 ```bash
 cd xchain-vm
-npx mocha --timeout 0 ../xchain-contracts/urlOracle/urlOracle.test.js
+npx mocha --timeout 0 ../xchain-contracts/urlOracle/url_oracle.test.js
 ```
 
 Requires Node 22 (`isolated-vm`).
