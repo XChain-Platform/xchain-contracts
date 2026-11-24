@@ -18,6 +18,9 @@ your methods:
 
 ```javascript
 // --- pasted from access-control.js + state-machine.js ---
+function requireUninitialized(xchain, key) {
+    xchain.require(xchain.state.get(key) === null, 'already initialized');
+}
 function onlyOwner(xchain) {
     xchain.require(xchain.getSourceAddress() === xchain.state.get('owner'), 'caller is not the owner');
 }
@@ -29,6 +32,7 @@ function setStatus(xchain, next) { xchain.state.set('status', next); }
 
 module.exports = {
     initialize: function (xchain) {
+        requireUninitialized(xchain, 'owner');   // FIRST: EXECUTE can call initialize again
         xchain.state.set('owner', xchain.getInputParam(0));
         xchain.state.set('status', 'OPEN');
     },
@@ -43,11 +47,19 @@ module.exports = {
 Paste only the helpers you actually call - every byte counts against the 64 KB
 code ceiling.
 
+**Always guard `initialize`.** `initialize` is an ordinary exported method, and
+EXECUTE dispatches any exported method, so an unguarded `initialize` lets anyone
+call it again, name themselves owner and then pass `onlyOwner` (for example to
+withdraw custody). Make `requireUninitialized(xchain, key)` its first line, where
+`key` is a state key `initialize` always sets and no method ever deletes, such as
+`'owner'`. A second call then reverts with `already initialized` and changes
+nothing. Every template in this repo carries the same guard.
+
 ## The patterns
 
 | File | Helpers | Use it for |
 |---|---|---|
-| [access-control.js](./access-control.js) | `onlyOwner` · `isOwner` · `onlyRole` | gate methods to the owner or a named role |
+| [access-control.js](./access-control.js) | `requireUninitialized` · `onlyOwner` · `isOwner` · `onlyRole` | run `initialize` once, then gate methods to the owner or a named role |
 | [pausable.js](./pausable.js) | `whenNotPaused` · `isPaused` · `setPaused` | an owner-controlled circuit breaker |
 | [safe-transfer.js](./safe-transfer.js) | `heldBalance` · `requireHeld` · `depositedSince` · `floorToDecimals` · `tickDecimals` | size transfers from real holdings, never caller input, and floor them onto the tick's grid (`requireHeld` needs `isAtLeastExact` pasted too) |
 | [validation.js](./validation.js) | `requireAddress` · `requirePositive` · `isAtLeastExact` · `exceedsExactly` · `isPositiveExact` · `requirePlainDecimal` · `requireEnum` · `requireIntInRange` | validate method inputs up front; compare amounts exactly |
@@ -82,6 +94,7 @@ Solidity-to-XChain on-ramp tooling.
 | `Ownable` | `onlyOwner` / `isOwner` | [access-control.js](./access-control.js) |
 | `Ownable2Step` | `onlyOwner` to offer, `onlyRole` on a `pendingOwner` state key to accept (no native two-step helper) | [access-control.js](./access-control.js) |
 | `AccessControl` | `onlyRole` | [access-control.js](./access-control.js) |
+| `Initializable` | `requireUninitialized` as the first line of `initialize` | [access-control.js](./access-control.js) |
 | `Pausable` | `whenNotPaused` / `isPaused` / `setPaused` (or token-wide `SLEEP`) | [pausable.js](./pausable.js) |
 | `SafeERC20` | `heldBalance` / `requireHeld` / `depositedSince` | [safe-transfer.js](./safe-transfer.js) (+ `isAtLeastExact` from [validation.js](./validation.js)) |
 | `Address` | `requireAddress` | [validation.js](./validation.js) |

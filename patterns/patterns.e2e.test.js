@@ -51,6 +51,7 @@ const HELPERS = PATTERN_FILES
 const VAULT = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
+        requireUninitialized(xchain, 'owner');
         var owner = xchain.getInputParam(0);
         var tick  = xchain.getInputParam(1);
         requireAddress(xchain, owner, 'owner required');
@@ -96,6 +97,22 @@ async function fund(amount) {
     h.deposit(OWNER, ADDR, TICK, amount || '500');
 }
 
+// EXECUTE dispatches initialize like any method, so a stranger's replay naming
+// themselves owner must revert, leave every state key as it was, and leave custody
+// with the real owner.
+async function replayedInitialize() {
+    await deployVault();
+    await fund('500');
+    const before = JSON.stringify(h.ledger.getContractState(ADDR));
+    assertReverted(await run(h, 'initialize', [STRANGER, TICK], STRANGER), 'already initialized');
+    assert.strictEqual(JSON.stringify(h.ledger.getContractState(ADDR)), before, 'a refused initialize must leave state untouched');
+    assertContractState(h.ledger, ADDR, 'owner', OWNER);
+    assertReverted(await run(h, 'withdraw', [STRANGER], STRANGER), 'not the owner');
+    assertContractBalance(h.ledger, ADDR, TICK, '500');
+    assertSuccess(await run(h, 'withdraw', [RECIPIENT], OWNER));
+    assertBalance(h.ledger, RECIPIENT, TICK, '500');
+}
+
 (XChainVM ? describe : describe.skip)('Patterns: composed vault (helpers execute)', function () {
     this.timeout(0);
 
@@ -139,6 +156,8 @@ async function fund(amount) {
         assertReverted(await run(h, 'withdraw', [RECIPIENT], OWNER), 'nothing to withdraw');
     });
 
+    it('requireUninitialized: a second initialize from a stranger reverts and changes nothing', replayedInitialize);
+
     it('requireAddress: initialize rejects an empty owner', async function () {
         const bad = new E2EHarness(XChainVM);
         bad.seedBalance(OWNER, 'XCHAIN', '1000000');
@@ -175,6 +194,7 @@ registerValidatorSuites({
 const ROLEVAULT = HELPERS + '\n' + `
 module.exports = {
     initialize: function (xchain) {
+        requireUninitialized(xchain, 'owner');
         var owner   = xchain.getInputParam(0);
         var arbiter = xchain.getInputParam(1);
         var tick    = xchain.getInputParam(2);

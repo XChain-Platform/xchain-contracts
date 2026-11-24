@@ -42,6 +42,7 @@ const LIBRARY = PATTERN_FILES.slice().sort()
 const EXPORTS = [
     "module.exports = {",
     "  initialize: function (xchain) {",
+    "    requireUninitialized(xchain, 'owner');",
     "    var owner = xchain.getInputParam(0);",
     "    var amount = xchain.getInputParam(1);",
     "    requireAddress(xchain, owner, 'owner required');",  // validation via helper, not direct require
@@ -281,6 +282,42 @@ describe('safe-transfer exact payout recommendation', function () {
     it('does not recommend a tolerant positive-amount guard', function () {
         assert.ok(!/math\.gt\(amount, '0'\)/.test(source));
         assert.ok(/!isAtLeastExact\(xchain, '0', amount\)/.test(source));
+    });
+});
+
+// The README quickstart is the snippet most often copied as written, so run it on the
+// in-process harness (no VM sibling needed, so this never skips): EXECUTE dispatches any
+// exported function, initialize included, and a stranger's replay must be refused.
+describe('README quickstart refuses a second initialize', function () {
+    const { Harness } = require('../test/helpers/harness.js');
+    const ADDR = 'C:BTC:1';
+
+    function quickstart() {
+        const readme = fs.readFileSync(path.join(DIR, 'README.md'), 'utf8');
+        const m = readme.match(/## How to use[\s\S]*?```javascript\n([\s\S]*?)```/);
+        assert.ok(m, 'README "How to use" has no javascript quickstart block');
+        return m[1];
+    }
+
+    it('a stranger replaying initialize reverts, state is unchanged and the owner keeps control', function () {
+        const h = new Harness();
+        const d = h.deploy({ code: quickstart(), deployer: 'owner', contractAddress: ADDR, params: ['owner'] });
+        assert.ok(d.success, 'quickstart must deploy: ' + d.error);
+        const before = JSON.stringify(h.ledger.state[ADDR]);
+        const r = h.execute({ contractAddress: ADDR, method: 'initialize', params: ['mallory'], caller: 'mallory' });
+        assert.strictEqual(r.success, false, 'a second initialize was accepted');
+        assert.match(r.error, /already initialized/);
+        assert.strictEqual(JSON.stringify(h.ledger.state[ADDR]), before, 'a refused initialize must leave state untouched');
+        assert.strictEqual(h.execute({ contractAddress: ADDR, method: 'close', caller: 'mallory' }).success, false);
+        assert.ok(h.execute({ contractAddress: ADDR, method: 'close', caller: 'owner' }).success);
+    });
+
+    it('the quickstart pastes requireUninitialized byte-identical to the library', function () {
+        const src = quickstart();
+        const start = src.indexOf('function requireUninitialized(');
+        assert.notStrictEqual(start, -1, 'the README quickstart does not paste requireUninitialized');
+        assert.strictEqual(src.slice(start, src.indexOf('\n}\n', start) + 3),
+            helperSource(path.join(DIR, 'access-control.js'), 'requireUninitialized'));
     });
 });
 

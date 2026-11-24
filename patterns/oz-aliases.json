@@ -21,6 +21,12 @@
       "note": "onlyRole(xchain, roleKey) gates to the address stored under roleKey (e.g. 'arbiter', 'minter'). Set roles in initialize()."
     },
     {
+      "oz": "Initializable",
+      "file": "access-control.js",
+      "helpers": ["requireUninitialized"],
+      "note": "initialize() is an ordinary exported method that EXECUTE can dispatch again, so make requireUninitialized(xchain, key) its first line, where key is a state key initialize() always sets and no method deletes (e.g. 'owner'). A second call reverts with 'already initialized' and changes nothing."
+    },
+    {
       "oz": "Pausable",
       "file": "pausable.js",
       "helpers": ["whenNotPaused", "isPaused", "setPaused"],

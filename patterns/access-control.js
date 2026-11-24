@@ -9,6 +9,7 @@
 //
 //   module.exports = {
 //     initialize: function (xchain) {
+//       requireUninitialized(xchain, 'owner');
 //       xchain.state.set('owner', xchain.getInputParam(0));
 //     },
 //     withdraw: function (xchain) {
@@ -16,6 +17,15 @@
 //       // ... owner-only logic ...
 //     }
 //   };
+
+// Throw if initialize() already ran. Call it FIRST in initialize(): EXECUTE dispatches
+// any exported method, initialize included, so without it anyone can replay
+// initialize naming themselves owner and then pass onlyOwner. `key` must be a
+// state key initialize() always sets and no method ever deletes (e.g. 'owner');
+// a key that can be unset leaves the guard open.
+function requireUninitialized(xchain, key) {
+    xchain.require(xchain.state.get(key) === null, 'already initialized');
+}
 
 // Throw unless the caller is the contract owner (state key 'owner').
 function onlyOwner(xchain) {
