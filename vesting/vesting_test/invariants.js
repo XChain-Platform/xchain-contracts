@@ -225,10 +225,9 @@ function runSeed(seed, stats) {
         const h = new TolHarness();
         assert.ok(!h.deploy({ code: CODE, deployer: 'grantor', contractAddress: ADDR,
             params: ['grantor', 'bene', TICK, '10', '0', '5', 'yes'] }).success, 'revocable flag');
-        // NOTE: initialize() checks total with the tolerant gt, so a positive total inside
-        // the 1e-15 band (here 13 base units of an 18-decimal tick) is refused at deploy.
+        // initialize() checks total exactly, so a positive total inside the 1e-15 band (here 13 base units of an 18-decimal tick) deploys.
         const t = new TolHarness();
-        assert.ok(!t.deploy({ code: CODE, deployer: 'grantor', contractAddress: ADDR,
+        assert.ok(t.deploy({ code: CODE, deployer: 'grantor', contractAddress: ADDR,
             params: ['grantor', 'bene', TICK, '0.000000000000000013', '0', '5', 'true'] }).success, 'sub-1e-15 total');
     });
 });

@@ -135,7 +135,8 @@ module.exports = {
         // Refuse 'Infinity', 'NaN' and exponent text: no deposit can ever fund such a grant,
         // so every DEPOSIT sent to it would sit unrecoverable in custody.
         requirePlainDecimal(xchain, total, 'total');
-        xchain.require(xchain.math.gt(total, '0'), 'total must be positive');
+        // Exact sign test: a tolerant gt reads one 18-decimal base unit as zero.
+        xchain.require(isPositiveExact(total), 'total must be positive');
         // Shape-check the schedule terms, do NOT parseInt-then-range-check them. A
         // radix-less parseInt blesses spellings that mean something else entirely
         // ('1e3' -> 1, '0x10' -> 16, '7abc' -> 7, ' 7' -> 7, '5.99' -> 5), and both

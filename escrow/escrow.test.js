@@ -290,6 +290,7 @@ function deployValidationTests() {
     it('rejects a non-positive amount', async function () {
         const r = await deployWith([BUYER, SELLER, ARBITER, TICK, '0', '3']);
         assert.strictEqual(r.success, false, 'deploy with amount=0 should revert in initialize');
+        assert(String(r.error).includes('amount must be positive'), 'got: ' + r.error);
     });
 
     // Integer-shape gate on deadlineBlocks. It is raw deployer text, and a
@@ -322,6 +323,39 @@ function deployValidationTests() {
     });
 }
 
+// One base unit of an 18-decimal tick, and the 1e-15 absolute-tolerance edge,
+// are real positive amounts; a tolerant gt(.., '0') read both as zero and
+// reverted the DEPLOY, so a dust escrow could never be funded or refunded.
+function dustAmountDeployTests() {
+    it('accepts an amount at or below the comparison tolerance of zero', async function () {
+        for (const v of ['0.000000000000000001', '0.000000000000001']) {
+            const b = new E2EHarness(XChainVM);
+            b.seedBalance(BUYER, 'XCHAIN', '1000000');
+            b.ledger.setTokenDecimals(TICK, 18);
+            const r = await b.deploy({ code: CODE, deployer: BUYER, contractAddress: 'C:BTC:2',
+                params: [BUYER, SELLER, ARBITER, TICK, v, '3'] });
+            assert.strictEqual(r.success, true, `amount ${v} must deploy, got: ${r.error}`);
+            assertContractState(b.ledger, 'C:BTC:2', 'amount', v);
+        }
+    });
+
+    it('funds and refunds a one-base-unit escrow end to end', async function () {
+        const DUST = '0.000000000000000001';
+        h = new E2EHarness(XChainVM);
+        h.seedBalance(BUYER, 'XCHAIN', '1000000');
+        h.seedBalance(BUYER, TICK, DUST);
+        h.ledger.setTokenDecimals(TICK, 18);
+        assertSuccess(await h.deploy({ code: CODE, deployer: BUYER, contractAddress: ADDR,
+            params: [BUYER, SELLER, ARBITER, TICK, DUST, '3'] }));
+        assertSuccess(await depositAndFund(DUST));
+        const r = await h.execute({ contractAddress: ADDR, method: 'refund', params: [], caller: SELLER });
+        assertSuccess(r);
+        assertEmittedActions(r, [{ action: 'SEND', params: { destination: BUYER, tick: TICK, quantity: DUST } }]);
+        assertContractBalance(h.ledger, ADDR, TICK, '0');
+        assertContractState(h.ledger, ADDR, 'status', 'REFUNDED');
+    });
+}
+
 (XChainVM ? describe : describe.skip)('Template: escrow', function () {
     this.timeout(0);
 
@@ -339,6 +373,8 @@ function deployValidationTests() {
     describe('attacks we considered', attackTests);
 
     describe('deploy-time validation', deployValidationTests);
+
+    describe('deploy-time amount check is exact (no mathjs tolerance)', dustAmountDeployTests);
 });
 
 // Seeded invariant suite on the in-process harness (runs without the VM sibling).

@@ -252,14 +252,15 @@ module.exports = {
         xchain.require(payTick !== saleTick, 'payTick and saleTick must differ');
         xchain.require(rate, 'rate must be positive');
         requirePlainDecimal(xchain, rate, 'rate');
-        xchain.require(xchain.math.gt(rate, '0'), 'rate must be positive');
+        xchain.require(!isAtLeastExact(xchain, '0', rate), 'rate must be positive');
         // Require both caps in plain decimal notation, as rate is: they are stored and
         // echoed by info() verbatim, and hardCap sizes the issued supply.
         xchain.require(softCap, 'softCap must be positive');
         requirePlainDecimal(xchain, softCap, 'softCap');
         xchain.require(hardCap, 'hardCap must be >= softCap');
         requirePlainDecimal(xchain, hardCap, 'hardCap');
-        xchain.require(xchain.math.gt(softCap, '0'), 'softCap must be positive');
+        xchain.require(!isAtLeastExact(xchain, '0', softCap), 'softCap must be positive');
+        // rate and softCap test exactly, as gt reads one 18-decimal base unit as zero.
         // Require hardCap >= softCap exactly, or the exact soft-cap check could never pass.
         xchain.require(isAtLeastExact(xchain, hardCap, softCap), 'hardCap must be >= softCap');
         // Shape-check the window, do NOT parseInt-then-range-check it. This is the

@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const registerOffGridTotalTests = require('./vesting_test/off_grid_total');
 const registerFundAccessAndRevokeCapTests = require('./vesting_test/fund_access_and_revoke_cap');
+const registerExactTotalCheck = require('./vesting_test/exact_total_check');
 
 const VM_DIR = path.join(__dirname, '..', '..', 'xchain-vm');
 let XChainVM, E2EHarness, assertSuccess, assertReverted, assertEmittedActions,
@@ -369,6 +370,7 @@ function registerExactPayoutGuards() {
     registerDeployValidation();
     registerOffGrid();
     registerExactPayoutGuards();
+    registerExactTotalCheck({ GRANTOR, BENE, TICK, CODE, XChainVM, E2EHarness, assert });
     registerOffGridTotalTests({
         GRANTOR, BENE, STRANGER, ADDR, TICK, CODE, XChainVM, E2EHarness, assert, assertSuccess,
         assertReverted, assertEmittedActions, assertBalance, assertContractBalance

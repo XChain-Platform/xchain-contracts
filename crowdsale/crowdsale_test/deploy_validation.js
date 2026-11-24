@@ -22,6 +22,23 @@ function registerShapeChecks(ctx, bad) {
     it('rejects rate <= 0', async function () {
         assert.strictEqual((await bad([OWNER, PAY, SALE, '0', SOFT, HARD, '50', '8'])).success, false);
     });
+    it('rejects a zero rate or softCap with its own reason', async function () {
+        const r = await bad([OWNER, PAY, SALE, '0', SOFT, HARD, '50', '8']);
+        assert(String(r.error).includes('rate must be positive'), 'got: ' + r.error);
+        const s = await bad([OWNER, PAY, SALE, RATE, '0', HARD, '50', '8']);
+        assert.strictEqual(s.success, false);
+        assert(String(s.error).includes('softCap must be positive'), 'got: ' + s.error);
+    });
+    // One base unit at 18 decimals, and the 1e-15 absolute-tolerance edge, are real
+    // positive values; a tolerant gt(.., '0') read both as zero and reverted the DEPLOY.
+    it('accepts a rate and softCap at or below the comparison tolerance of zero', async function () {
+        for (const v of ['0.000000000000000001', '0.000000000000001']) {
+            const r = await bad([OWNER, PAY, SALE, v, SOFT, '1000000000000000000', '50', '18']);
+            assert.strictEqual(r.success, true, `rate ${v} must deploy, got: ${r.error}`);
+            const s = await bad([OWNER, PAY, SALE, RATE, v, HARD, '50', '18']);
+            assert.strictEqual(s.success, true, `softCap ${v} must deploy, got: ${s.error}`);
+        }
+    });
     it('rejects a non-finite rate', async function () {
         for (const rate of ['Infinity', '-Infinity', 'NaN', '1e3']) {
             const res = await bad([OWNER, PAY, SALE, rate, SOFT, HARD, '50', '8']);

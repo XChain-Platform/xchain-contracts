@@ -102,7 +102,8 @@ module.exports = {
         xchain.require(buyer && seller && arbiter, 'buyer, seller, arbiter required');
         xchain.require(tick, 'tick required');
         requirePlainDecimal(xchain, amount, 'amount');
-        xchain.require(xchain.math.gt(amount, '0'), 'amount must be positive');
+        // Exact sign test: a tolerant gt reads one 18-decimal base unit as zero.
+        xchain.require(isPositiveExact(amount), 'amount must be positive');
 
         // Shape-check the window, do NOT parseInt-then-range-check it. A radix-less
         // parseInt blesses spellings that mean something else entirely ('1e9' -> 1,
